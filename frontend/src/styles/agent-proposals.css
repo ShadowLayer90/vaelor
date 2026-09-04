@@ -1,0 +1,94 @@
+/* Agent write-review dialog, write proposals, and custom-agent permission/collection
+   rows. Extracted from ai-chat.css to keep it under the 1000-line module ceiling;
+   these are not AI-chat styles. */
+
+.agent-write-review > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.agent-write-review > header > div {
+  display: grid;
+  gap: var(--space-1);
+}
+.agent-write-review > header h2 {
+  margin: 0;
+  font-size: 21px;
+}
+.agent-write-review > header p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.agent-write-review__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+.agent-write-review__facts div {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+}
+.agent-write-review__facts small {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+.agent-write-review__content {
+  padding: 0 var(--space-5) var(--space-5);
+}
+.agent-write-review__content h3 {
+  margin: 0 0 var(--space-2);
+}
+.agent-write-review__content pre {
+  max-height: 50vh;
+  overflow: auto;
+  overflow-x: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-sidebar);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-write-review__footer {
+  margin-top: 0;
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+.agent-write-proposals { display: grid; gap: var(--space-2); }
+.agent-write-proposals article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--focus);
+}
+.agent-write-proposals article div { display: grid; gap: 2px; }
+/* Checkbox rows only: a text field's label matched too, and its help text sized
+   the `auto` column - "Allowed HTTPS domains" measured a 6px-wide textarea. */
+.custom-agent-permissions > label:has(> input[type="checkbox"]),
+.custom-agent-collections label {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+}
+.custom-agent-permissions span,
+.custom-agent-collections span { display: grid; gap: 2px; }
+.custom-agent-permissions small,
+.custom-agent-permissions > p { color: var(--text-muted); }
+.custom-agent-collections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  padding-left: var(--space-5);
+}
+.custom-agent-write-target { margin-left: var(--space-5); }

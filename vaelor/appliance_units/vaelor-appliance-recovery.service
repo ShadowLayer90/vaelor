@@ -1,0 +1,30 @@
+[Unit]
+Description=Vaelor fixed-scope appliance recovery broker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=vaelor-jobs
+ExecStart=/opt/vaelor/venv/bin/python -m vaelor.appliance_recovery
+Restart=on-failure
+RestartSec=3
+Environment=VAELOR_RECOVERY_SOCKET=/run/vaelor/appliance-recovery.sock
+Environment=VAELOR_RECOVERY_PLAN=/var/lib/vaelor/recovery/factory-reset.json
+UMask=0007
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

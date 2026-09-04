@@ -1,0 +1,345 @@
+{
+    "version":  3,
+    "scope":  "frontend/src/styles.css and frontend/src/styles/*.css (tokens-auth.css is the token source)",
+    "policy":  "Hardcoded colors outside tokens fail unless an exact file/property/value tuple is explicitly approved as decorative with a reason. Spacing and typography are validated against supported scales; no count baselines are used.",
+    "runtimeTokens":  [
+                          "--preset-color",
+                          "--lighting-brightness",
+                          "--lighting-color",
+                          "--lighting-opacity",
+                          "--lighting-speed",
+                          "--curve-height"
+                      ],
+    "decorativeColorApprovals":  [
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "#070707",
+                                         "reason":  "Fixed hardware chassis shading in the device preview; it is decorative hardware geometry, not a semantic interface color."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "#111",
+                                         "reason":  "Fixed hardware chassis shading in the device preview; it is decorative hardware geometry, not a semantic interface color."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "#1b1b1c",
+                                         "reason":  "Fixed hardware chassis shading in the device preview; it is decorative hardware geometry, not a semantic interface color."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "#4dc4ff",
+                                         "reason":  "User-selectable hardware lighting preset output; this rainbow stop is decorative device visualization, not UI state."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "#4dff88",
+                                         "reason":  "User-selectable hardware lighting preset output; this rainbow stop is decorative device visualization, not UI state."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "#9d4dff",
+                                         "reason":  "User-selectable hardware lighting preset output; this rainbow stop is decorative device visualization, not UI state."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "#ff4d4d",
+                                         "reason":  "User-selectable hardware lighting preset output; this rainbow stop is decorative device visualization, not UI state."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "#ff4d9d",
+                                         "reason":  "User-selectable hardware lighting preset output; this rainbow stop is decorative device visualization, not UI state."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "#ffd84d",
+                                         "reason":  "User-selectable hardware lighting preset output; this rainbow stop is decorative device visualization, not UI state."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 34%)",
+                                         "reason":  "Fixed depth or translucent chassis shadow in the hardware preview; it carries no interface meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "rgb(255 255 255 / 7%)",
+                                         "reason":  "Fixed glass, grid, or reflection texture in the hardware preview; it carries no interface meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "rgb(255 255 255 / 8%)",
+                                         "reason":  "Fixed glass, grid, or reflection texture in the hardware preview; it carries no interface meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "rgb(5 5 5 / 52%)",
+                                         "reason":  "Fixed hardware chassis shading in the device preview; it is decorative hardware geometry, not a semantic interface color."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background",
+                                         "value":  "rgba(255, 255, 255, 0.018)",
+                                         "reason":  "Fixed glass, grid, or reflection texture in the hardware preview; it carries no interface meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "background-image",
+                                         "value":  "rgb(255 255 255 / 2%)",
+                                         "reason":  "Fixed glass, grid, or reflection texture in the hardware preview; it carries no interface meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "border",
+                                         "value":  "#111",
+                                         "reason":  "Fixed hardware chassis shading in the device preview; it is decorative hardware geometry, not a semantic interface color."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "border",
+                                         "value":  "rgb(255 255 255 / 13%)",
+                                         "reason":  "Fixed glass, grid, or reflection texture in the hardware preview; it carries no interface meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "border",
+                                         "value":  "rgb(255 255 255 / 15%)",
+                                         "reason":  "Fixed glass, grid, or reflection texture in the hardware preview; it carries no interface meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "border",
+                                         "value":  "rgb(255 255 255 / 8%)",
+                                         "reason":  "Fixed glass, grid, or reflection texture in the hardware preview; it carries no interface meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/hardware-controls.css",
+                                         "property":  "box-shadow",
+                                         "value":  "rgb(0 0 0 / 50%)",
+                                         "reason":  "Fixed depth or translucent chassis shadow in the hardware preview; it carries no interface meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/integration-capabilities.css",
+                                         "property":  "box-shadow",
+                                         "value":  "rgb(0 0 0 / 12%)",
+                                         "reason":  "Low-alpha card drop shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/overview.css",
+                                         "property":  "background",
+                                         "value":  "rgb(5 5 5 / 76%)",
+                                         "reason":  "Hero image, caption, or panel drop shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/overview.css",
+                                         "property":  "box-shadow",
+                                         "value":  "rgb(0 0 0 / 22%)",
+                                         "reason":  "Hero image, caption, or panel drop shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/overview.css",
+                                         "property":  "filter",
+                                         "value":  "rgb(0 0 0 / 60%)",
+                                         "reason":  "Hero image, caption, or panel drop shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/overview.css",
+                                         "property":  "filter",
+                                         "value":  "rgb(0 0 0 / 72%)",
+                                         "reason":  "Hero image, caption, or panel drop shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/overview.css",
+                                         "property":  "filter",
+                                         "value":  "rgba(0, 0, 0, 0.62)",
+                                         "reason":  "Hero image, caption, or panel drop shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/shell.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 34%)",
+                                         "reason":  "Shell backdrop, sidebar, or topbar compositing/shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/shell.css",
+                                         "property":  "background",
+                                         "value":  "rgb(30 12 0 / 45%)",
+                                         "reason":  "Fixed active-navigation surface blend; decorative compositing only, not a semantic text or state color."
+                                     },
+                                     {
+                                         "file":  "src/styles/shell.css",
+                                         "property":  "background",
+                                         "value":  "rgb(5 5 5 / 90%)",
+                                         "reason":  "Shell backdrop, sidebar, or topbar compositing/shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/shell.css",
+                                         "property":  "box-shadow",
+                                         "value":  "rgb(0 0 0 / 26%)",
+                                         "reason":  "Shell backdrop, sidebar, or topbar compositing/shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/system-assistant-base.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 22%)",
+                                         "reason":  "Assistant panel or message shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/system-assistant-base.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 62%)",
+                                         "reason":  "Assistant panel or message shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/system-assistant-base.css",
+                                         "property":  "box-shadow",
+                                         "value":  "rgb(0 0 0 / 18%)",
+                                         "reason":  "Assistant panel or message shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/system-assistant-base.css",
+                                         "property":  "box-shadow",
+                                         "value":  "rgb(0 0 0 / 45%)",
+                                         "reason":  "Assistant panel or message shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/system-assistant-base.css",
+                                         "property":  "box-shadow",
+                                         "value":  "rgb(255 255 255 / 3%)",
+                                         "reason":  "Fixed assistant-panel highlight texture; decorative only, with no semantic color meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/ui-refinement.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 78%)",
+                                         "reason":  "Modal backdrop isolation layer; decorative compositing only, not a semantic interface color."
+                                     },
+                                     {
+                                         "file":  "src/styles/ui-refinement.css",
+                                         "property":  "background",
+                                         "value":  "rgb(255 255 255 / 10%)",
+                                         "reason":  "Neutral count-chip surface texture; decorative only, with no semantic color meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/ui-refinement.css",
+                                         "property":  "background",
+                                         "value":  "rgb(3 7 9 / 82%)",
+                                         "reason":  "Neutral metric action surface composite; decorative only, with no semantic color meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/ui-refinement.css",
+                                         "property":  "background",
+                                         "value":  "rgb(7 8 9 / 99%)",
+                                         "reason":  "Near-opaque modal surface composite; decorative compositing only, not a semantic interface color."
+                                     },
+                                     {
+                                         "file":  "src/styles/ui-refinement.css",
+                                         "property":  "background",
+                                         "value":  "rgb(8 14 17 / 99%)",
+                                         "reason":  "Near-opaque modal surface composite; decorative compositing only, not a semantic interface color."
+                                     },
+                                     {
+                                         "file":  "src/styles/ui-refinement.css",
+                                         "property":  "border",
+                                         "value":  "rgb(255 255 255 / 15%)",
+                                         "reason":  "Neutral count-chip surface texture; decorative only, with no semantic color meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-catalog.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 22%)",
+                                         "reason":  "Catalog card or runtime-path depth layer; decorative only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-catalog.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 24%)",
+                                         "reason":  "Catalog card or runtime-path depth layer; decorative only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-catalog.css",
+                                         "property":  "background",
+                                         "value":  "rgb(5 8 10 / 72%)",
+                                         "reason":  "Catalog card surface composite; decorative only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-catalog.css",
+                                         "property":  "background",
+                                         "value":  "rgb(7 9 12 / 76%)",
+                                         "reason":  "Catalog card surface composite; decorative only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-catalog.css",
+                                         "property":  "border-color",
+                                         "value":  "rgb(170 113 255 / 32%)",
+                                         "reason":  "Model-category accent border; decorative category differentiation only, not success, warning, danger, or interaction state."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-catalog.css",
+                                         "property":  "border-color",
+                                         "value":  "rgb(255 111 0 / 32%)",
+                                         "reason":  "Model-category accent border; decorative category differentiation only, not success, warning, danger, or interaction state."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-foundation.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 20%)",
+                                         "reason":  "Workload card or path shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-foundation.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 22%)",
+                                         "reason":  "Workload card or path shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-foundation.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 24%)",
+                                         "reason":  "Workload card or path shadow; decorative depth only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-foundation.css",
+                                         "property":  "background",
+                                         "value":  "rgb(255 255 255 / 3%)",
+                                         "reason":  "Fixed workload-panel surface texture; decorative only, with no semantic color meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-foundation.css",
+                                         "property":  "background",
+                                         "value":  "rgb(3 7 9 / 72%)",
+                                         "reason":  "Workload surface composite; decorative only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workload-removal.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 20%)",
+                                         "reason":  "Removal-dialog depth surface; decorative only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workload-removal.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 15%)",
+                                         "reason":  "Removal-dialog depth surface; decorative only, with no interface-state meaning."
+                                     },
+                                     {
+                                         "file":  "src/styles/workloads-catalog.css",
+                                         "property":  "background",
+                                         "value":  "rgb(0 0 0 / 20%)",
+                                         "reason":  "Catalog card or runtime-path depth layer; decorative only, with no interface-state meaning."
+                                     }
+                                 ]
+}

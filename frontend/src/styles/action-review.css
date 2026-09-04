@@ -1,0 +1,169 @@
+.action-review-dialog {
+  width: min(100%, 820px);
+  max-height: min(88vh, 820px);
+  overflow-y: auto;
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-strong);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+}
+
+.action-review-dialog > header {
+  display: grid;
+  grid-template-columns: 42px 1fr 44px;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.action-review-dialog > header > span {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-deep);
+  border-radius: var(--radius-sm);
+}
+
+.action-review-dialog > header small,
+.action-review-dialog h3,
+.action-review-dialog dt {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.action-review-dialog h2 {
+  margin: 3px 0 0;
+  font-size: 25px;
+}
+
+.action-review-dialog > p,
+.action-review-dialog > section {
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+}
+
+.action-review-dialog > p {
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.6;
+}
+
+.action-review-dialog h3 { margin: 0 0 var(--space-2); }
+
+.action-review-dialog section p,
+.action-review-dialog section ul {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.55;
+}
+
+.action-review-dialog__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.action-review-dialog__grid > section { padding: var(--space-5); }
+.action-review-dialog__grid > section + section { border-left: 1px solid var(--border-subtle); }
+
+.action-review-dialog ol {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.action-review-dialog ol li {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.action-review-dialog ol svg { color: var(--success); }
+
+.action-review-dialog dl {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.action-review-dialog dl div {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.7fr) 1.3fr;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.action-review-dialog dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+}
+
+.action-review-dialog > details {
+  margin: 0 var(--space-5);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.action-review-dialog > details li {
+  display: grid;
+  gap: 2px;
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.action-review-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-surface);
+}
+
+.action-review-dialog > footer p,
+.action-review-dialog > footer div {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.action-review-dialog > footer p {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+@media (max-width: 720px) {
+  .action-review-dialog__grid { grid-template-columns: 1fr; }
+  .action-review-dialog__grid > section + section {
+    border-top: 1px solid var(--border-subtle);
+    border-left: 0;
+  }
+  .action-review-dialog > footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .action-review-dialog > footer div .ui-button { flex: 1; }
+}

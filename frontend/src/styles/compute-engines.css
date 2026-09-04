@@ -1,0 +1,149 @@
+/*
+ * `System → Compute` on a workstation: one card per compute engine.
+ *
+ * Its own file rather than an addition to `hardware-controls.css`, which is at
+ * 960 lines — enclosure rules and engine rules are different subjects and the
+ * enclosure sheet is nearly at the 1,000-line limit.
+ */
+
+.engine-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.engine-card {
+  padding: var(--space-5);
+  background:
+    linear-gradient(145deg, var(--panel-highlight), transparent 26%),
+    var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+}
+
+.engine-card .panel-heading h3 {
+  margin: 0;
+  font-size: var(--font-size-body-lg);
+  letter-spacing: -0.02em;
+}
+
+.engine-card .panel-heading p {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.engine-facts {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
+}
+
+.engine-facts > div {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  align-items: start;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.engine-facts > div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.engine-facts dt {
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.engine-facts dd {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  font-family: var(--font-family-data);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The reason a value is missing is prose, not data, and it is the part that
+ * makes an unavailable reading useful rather than merely blank.
+ */
+.engine-facts dd small {
+  color: var(--text-muted);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.45;
+}
+
+@media (max-width: 1024px) {
+  .engine-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .engine-facts > div {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
+}
+
+/*
+ * What the model server actually got — the accelerator reading and the context
+ * window it built.
+ *
+ * Deliberately not a Notice. Four of the six states this can report are not
+ * problems, and three of the six are not verdicts at all, so a banner shape
+ * would announce an unanswered question as a finding. It is a labelled reading
+ * with a status pill, and the pill's tone is the only thing carrying severity.
+ */
+.acceleration-verdict {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.acceleration-verdict h4 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.acceleration-reading {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.acceleration-reading__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+.acceleration-reading__heading > span {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.acceleration-reading p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.acceleration-reading__basis,
+.acceleration-reading__reference {
+  color: var(--text-muted);
+}

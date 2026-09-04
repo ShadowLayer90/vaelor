@@ -1,0 +1,331 @@
+/*
+ * The capability strip, the composer refinement, and the merged run history.
+ *
+ * These three surfaces exist because the Assistant was split across six tabs
+ * cut along implementation seams. They are styled together because they are one
+ * idea: say what this surface can see, let the reader refine one question, and
+ * show everything it has run in one place.
+ */
+
+/*
+ * One line. Three of the four chips restated the scope, its qualifier and the
+ * answering model — all already named on the screen — and the only two that
+ * carried new information were the only two that could be clicked, which was
+ * invisible because all four looked identical. The restatements are quiet text
+ * now; the chip styling means "you can act on this".
+ */
+.capability-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--space-2) var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.capability-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+.capability-note strong {
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.capability-note small {
+  color: var(--text-muted);
+  font-size: var(--font-size-data-sm);
+  overflow-wrap: anywhere;
+}
+
+.capability-strip .ui-button-wrap {
+  display: inline-flex;
+}
+
+.capability-chip {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-raised);
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.capability-chip strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.capability-chip small {
+  color: var(--text-muted);
+  font-size: var(--font-size-data-sm);
+  white-space: nowrap;
+}
+
+.capability-chip--link:hover,
+.capability-chip--link:focus-visible,
+.capability-chip--action:hover,
+.capability-chip--action[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface-raised));
+}
+
+/*
+ * The question box is the primary control on this page and must stay usable.
+ *
+ * `assistant-chat.css` styles `.assistant-chat__composer > div` as a
+ * `space-between` flex row for the composer's action row — but the `Textarea`
+ * primitive renders its own `.ui-field` wrapper, which is *also* a direct `div`
+ * child of that form. So above 720px the label, the textarea and the hint and
+ * counter were laid out side by side: at 768px the field spanned 596px while
+ * the input got 265 of them, with 190px of dead space beside it. Below 720px a
+ * `flex-direction: column` override in `professional-polish.css` accidentally
+ * hid the defect, which is why it only showed at tablet width and up.
+ *
+ * Targeting the field by class outranks both `> div` rules at every width,
+ * restoring the single-column grid the primitive defines. The action row is a
+ * plain `div` and keeps its flex row untouched.
+ */
+.assistant-chat__composer > .ui-field {
+  display: grid;
+  gap: var(--space-2);
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+/*
+ * A refinement, not a mode switch: both controls may be left alone, and doing
+ * so is the common path — so they sit under the question box rather than above
+ * it, behind a summary that names the outcome they produce.
+ */
+.assistant-refinement-disclosure > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.assistant-refinement-disclosure > summary:hover,
+.assistant-refinement-disclosure[open] > summary {
+  color: var(--text-primary);
+}
+
+.assistant-refinement {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) 1fr;
+  align-items: start;
+  flex-shrink: 0;
+  gap: var(--space-3) var(--space-4);
+  padding-top: var(--space-3);
+}
+
+.assistant-refinement__outcome {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.assistant-refinement .field-error {
+  grid-column: 1 / -1;
+}
+
+/*
+ * The armed appliance-check mode, stated in the open.
+ *
+ * Collapsing the disclosure hid a ticked checkbox while the submit button went
+ * on reading "Run this check", so the next ordinary question quietly became an
+ * approval-gated run. This is what the closed disclosure is not allowed to
+ * swallow, so it is styled to be noticed rather than to blend in.
+ */
+.assistant-refinement-armed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--font-size-body-sm);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+
+.assistant-refinement-armed > span {
+  min-width: 0;
+}
+
+/*
+ * A question the appliance is still answering after a reload. Quiet, because
+ * the honest message is "nothing is wrong, keep waiting" - but present, which
+ * is the entire point: it used to be a question sitting alone in the transcript
+ * with no spinner, no error and no explanation for ninety seconds.
+ */
+.assistant-resumed-wait {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--bg-canvas) 22%, transparent);
+}
+
+.assistant-resumed-wait--lost {
+  border-left-color: var(--border-strong);
+}
+
+.assistant-run-history {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/*
+ * The board owns the only heading and the only control band on this section:
+ * "EVIDENCE / What Vaelor has run here" used to sit 90px above "APPLIANCE
+ * EVIDENCE / Every run", with the filters in one row and the archive controls
+ * in another 90px below them.
+ */
+.assistant-run-history .agent-task-board {
+  margin-top: 0;
+}
+
+.assistant-run-history__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+/*
+ * A heading, at a size that outranks the card headings under it.
+ *
+ * `--font-size-body-lg` computes to 14.625px at the compact desktop root while
+ * the cards' own `h3` inherited the browser default of 1.17em — 15.21px — so
+ * this section's H2 was smaller than its H3.
+ */
+.agent-task-board .section-heading h2 {
+  font-size: var(--font-size-heading-sm);
+}
+
+.agent-task-board .agent-task-card__header h3 {
+  font-size: var(--font-size-body);
+}
+
+.run-filter {
+  min-height: 44px;
+}
+
+/*
+ * A selected filter is a state, not the page's primary action.
+ *
+ * Solid `--accent` made the loudest element on the screen a filter pill in the
+ * archive, next to a disabled grey Ask button — and `--accent` (#FF6500) sits
+ * beside the warning amber (#F59E0B) in hue while meaning the opposite thing.
+ * Saturated orange is reserved for the one primary action; selection is a
+ * raised neutral surface with a stronger edge.
+ */
+.run-filter--active {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.assistant-run-history__automation {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.assistant-run-history__automation > p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.assistant-run-history__automation-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.assistant-run-history__automation-list article {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-raised);
+}
+
+.assistant-run-history__automation-list article > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.assistant-run-history__automation-list strong {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.assistant-run-history__automation-list small {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.memory-page__return {
+  margin: 0 0 var(--space-4);
+}
+
+/* The symptom the reader typed, kept legible once a summary replaces it. */
+.agent-task-card__asked {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.agent-task-card__asked small {
+  color: var(--text-muted);
+  font-size: var(--font-size-data-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 720px) {
+  .assistant-refinement {
+    grid-template-columns: 1fr;
+  }
+
+  .assistant-run-history__filters {
+    width: 100%;
+  }
+
+  /* Three tabs, not two: the shared rail rule lays them out 1fr 1fr, which
+     leaves the third stranded on a row of its own. */
+  .agent-center .assistant-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

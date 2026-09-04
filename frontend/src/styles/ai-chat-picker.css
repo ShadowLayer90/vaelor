@@ -1,0 +1,91 @@
+/*
+ * The AI Chat model-and-context picker.
+ *
+ * Its own sheet because `ai-chat.css` stood at **exactly 1,000 lines** — the
+ * limit in `CLAUDE.md`, with no room for a single further declaration. The
+ * picker's rules moved here unchanged, so nothing about the toolbar's
+ * appearance shifts; what changes is that the picker now has somewhere to
+ * grow, which is the prerequisite for it becoming a real choice surface rather
+ * than a dropdown of provider identifiers.
+ *
+ * The selectors stay scoped under `.ai-chat-toolbar` for the toolbar-level
+ * geometry, because the picker's placement is the toolbar's business and its
+ * internals are the picker's.
+ */
+
+.ai-chat-model-picker {
+  display: grid;
+  min-width: 0;
+}
+
+.ai-chat-toolbar label,
+.ai-chat-model-picker label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ai-chat-toolbar label > span,
+.ai-chat-model-picker label > span {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.ai-chat-toolbar select,
+.ai-chat-model-picker select {
+  min-width: 0;
+  min-height: 44px;
+}
+
+/*
+ * Three columns, one baseline.
+ *
+ * The toolbar centred its cells, so a column with a sentence under its control
+ * and a column without were centred against each other and their controls
+ * landed at different heights - Model sat above Agent, and the View buttons
+ * sat between the two. Top-aligning the cells puts every label on one line and
+ * every control on the next, and a sentence that wraps grows downwards into
+ * the space under its own column instead of moving anything.
+ */
+.ai-chat-toolbar {
+  align-items: start;
+}
+
+.ai-chat-toolbar > div:first-child {
+  /* The chat's name is prose, not a control, so it keeps its own centring
+     against the row rather than floating above two 44px selects. */
+  align-self: center;
+}
+
+.ai-chat-toolbar .ui-field__hint {
+  /* One line's worth of space is reserved by the label row above, not by the
+     hint, so hints of different lengths cannot shift their own controls. */
+  margin-block-start: 0;
+}
+
+/*
+ * The path the name came from, kept for whoever is debugging a model server.
+ * Quieter than the sentence it follows, and allowed to break anywhere: a
+ * container path is long and must not widen the column it sits in.
+ */
+.ai-chat-model-picker__identifier {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  overflow-wrap: anywhere;
+}
+
+/* The View column: a label over its controls, exactly like the two selects. */
+.ai-chat-toolbar__actions {
+  display: grid;
+  align-items: start;
+  gap: var(--space-2);
+}
+
+.ai-chat-toolbar__actions > div {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}

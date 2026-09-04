@@ -1,0 +1,33 @@
+[Unit]
+Description=Vaelor pinned-wheel appliance upgrade broker
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=vaelor-jobs
+ExecStart=/opt/vaelor/venv/bin/vaelor-appliance-upgrade
+Restart=on-failure
+RestartSec=3
+Environment=VAELOR_UPGRADE_SOCKET=/run/vaelor/appliance-upgrade.sock
+Environment=VAELOR_UPGRADE_PLAN=/var/lib/vaelor/upgrade/apply-plan.json
+Environment=VAELOR_UPGRADE_RESULT=/var/lib/vaelor/upgrade/apply-result.json
+Environment=VAELOR_UPGRADE_RETAINED=/var/lib/vaelor/upgrade-retained
+UMask=0007
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

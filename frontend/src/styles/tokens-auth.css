@@ -1,0 +1,657 @@
+:root {
+  color-scheme: dark;
+  font-family: var(--font-family-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+
+  /* Foundations: this is the only supported token vocabulary. */
+  --font-family-sans:
+    Inter, "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-family-data:
+    "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --font-size-body-sm: 0.875rem;
+  --font-size-data-sm: 0.8125rem;
+  --font-size-body: 1rem;
+  --font-size-body-lg: 1.125rem;
+  --font-size-heading-sm: 1.25rem;
+  /* h2 section titles: one tier below the page hero. Auto-shrinks at compact
+     density because its rem terms track the reduced root font-size. */
+  --font-size-section-title: clamp(1.35rem, 2vw, 1.8rem);
+  /* Shared .page-heading h1 / page-hero size. Base is the rem-equivalent of
+     the historic clamp(28px, 3vw, 36px); the compact override below holds the
+     historic clamp(22px, 2.2vw, 30px) so the hero renders identically. */
+  --font-size-heading-md: clamp(1.75rem, 3vw, 2.25rem);
+
+  /* Font weights. Existing raw weights map here: 600 -> medium; 650/700 ->
+     semibold; 720/740/750 -> bold; 900 -> black. (800 is left as-is.) */
+  --weight-medium: 600;
+  --weight-semibold: 700;
+  --weight-bold: 750;
+  --weight-black: 900;
+
+  --bg-canvas: #050505;
+  --bg-sidebar: #070707;
+  --bg-surface: #0b0b0b;
+  --bg-surface-raised: #101010;
+  --bg-surface-warm: #100b08;
+  --bg-hover: #151515;
+  --border-subtle: #202020;
+  --border-default: #2a2a2a;
+  --border-strong: #3a3a3a;
+  --text-primary: #f5f5f5;
+  --text-secondary: #b8b8b8;
+  --text-muted: #9a9a9a;
+  --accent: #ff6500;
+  --accent-hover: #ff7a1a;
+  --accent-deep: #401800;
+  --accent-soft: #1e0c00;
+  --accent-glow: rgb(255 101 0 / 18%);
+  --ambient-orange: rgb(255 101 0 / 22%);
+  --ambient-green: rgb(34 197 94 / 10%);
+  --ambient-trace: rgb(255 101 0 / 46%);
+  --panel-highlight: rgb(255 255 255 / 5%);
+  --success: #22c55e;
+  --success-soft: #06190d;
+  --info: #38bdf8;
+  --info-soft: rgb(56 189 248 / 8%);
+  --info-border: rgb(56 189 248 / 32%);
+  --warning: #f59e0b;
+  --warning-soft: rgb(245 158 11 / 8%);
+  --danger: #ef4444;
+  --danger-strong: #c81e1e;
+  --danger-soft: #1d0808;
+  --danger-hover: #dc2626;
+  --success-border: #14532d;
+  --warning-border: #78350f;
+  --danger-border: #7f1d1d;
+  --success-text: #bbf7d0;
+  --danger-text: #fecaca;
+  --button-light-hover: #d8d8d8;
+  --text-on-danger: #ffffff;
+  --chart-success-fill: #062413;
+  --chart-warning-fill: #281800;
+  --chart-danger-fill: #270909;
+  --focus: #7dd3fc;
+  --overlay: rgb(0 0 0 / 78%);
+
+  /*
+   * Stacking order. Before these existed, every overlay picked its own number
+   * (32, 90, 99, 100, 120, 200, 1000) and nesting order was decided by
+   * accident: the custom-agent test dialog opened from a modal at 120 while
+   * sitting at 90, so it rendered fully-formed and invisible underneath the
+   * modal that spawned it. A dialog opened from a dialog uses
+   * --layer-modal-nested so that ordering is stated rather than inferred.
+   */
+  --layer-raised: 32;
+  --layer-sticky: 100;
+  --layer-modal: 200;
+  --layer-modal-nested: 300;
+  --layer-toast: 1000;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 48px;
+  --space-10: 64px;
+
+  --radius-sm: 6px;
+  --radius-md: 9px;
+  --radius-lg: 12px;
+  --radius-status: 2px;
+  --sidebar-width: 252px;
+  --topbar-height: 64px;
+  --page-max: 1320px;
+
+  /* Smallest size permitted for meaningful interface copy. */
+  --shadow-modal: 0 28px 100px rgb(0 0 0 / 65%);
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: var(--bg-canvas);
+}
+
+/*
+ * Compact desktop density uses real layout values. Browser and CSS zoom stay
+ * at 100%, so viewport units, fixed shell geometry, hit targets, and rendered
+ * parent/child bounds all use the same coordinate system.
+ *
+ * A percentage, not 13px (#150): 81.25% of the browser default is exactly
+ * 13px at the ordinary 16px setting — pixel-identical density — but a person
+ * who raises their browser's default font size gets that raise honoured.
+ * A hard 13px overrode the one control such a person has, which excludes
+ * rather than inconveniences.
+ */
+@media (min-width: 1025px) {
+  :root {
+    font-size: 81.25%;
+    --space-1: 3px;
+    --space-2: 6px;
+    --space-3: 10px;
+    --space-4: 13px;
+    --space-5: 19px;
+    --space-6: 26px;
+    --space-7: 32px;
+    --space-8: 38px;
+    --space-10: 51px;
+    --sidebar-width: 202px;
+    --topbar-height: 52px;
+    --page-max: 1440px;
+    --font-size-heading-md: clamp(22px, 2.2vw, 30px);
+  }
+
+  body {
+    font-size: 1rem;
+  }
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 82% 4%, var(--accent-glow), transparent 24rem),
+    var(--bg-canvas);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+small {
+  font-size: var(--font-size-body-sm);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.skip-link {
+  position: fixed;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: 1000;
+  padding: var(--space-3) var(--space-4);
+  color: var(--bg-canvas);
+  background: var(--text-primary);
+  border-radius: var(--radius-sm);
+  font-weight: var(--weight-semibold);
+  transform: translateY(-150%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.loading-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--space-4);
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.page-loading {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.loading-mark {
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Authentication */
+
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(560px, 1.12fr) minmax(460px, 0.88fr);
+  background:
+    linear-gradient(var(--border-subtle) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-subtle) 1px, transparent 1px),
+    var(--bg-canvas);
+  background-size: 72px 72px;
+}
+
+.auth-intro,
+.auth-access {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: clamp(var(--space-6), 6vw, 96px);
+}
+
+.auth-intro {
+  position: relative;
+  min-height: 100vh;
+  overflow: clip;
+  border-right: 1px solid var(--border-default);
+}
+
+.auth-intro::before {
+  position: absolute;
+  width: 1px;
+  height: 42%;
+  right: 16%;
+  bottom: 0;
+  pointer-events: none;
+  background: linear-gradient(transparent, var(--accent-deep));
+  box-shadow: 72px 0 0 rgb(255 101 0 / 5%), 144px 0 0 rgb(255 101 0 / 3%);
+  content: "";
+}
+
+.auth-intro > * {
+  position: relative;
+}
+
+.auth-intro__brand {
+  position: absolute;
+  top: clamp(var(--space-6), 5vw, 72px);
+  left: clamp(var(--space-6), 6vw, 96px);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.auth-intro__brand > div:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.auth-intro__brand strong {
+  font-size: 15px;
+  letter-spacing: 0.01em;
+}
+
+.auth-intro__brand span {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.auth-intro__mark,
+.brand-glyph,
+.topbar__mark {
+  display: grid;
+  place-items: center;
+  color: var(--bg-canvas);
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-data);
+  font-weight: var(--weight-black);
+  letter-spacing: -0.08em;
+}
+
+.auth-intro__mark {
+  width: 44px;
+  height: 44px;
+  font-size: var(--font-size-body-sm);
+}
+
+.auth-intro__mark svg {
+  width: 28px;
+  height: 28px;
+}
+
+.auth-intro__overline,
+.auth-card__heading > span {
+  margin: 0 0 var(--space-4);
+  color: var(--accent);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-intro__content {
+  width: min(100%, 720px);
+  display: grid;
+  align-content: center;
+}
+
+.auth-intro__statement {
+  margin-top: clamp(72px, 8vh, 108px);
+}
+
+.auth-intro h1 {
+  max-width: 680px;
+  margin: 0;
+  font-size: clamp(46px, 4.5vw, 68px);
+  font-weight: var(--weight-bold);
+  line-height: 1;
+  letter-spacing: -0.045em;
+}
+
+.auth-intro__copy {
+  max-width: 590px;
+  margin: var(--space-4) 0 0;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.auth-convergence {
+  width: min(100%, 650px);
+  margin-top: var(--space-6);
+  background: rgb(7 7 7 / 82%);
+  border: 1px solid var(--border-default);
+  box-shadow: 14px 14px 0 rgb(0 0 0 / 22%);
+}
+
+.auth-convergence__header {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.auth-convergence__header span:last-child {
+  color: var(--success);
+}
+
+.auth-convergence__map {
+  display: grid;
+  grid-template-columns: minmax(122px, 0.8fr) minmax(96px, 0.65fr) minmax(190px, 1.35fr);
+  align-items: stretch;
+  min-height: 188px;
+  padding: var(--space-5);
+}
+
+.auth-convergence__sources {
+  display: grid;
+  grid-template-rows: repeat(4, 1fr);
+  gap: var(--space-2);
+}
+
+.auth-convergence__sources span {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  color: var(--text-secondary);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-convergence__rail {
+  position: relative;
+  display: grid;
+  grid-template-rows: repeat(4, 1fr);
+  align-items: center;
+}
+
+.auth-convergence__rail::after {
+  position: absolute;
+  top: 12%;
+  right: 0;
+  bottom: 12%;
+  width: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 16px var(--accent-glow);
+  content: "";
+}
+
+.auth-convergence__rail i {
+  position: relative;
+  display: block;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border-strong), var(--accent));
+}
+
+.auth-convergence__rail i::after {
+  position: absolute;
+  top: 50%;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  margin-top: -3px;
+  background: var(--accent);
+  content: "";
+}
+
+.auth-convergence__core {
+  display: grid;
+  place-content: center;
+  justify-items: start;
+  gap: var(--space-2);
+  padding-left: var(--space-6);
+  background:
+    linear-gradient(90deg, rgb(255 101 0 / 10%), transparent 72%),
+    var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-left: 0;
+}
+
+.auth-convergence__core svg {
+  width: 30px;
+  height: 30px;
+  color: var(--accent);
+}
+
+.auth-convergence__core span {
+  font-size: 17px;
+  font-weight: var(--weight-bold);
+}
+
+.auth-convergence__core small {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-intro__footer {
+  position: absolute;
+  right: clamp(var(--space-6), 6vw, 96px);
+  bottom: clamp(var(--space-6), 5vw, 72px);
+  left: clamp(var(--space-6), 6vw, 96px);
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-access {
+  min-height: 100vh;
+  align-items: center;
+  background:
+    radial-gradient(circle at 100% 0%, var(--accent-glow), transparent 46%),
+    rgb(5 5 5 / 88%);
+}
+
+.auth-access__frame {
+  width: min(100%, 560px);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  box-shadow: 18px 18px 0 rgb(0 0 0 / 32%);
+}
+
+.auth-access__status {
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--font-size-body-sm);
+}
+
+.auth-access__status > span {
+  width: 7px;
+  height: 7px;
+  background: var(--success);
+  box-shadow: 0 0 12px rgb(34 197 94 / 65%);
+}
+
+.auth-access__status strong {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-access__status small {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.auth-card {
+  padding: clamp(var(--space-5), 4vw, var(--space-8));
+}
+
+.auth-card__heading h2 {
+  margin: 0;
+  font-size: clamp(30px, 3.4vw, 40px);
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+}
+
+.auth-card__heading p {
+  max-width: 460px;
+  margin: var(--space-3) 0 var(--space-6);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.auth-card form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.auth-card label {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+}
+
+/*
+ * The auth fields are the `Input` primitive (`AuthScreen` renders `<Input>`),
+ * so their geometry and focus ring come from `.ui-control` like every other
+ * field. The element re-skin that used to live here gave them a different
+ * height (50px vs 44), radius, and canvas background, and — worst — replaced
+ * the global cyan `:focus-visible` ring with `outline: 2px solid
+ * var(--accent-deep)` (~#401800), a near-invisible focus indicator on the black
+ * card. Dropping it lets the primitive's standard, visible focus ring apply.
+ */
+
+.field-hint {
+  margin: calc(var(--space-1) * -1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.form-error {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-body-sm);
+}
+
+.ui-button--wide {
+  width: 100%;
+  margin-top: var(--space-4);
+}
+
+.auth-card__security {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-muted);
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--font-size-body-sm);
+}
+
+.auth-card__security svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.auth-card__security span {
+  display: grid;
+  gap: 2px;
+  line-height: 1.45;
+}
+
+.auth-card__security strong {
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}

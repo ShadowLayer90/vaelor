@@ -1,0 +1,32 @@
+[Unit]
+Description=Vaelor fixed-command system update broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=vaelor-jobs
+ExecStart=/opt/vaelor/venv/bin/vaelor-system-update
+Restart=on-failure
+RestartSec=3
+Environment=VAELOR_SYSTEM_UPDATE_SOCKET=/run/vaelor/system-update.sock
+Environment=VAELOR_SYSTEM_UPDATE_STATE=/var/lib/vaelor/system-update-state.json
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

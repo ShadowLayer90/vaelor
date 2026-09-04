@@ -1,0 +1,648 @@
+/*
+ * Shared UI primitives
+ *
+ * This file is deliberately limited to the reusable classes emitted by
+ * frontend/src/components/ui and the canonical StatusPill. Keep visual
+ * decisions on the existing token vocabulary so new surfaces stay aligned.
+ */
+
+.ui-field {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.ui-field__label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.ui-field__hint,
+.ui-field__error,
+.ui-field__disabled-reason,
+.ui-field__counter,
+.ui-button__disabled-reason {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Doubled on purpose (#149). Screen stylesheets recolour their own prose —
+   `.host-access p`, `.custom-curve-editor > small` — at (0,1,1), which beat
+   this class's (0,1,0), so validation errors rendered in the same grey as the
+   help text beside them on three of four forms. An error's colour is
+   semantic; no screen's prose rule may repaint it. */
+.ui-field__error.ui-field__error {
+  color: var(--danger-text);
+}
+
+/* A bounded field must show how much room is left; the browser truncates a
+   paste at maxlength silently otherwise. */
+.ui-field__counter {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-field__counter.is-near-limit {
+  color: var(--warning);
+}
+
+.ui-field__disabled-reason,
+.ui-button__disabled-reason {
+  color: var(--warning);
+}
+
+.ui-control,
+.ui-control--input,
+.ui-control--textarea,
+.ui-control--select,
+.ui-control--file-picker {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-body);
+  transition:
+    border-color var(--motion-fast) ease,
+    background var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
+}
+
+.ui-control:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.ui-control:focus-visible {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--accent-deep);
+}
+
+.ui-control:disabled {
+  color: var(--text-muted);
+  background: var(--bg-surface-raised);
+  border-color: var(--border-subtle);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.ui-control[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.ui-control--textarea {
+  min-height: 112px;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+
+.ui-control--select {
+  padding-inline-end: var(--space-5);
+}
+
+.ui-control--checkbox {
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  flex: 0 0 auto;
+  padding: calc(var(--space-1) - var(--space-1));
+  accent-color: var(--accent);
+}
+
+.ui-control--file-picker {
+  padding: var(--space-2);
+  cursor: pointer;
+}
+
+.ui-control--file-picker::file-selector-button {
+  min-height: 36px;
+  margin-inline-end: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.ui-checkbox {
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ui-checkbox__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ui-button-wrap {
+  min-width: 0;
+  display: inline-grid;
+  justify-items: stretch;
+  gap: var(--space-1);
+  vertical-align: middle;
+  /*
+   * A button must never inherit the height of whatever grid row it lands in.
+   * Without this, a wrap sharing a row with a textarea stretched its button to
+   * the full row height (a 133px-tall "Propose skill").
+   *
+   * Constrain the block axis rather than using `align-self: start`: in a
+   * column-direction flex parent `align-self` governs the INLINE axis, so it
+   * would have collapsed the deliberately full-width buttons that several
+   * responsive layouts rely on. An explicit block-size suppresses stretch
+   * vertically only, and never touches width.
+   */
+  block-size: fit-content;
+}
+
+.ui-button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: var(--space-3) var(--space-5);
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-bold);
+  overflow-wrap: anywhere;
+  transition:
+    color var(--motion-fast) ease,
+    background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease,
+    transform var(--motion-fast) ease;
+}
+
+.ui-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.ui-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ui-button:focus-visible {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--accent-deep);
+}
+
+.ui-button--primary {
+  color: var(--bg-canvas);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ui-button--primary:hover:not(:disabled) {
+  color: var(--bg-canvas);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.ui-button--secondary,
+.ui-button--quiet {
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
+}
+
+.ui-button--danger {
+  color: var(--text-on-danger);
+  background: var(--danger-strong);
+  border-color: var(--danger-strong);
+}
+
+.ui-button--danger:hover:not(:disabled) {
+  color: var(--text-on-danger);
+  background: var(--danger-hover);
+  border-color: var(--danger-hover);
+}
+
+.ui-button:disabled,
+.ui-button[aria-disabled="true"] {
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+  cursor: not-allowed;
+  opacity: 0.7;
+  transform: none;
+}
+
+.ui-card {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+}
+
+.ui-card__header,
+.ui-card__body,
+.ui-card__footer {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ui-card__header {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ui-card__header h2,
+.ui-card__header p {
+  min-width: 0;
+  margin: var(--space-1) 0;
+  overflow-wrap: anywhere;
+}
+
+.ui-card__header h2 {
+  color: var(--text-primary);
+  font-size: var(--font-size-heading-sm);
+  font-weight: var(--weight-bold);
+}
+
+.ui-card__header p {
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.ui-card__body {
+  flex: 1 1 auto;
+  padding: var(--space-5);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ui-card__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ui-card__footer > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ui-notice {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-inline-start-width: 3px;
+  border-radius: var(--radius-md);
+  overflow-wrap: anywhere;
+}
+
+.ui-notice__content {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
+.ui-notice__heading {
+  color: var(--text-primary);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-bold);
+  overflow-wrap: anywhere;
+}
+
+.ui-notice--info {
+  background: var(--info-soft);
+  border-color: var(--info-border);
+  border-inline-start-color: var(--info);
+}
+
+.ui-notice--success {
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  border-inline-start-color: var(--success);
+}
+
+.ui-notice--warning {
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+  border-inline-start-color: var(--warning);
+}
+
+.ui-notice--danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  border-inline-start-color: var(--danger);
+}
+
+.ui-operation-feedback {
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-inline-start-width: 3px;
+  border-radius: var(--radius-md);
+  overflow-wrap: anywhere;
+}
+
+.ui-operation-feedback[aria-hidden="true"] {
+  visibility: hidden;
+}
+
+.ui-operation-feedback__message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ui-operation-feedback--neutral {
+  border-inline-start-color: var(--border-strong);
+}
+
+.ui-operation-feedback--info {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: var(--info-border);
+  border-inline-start-color: var(--info);
+}
+
+.ui-operation-feedback--success {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  border-inline-start-color: var(--success);
+}
+
+.ui-operation-feedback--warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+  border-inline-start-color: var(--warning);
+}
+
+.ui-operation-feedback--danger {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  border-inline-start-color: var(--danger);
+}
+
+.ui-tab-set {
+  min-width: 0;
+  max-width: 100%;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.ui-tab-set__list {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-subtle);
+  scrollbar-color: var(--border-strong) var(--bg-surface);
+}
+
+.ui-tab {
+  min-width: 44px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  text-align: center;
+  overflow-wrap: anywhere;
+  transition:
+    color var(--motion-fast) ease,
+    background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease;
+}
+
+.ui-tab:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.ui-tab:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--accent-deep);
+}
+
+.ui-tab--selected {
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
+  border-color: var(--border-default);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.ui-tab:disabled,
+.ui-tab[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.ui-tab__disabled-reason {
+  color: var(--text-muted);
+}
+
+.ui-tab-set__panel {
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--space-4);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ui-unavailable-value {
+  min-width: 44px;
+  min-height: 44px;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-bold);
+  overflow-wrap: anywhere;
+}
+
+.status-pill {
+  min-width: 0;
+  min-height: 28px;
+  max-width: 100%;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-status);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.status-pill__dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  display: inline-block;
+  background: currentColor;
+  border-radius: 50%;
+}
+
+.status-pill--neutral {
+  color: var(--text-secondary);
+}
+
+.status-pill--info {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: var(--info-border);
+}
+
+.status-pill--success {
+  color: var(--success-text);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.status-pill--warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.status-pill--danger {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+@media (max-width: 720px) {
+  .ui-card__header,
+  .ui-card__body {
+    padding: var(--space-4);
+  }
+
+  .ui-card__footer {
+    align-items: stretch;
+    padding: var(--space-4);
+  }
+
+  .ui-card__footer .ui-button-wrap,
+  .ui-card__footer .ui-button {
+    width: 100%;
+  }
+
+  .ui-button-wrap {
+    max-width: 100%;
+  }
+
+  .ui-button {
+    white-space: normal;
+  }
+
+  .ui-tab-set__panel {
+    padding: var(--space-3);
+  }
+}
+
+@media (forced-colors: active) {
+  .ui-control,
+  .ui-button,
+  .ui-card,
+  .ui-notice,
+  .ui-operation-feedback,
+  .ui-tab,
+  .ui-tab-set__panel,
+  .ui-unavailable-value,
+  .status-pill {
+    color: CanvasText;
+    background: Canvas;
+    border-color: CanvasText;
+  }
+
+  .ui-button--primary,
+  .ui-button--danger,
+  .ui-tab--selected {
+    color: HighlightText;
+    background: Highlight;
+    border-color: Highlight;
+  }
+
+  .ui-control:focus-visible,
+  .ui-button:focus-visible,
+  .ui-tab:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+
+  .status-pill__dot {
+    background: currentColor;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-control,
+  .ui-button,
+  .ui-tab {
+    transition: none;
+  }
+
+  .ui-button:active:not(:disabled) {
+    transform: none;
+  }
+}

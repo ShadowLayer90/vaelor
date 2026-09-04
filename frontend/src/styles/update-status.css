@@ -1,0 +1,225 @@
+/*
+ * Live status view for a running or finished software-update job. The single
+ * `{message} {progress}%` line it replaces was reported as "does nothing" — too
+ * quiet to notice and gone the moment polling stopped. This stays put, shows an
+ * overall bar plus a step-by-step timeline, and gives failure and success their
+ * own edge so a reader can tell staged from installed at a glance.
+ *
+ * Split out of `system-assistant-base.css` to keep that module under the repo's
+ * 1000-line ceiling; imported alongside it from `styles.css`.
+ */
+.update-status {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-surface-raised) 72%, transparent);
+}
+
+.update-status--success {
+  border-left-color: var(--success-border);
+  background: color-mix(in srgb, var(--success) 8%, var(--bg-surface-raised));
+}
+
+.update-status--danger {
+  border-left-color: var(--danger-border);
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-surface-raised));
+}
+
+.update-status__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.update-status__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.update-status__bar {
+  position: relative;
+  height: 18px;
+  overflow: hidden;
+  background: var(--border-subtle);
+  border-radius: 999px;
+}
+
+.update-status__bar-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 240ms ease;
+}
+
+.update-status--success .update-status__bar-fill {
+  background: var(--success);
+}
+
+.update-status--danger .update-status__bar-fill {
+  background: var(--danger);
+}
+
+.update-status__bar-value {
+  position: absolute;
+  inset: 0 var(--space-2) 0 auto;
+  display: flex;
+  align-items: center;
+  color: var(--text-primary);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.update-status__error {
+  margin: 0;
+  color: var(--danger-text);
+}
+
+.update-status__timeline {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 168px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.update-status__event {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.update-status__dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--info);
+}
+
+.update-status__dot--success {
+  background: var(--success);
+}
+
+.update-status__dot--danger {
+  background: var(--danger);
+}
+
+.update-status__dot--neutral {
+  background: var(--text-secondary);
+}
+
+.update-status__event-progress {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The Update Vaelor panel (SystemUpdatePanel). Its BEM blocks shipped without
+ * any stylesheet, so the running-version line and the offer fell back to
+ * default inline flow — "Currently running", the version and the release source
+ * ran together on one line, and the download glyph orphaned above the offer.
+ * These rules give the panel a vertical rhythm and turn the two dense rows into
+ * legible, spaced cards.
+ */
+.system-update {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.system-update__running {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-surface-raised) 60%, transparent);
+}
+
+.system-update__running small {
+  color: var(--text-secondary);
+}
+
+.system-update__running strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-body-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.system-update__offer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-surface-raised) 72%, transparent);
+}
+
+.system-update__offer-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.system-update__offer-heading > svg {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+
+.system-update__offer-heading > div {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.system-update__offer-heading strong {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.system-update__offer-heading small {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* The confirm block and its actions take the full width of the offer row,
+   wrapping below the heading rather than squeezing in beside it. */
+.system-update__confirm {
+  display: grid;
+  gap: var(--space-3);
+  flex-basis: 100%;
+}
+
+.system-update__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.system-update__last-result {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-secondary);
+}

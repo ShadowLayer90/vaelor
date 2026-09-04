@@ -1,0 +1,30 @@
+[Unit]
+Description=Vaelor authenticated noVNC gateway
+After=network-online.target vaelor-control-plane.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vaelor-vnc
+Group=vaelor-vnc
+Environment=VAELOR_VNC_SESSIONS_DB=/var/lib/vaelor/vnc/sessions.sqlite3
+ExecStart=/opt/vaelor/venv/bin/websockify --web=/usr/share/novnc --file-only --heartbeat=30 --token-plugin=vaelor.vnc_gateway.VncTokenPlugin --token-source=/var/lib/vaelor/vnc/sessions.sqlite3 127.0.0.1:34003
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vaelor/vnc
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

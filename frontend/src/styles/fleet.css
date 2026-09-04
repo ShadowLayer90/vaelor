@@ -1,0 +1,441 @@
+.fleet-page {
+  width: 100%;
+  margin-inline: auto;
+  display: grid;
+  gap: var(--space-5);
+}
+.fleet-hero,
+.fleet-controller,
+.fleet-section,
+.fleet-deploy {
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+}
+.fleet-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: var(--space-6);
+  padding: var(--space-6) calc(var(--space-6) + var(--space-1) / 2);
+  border-top: 2px solid var(--accent);
+}
+.fleet-hero h1 { margin: var(--space-2) 0 var(--space-2); font-size: var(--font-size-heading-md); }
+.fleet-hero p { max-width: 760px; margin: 0; color: var(--text-muted); }
+.fleet-hero__actions { display: flex; align-items: center; gap: var(--space-3); flex-shrink: 0; }
+.fleet-controller {
+  display: grid;
+  grid-template-columns: auto minmax(240px, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+}
+.fleet-controller__mark,
+.fleet-node__icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  color: var(--info);
+  border: 1px solid color-mix(in srgb, var(--info) 35%, transparent);
+  background: color-mix(in srgb, var(--info) 8%, transparent);
+}
+.fleet-controller h2,
+.fleet-section h2,
+.fleet-deploy h2 { margin: var(--space-1) 0; }
+.fleet-controller p,
+.fleet-deploy p { margin: 0; color: var(--text-muted); }
+.fleet-controller dl { display: flex; gap: var(--space-5); margin: 0; }
+.fleet-controller dl div { min-width: 96px; }
+.fleet-controller dt,
+.fleet-node dt { color: var(--text-muted); font: var(--weight-medium) var(--font-size-body-sm)/1.3 var(--font-family-data); text-transform: uppercase; letter-spacing: .08em; }
+.fleet-controller dd,
+.fleet-node dd { margin: var(--space-1) 0 0; font-weight: var(--weight-semibold); }
+.fleet-section { padding: var(--space-5) var(--space-6) var(--space-6); }
+.fleet-section__header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-subtle); padding-bottom: var(--space-4); }
+.fleet-node-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: var(--space-4); margin-top: var(--space-4); }
+.fleet-node { border: 1px solid var(--border-subtle); background: var(--bg-surface-raised); padding: var(--space-5); }
+.fleet-node__heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; }
+.fleet-node__heading h3 { margin: 0 0 var(--space-1); }
+.fleet-node__heading p { margin: 0; color: var(--text-muted); font-family: var(--font-family-data); }
+/* A node whose architecture does not match this controller cannot run the
+   cluster's workloads at all, so it is called out above the facts rather than
+   left for someone to spot in the CPU row. */
+.fleet-node__mismatch { margin: var(--space-4) 0 0; padding: var(--space-3) var(--space-4); border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border-default)); background: var(--warning-soft); color: var(--text-primary); font-size: var(--font-size-body-sm); line-height: 1.5; }
+.fleet-node__facts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4) var(--space-5); margin: var(--space-5) 0; padding: var(--space-4) 0; border-block: 1px solid var(--border-subtle); }
+.fleet-node__actions { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+/* A worker this controller drained and removed leaves no card above, so what
+   happened to it is stated here rather than left as a node that quietly
+   stopped appearing. */
+.fleet-removals { list-style: none; margin: var(--space-4) 0 0; padding: 0; display: grid; gap: var(--space-3); }
+.fleet-removals li { display: grid; gap: var(--space-1); padding: var(--space-4) var(--space-4); border: 1px solid var(--border-subtle); background: var(--bg-surface-raised); font-size: var(--font-size-body-sm); line-height: 1.5; }
+.fleet-removals span { color: var(--text-muted); }
+.fleet-empty { min-height: 240px; display: grid; place-items: center; align-content: center; text-align: center; gap: var(--space-2); color: var(--text-muted); }
+.fleet-empty h3 { color: var(--text-primary); margin: var(--space-2) 0 0; }
+.fleet-empty p { max-width: 560px; margin: 0; }
+.fleet-deploy { display: flex; justify-content: space-between; align-items: center; gap: var(--space-6); padding: var(--space-5) var(--space-6); border-left: 3px solid var(--info); }
+.fleet-deploy--app { border-left-color: var(--accent); }
+.fleet-deploy > div { max-width: 780px; }
+.fleet-controller-address-help {
+  align-self: end;
+  padding: var(--space-4) var(--space-4);
+  border-left: 2px solid var(--info);
+  background: color-mix(in srgb, var(--info) 6%, transparent);
+}
+.fleet-controller-address-help p { margin: var(--space-1) 0 0; color: var(--text-muted); }
+.fleet-service-list { display: grid; gap: var(--space-3); margin-top: var(--space-4); }
+.fleet-service {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-raised);
+}
+.fleet-service > div { display: grid; gap: var(--space-1); min-width: 0; }
+.fleet-service span { color: var(--text-muted); overflow-wrap: anywhere; }
+.cluster-service-manager { width: min(980px, calc(100vw - 40px)); padding: var(--space-6); }
+.cluster-service-manager > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-5);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cluster-service-manager h2 { margin: var(--space-1) 0; overflow-wrap: anywhere; }
+.cluster-service-manager header p { margin: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.cluster-service-manager__facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: var(--space-5) 0;
+  border: 1px solid var(--border-subtle);
+}
+.cluster-service-manager__facts div { padding: var(--space-4); min-width: 0; }
+.cluster-service-manager__facts div + div { border-left: 1px solid var(--border-subtle); }
+.cluster-service-manager__facts dt {
+  color: var(--text-muted);
+  font: var(--weight-medium) var(--font-size-body-sm)/1.3 var(--font-family-data);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.cluster-service-manager__facts dd {
+  margin: var(--space-2) 0 0;
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+.cluster-service-manager > section { margin-top: var(--space-5); }
+.cluster-service-manager > section h3 { margin: 0 0 var(--space-3); }
+.cluster-service-manager__rows,
+.cluster-service-manager__tasks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--border-subtle);
+}
+.cluster-service-manager__rows > div,
+.cluster-service-manager__tasks > div {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.cluster-service-manager__rows > div:nth-child(even),
+.cluster-service-manager__tasks > div:nth-child(even) { border-left: 1px solid var(--border-subtle); }
+.cluster-service-manager__rows span,
+.cluster-service-manager__tasks span,
+.cluster-service-manager__tasks small {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.cluster-service-manager__section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.cluster-service-manager__section-heading h3 { margin: 0 !important; }
+.cluster-service-manager__section-heading p {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+}
+.cluster-service-manager__settings {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.cluster-service-manager__settings label {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+.cluster-service-manager__settings label > span:first-child {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+.cluster-service-manager__settings input,
+.cluster-service-manager__settings select {
+  width: 100%;
+  min-height: 44px;
+}
+.cluster-service-manager__settings small {
+  line-height: 1.4;
+}
+.cluster-service-manager__unit-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface-raised);
+}
+.cluster-service-manager__unit-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--focus);
+}
+.cluster-service-manager__unit-input input {
+  border: 0;
+  box-shadow: none;
+}
+.cluster-service-manager__unit-input > span {
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  font: var(--weight-medium) var(--font-size-body-sm)/1 var(--font-family-data);
+}
+.cluster-service-manager__diagnostic-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.cluster-service-manager__diagnostic { margin-top: var(--space-3); }
+.cluster-service-manager__diagnostic > span {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--text-muted);
+  font: var(--weight-medium) var(--font-size-body-sm)/1.4 var(--font-family-data);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.cluster-service-manager__backups { display: grid; border: 1px solid var(--border-subtle); }
+.cluster-service-manager__backups article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4);
+}
+.cluster-service-manager__backups article + article { border-top: 1px solid var(--border-subtle); }
+.cluster-service-manager__backups article > div:first-child {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.cluster-service-manager__backups article > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.cluster-service-manager__backups span,
+.cluster-service-manager__backups code,
+.cluster-service-manager__empty { color: var(--text-muted); }
+.cluster-service-manager__backups code { overflow-wrap: anywhere; }
+.cluster-service-manager__delete-confirm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, .7fr);
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+.cluster-service-manager__delete-confirm input { min-height: 42px; }
+.cluster-service-manager__logs {
+  max-height: 280px;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-4);
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cluster-service-manager > footer {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}
+/* Sentence case (#150): these are multi-sentence requirements, not labels,
+   and forcing prose to uppercase at small sizes is measurably harder to
+   read. The dt labels elsewhere keep their uppercase convention. */
+.fleet-requirements { display: flex; gap: var(--space-5); padding: 0 var(--space-2); color: var(--text-muted); font: var(--weight-medium) var(--font-size-body-sm)/1.5 var(--font-family-data); }
+.fleet-requirements strong { color: var(--text-primary); }
+.fleet-enroll,
+.fleet-plan { padding: var(--space-6); }
+.fleet-enroll header,
+.fleet-plan header { border-bottom: 1px solid var(--border-subtle); padding-bottom: var(--space-4); margin-bottom: var(--space-5); }
+.fleet-enroll header h2,
+.fleet-plan header h2 { margin: var(--space-2) 0; }
+.fleet-enroll header p { color: var(--text-muted); margin: 0; }
+.fleet-enroll__grid { display: grid; grid-template-columns: 1fr 140px; gap: var(--space-4); }
+/* Field skin/label styling is owned by the Input/Select/Checkbox primitives. */
+.fleet-enroll__password { grid-column: 1 / -1; }
+.fleet-enroll__grid input:not([type="checkbox"]),
+.fleet-enroll__grid select { min-height: 46px; }
+.fleet-enroll__check { grid-column: 1 / -1; display: flex !important; grid-template-columns: auto 1fr; align-items: center; min-height: 44px; }
+.fleet-placement {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.fleet-placement legend {
+  margin-bottom: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+.fleet-placement__modes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-raised);
+}
+.fleet-placement__modes label,
+.fleet-worker-list label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 72px;
+  padding: var(--space-4) var(--space-4);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.fleet-placement__modes label + label { border-left: 1px solid var(--border-subtle); }
+.fleet-placement__modes label.is-selected {
+  box-shadow: inset 3px 0 0 var(--info);
+  background: color-mix(in srgb, var(--info) 7%, transparent);
+}
+.fleet-placement__modes input,
+.fleet-worker-list input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--info);
+}
+.fleet-placement__modes span,
+.fleet-worker-list span { display: grid; gap: var(--space-1); }
+.fleet-placement__modes small,
+.fleet-worker-list small,
+.fleet-placement__workers p,
+.fleet-placement__workers output { color: var(--text-muted); line-height: 1.45; }
+.fleet-placement__workers { grid-column: 1 / -1; }
+.fleet-placement__workers p { margin: -2px 0 var(--space-3); font-size: var(--font-size-body-sm); }
+.fleet-worker-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--border-subtle);
+}
+.fleet-worker-list label:nth-child(even) { border-left: 1px solid var(--border-subtle); }
+.fleet-worker-list label:nth-child(n + 3) { border-top: 1px solid var(--border-subtle); }
+.fleet-worker-list label:has(input:checked) {
+  background: color-mix(in srgb, var(--info) 7%, transparent);
+  box-shadow: inset 3px 0 0 var(--info);
+}
+.fleet-placement__workers output {
+  display: block;
+  margin-top: var(--space-2);
+  font: var(--weight-medium) var(--font-size-body-sm)/1.4 var(--font-family-data);
+  text-transform: uppercase;
+}
+.fleet-pooled-warning {
+  align-self: end;
+  min-height: 100%;
+  padding: var(--space-4) var(--space-4);
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.fleet-pooled-warning strong { color: var(--text-primary); }
+.fleet-pooled-warning p {
+  margin: var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.5;
+}
+.fleet-pooled-warning small {
+  color: var(--accent);
+  font: var(--weight-medium) var(--font-size-body-sm)/1.4 var(--font-family-data);
+}
+.fleet-enroll__footer,
+.fleet-plan footer { display: flex; justify-content: flex-end; gap: var(--space-3); margin-top: var(--space-5); }
+.fleet-fingerprint { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-4); margin-top: var(--space-5); padding: var(--space-4); border: 1px solid var(--success); background: color-mix(in srgb, var(--success) 5%, transparent); }
+.fleet-fingerprint > div:first-child { color: var(--success); }
+.fleet-fingerprint span,
+.fleet-fingerprint code { display: block; margin-top: var(--space-1); }
+.fleet-fingerprint code { word-break: break-all; color: var(--success); }
+.fleet-fingerprint p { color: var(--text-muted); margin: var(--space-3) 0 0; font-size: var(--font-size-body-sm); }
+.fleet-plan ol { display: grid; gap: var(--space-3); padding-left: var(--space-5); }
+.fleet-plan__impact { margin-top: var(--space-5); padding: var(--space-4); border-left: 2px solid var(--accent); background: var(--bg-surface-raised); }
+.fleet-plan__impact p { color: var(--text-muted); margin: var(--space-2) 0 0; }
+.fleet-plan__note { color: var(--text-muted); }
+@media (max-width: 1440px) {
+  .fleet-controller { grid-template-columns: auto 1fr; }
+  .fleet-controller dl,
+  .fleet-controller > button { grid-column: 2; }
+  .fleet-hero,
+  .fleet-deploy { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 720px) {
+  .fleet-hero,
+  .fleet-section,
+  .fleet-controller { padding: var(--space-5); }
+  .fleet-hero__actions,
+  .fleet-controller dl,
+  .fleet-node__actions,
+  .fleet-requirements { flex-wrap: wrap; }
+  .fleet-node-grid { grid-template-columns: 1fr; }
+  .fleet-enroll__grid { grid-template-columns: 1fr; }
+  .fleet-enroll__grid label { grid-column: auto; }
+  .fleet-placement,
+  .fleet-placement__workers { grid-column: auto; }
+  .fleet-placement__modes,
+  .fleet-worker-list { grid-template-columns: 1fr; }
+  .fleet-placement__modes label + label,
+  .fleet-worker-list label:nth-child(even) { border-left: 0; }
+  .fleet-placement__modes label + label,
+  .fleet-worker-list label:nth-child(n + 2) { border-top: 1px solid var(--border-subtle); }
+  .fleet-fingerprint { grid-template-columns: 1fr; }
+  .fleet-service { grid-template-columns: 1fr; }
+  .fleet-enroll__footer,
+  .fleet-plan footer { flex-direction: column-reverse; align-items: stretch; }
+  .fleet-enroll__footer .ui-button,
+  .fleet-plan footer .ui-button { width: 100%; }
+  .cluster-service-manager { width: calc(100vw - 20px); padding: var(--space-5); }
+  .cluster-service-manager > header { flex-direction: column; }
+  .cluster-service-manager__section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .cluster-service-manager__diagnostic-actions { justify-content: flex-start; }
+  .cluster-service-manager__facts,
+  .cluster-service-manager__settings,
+  .cluster-service-manager__rows,
+  .cluster-service-manager__tasks { grid-template-columns: 1fr; }
+  .cluster-service-manager__backups article,
+  .cluster-service-manager__delete-confirm { grid-template-columns: 1fr; }
+  .cluster-service-manager__facts div + div,
+  .cluster-service-manager__rows > div:nth-child(even),
+  .cluster-service-manager__tasks > div:nth-child(even) {
+    border-left: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+}
