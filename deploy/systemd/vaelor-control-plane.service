@@ -1,0 +1,46 @@
+[Unit]
+Description=Vaelor control plane
+After=network-online.target vaelor-credential-broker.service vaelor-hardware-bridge.service vaelor-workload-broker.service vaelor-application-research.service
+Wants=network-online.target vaelor-hardware-bridge.service vaelor-workload-broker.service vaelor-application-research.service
+
+[Service]
+Type=simple
+User=vaelor
+Group=vaelor
+# `systemd-journal` lets this process read the journal it queries for the
+# service-log viewer. Vaelor units log to the journal (SyslogIdentifier
+# `vaelor`), and without this group `journalctl -u` run in-process returns
+# nothing but an "insufficient permissions" notice, so the viewer showed
+# "No recent log entries" for services that were actively logging.
+SupplementaryGroups=vaelor-jobs vaelor-credentials vaelor-vnc systemd-journal
+ExecStart=/opt/vaelor/venv/bin/vaelor
+Restart=on-failure
+RestartSec=3
+Environment=VAELOR_STATE_ROOT=/var/lib/vaelor
+Environment=VAELOR_DATA_ROOT=/var/lib/vaelor
+Environment=VAELOR_RUN_ROOT=/run/vaelor
+Environment=VAELOR_LOG_ROOT=/var/log/vaelor
+Environment=VAELOR_CREDENTIAL_BROKER_SOCKET=/run/vaelor/credentiald.sock
+Environment=VAELOR_JOBS_DB=/var/lib/vaelor/jobs/jobs.sqlite3
+Environment=VAELOR_WORKLOAD_BROKER_SOCKET=/run/vaelor/workloadd.sock
+Environment=VAELOR_APPLICATION_RESEARCH_SOCKET=/run/vaelor/application-research.sock
+Environment=VAELOR_APPLICATION_SEARCH_URL=http://127.0.0.1:8888
+EnvironmentFile=-/etc/vaelor/application.env
+LogsDirectory=vaelor
+LogsDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vaelor /var/log/vaelor /run/vaelor
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

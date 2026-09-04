@@ -1,0 +1,940 @@
+/*
+ * Intentional decorative literals retained: chassis shading (#070707, #111, #1b1b1c),
+ * rainbow lighting preset stops (#ff4d4d, #ffd84d, #4dff88, #4dc4ff, #9d4dff,
+ * #ff4d9d), and translucent black/white texture, glass, and shadow layers.
+ */
+.cooling-hero__fan::before,
+.cooling-hero__fan::after {
+  position: absolute;
+  border: 1px dashed color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: inherit;
+  content: "";
+}
+
+.cooling-hero__fan::before {
+  inset: 13px;
+  animation: energy-rotate 16s linear infinite reverse;
+}
+
+.cooling-hero__fan::after {
+  inset: 29px;
+}
+
+.cooling-hero__fan > span {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  filter: drop-shadow(0 0 13px var(--accent));
+  animation: fan-spin 1.2s linear infinite;
+}
+
+.cooling-hero__reading,
+.cooling-hero__state {
+  position: relative;
+  z-index: 1;
+}
+
+.cooling-hero__reading {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.cooling-hero__reading > small,
+.cooling-hero__state small {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cooling-hero__reading > strong {
+  font-family: var(--font-family-data);
+  font-size: clamp(40px, 5vw, 62px);
+  letter-spacing: -0.07em;
+}
+
+.cooling-hero__reading > strong span {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0;
+}
+
+.cooling-hero__reading p {
+  max-width: 570px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.6;
+}
+
+.cooling-hero__state {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.cooling-hero__state > span {
+  min-height: 55px;
+  display: grid;
+  align-content: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: rgb(5 5 5 / 52%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.cooling-hero__state strong {
+  font-size: var(--font-size-body-sm);
+}
+
+.cooling-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.8fr);
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.cooling-grid .data-panel {
+  min-height: 390px;
+}
+
+.cpu-policy-panel {
+  grid-column: 1 / -1;
+  min-height: auto !important;
+}
+
+.cpu-policy-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.8fr) minmax(420px, 1.2fr);
+  gap: var(--space-5);
+  margin-top: var(--space-5);
+}
+
+.cpu-policy-controls {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+}
+
+.custom-curve-editor {
+  display: grid;
+  gap: calc(var(--space-3) - var(--space-1) / 2);
+  padding: calc(var(--space-4) - var(--space-1) / 2);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.custom-curve-editor label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.custom-curve-editor label > span:last-child {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--space-2) - var(--space-1) / 2);
+  color: var(--text-primary);
+}
+
+.custom-curve-editor input {
+  width: 5.5rem;
+  min-height: 2.25rem;
+  padding: calc(var(--space-2) - var(--space-1) / 2) calc(var(--space-2) + var(--space-1) / 4);
+  text-align: right;
+}
+
+/* #149: each level's error sits under its own row, right-aligned to the
+   field it describes, and the field it describes turns red — the same two
+   signals every ui-field input gives. */
+.custom-curve-row {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.custom-curve-row .ui-field__error {
+  margin: 0;
+  text-align: right;
+}
+
+.custom-curve-editor input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.custom-curve-editor > small {
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.control-label {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.boost-levels {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.boost-levels button {
+  min-height: 68px;
+  display: grid;
+  place-content: center;
+  gap: 2px;
+  color: var(--text-secondary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.boost-levels button strong {
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: 15px;
+}
+
+.boost-levels button small {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.boost-levels button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.boost-levels button[aria-pressed="true"] strong {
+  color: var(--accent);
+}
+
+.control-warning {
+  margin: 0;
+  color: var(--warning);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.55;
+}
+
+.fan-curve {
+  min-height: 286px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent-hover) 8%, transparent), transparent 55%),
+    var(--bg-surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.fan-curve__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.fan-curve__header > div {
+  display: grid;
+}
+
+.fan-curve__header > span {
+  color: var(--accent);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+}
+
+.fan-curve__track {
+  min-height: 140px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-3) 0;
+  background-image:
+    linear-gradient(var(--border-subtle) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-subtle) 1px, transparent 1px);
+  background-size: 100% 25%, 25% 100%;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.fan-curve__track > span {
+  height: var(--curve-height);
+  min-height: 44px;
+  position: relative;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 1px;
+  padding-top: var(--space-2);
+  background: linear-gradient(180deg, var(--accent), var(--accent-deep));
+  border-radius: 4px 4px 0 0;
+  box-shadow: 0 0 20px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.fan-curve__track strong {
+  color: var(--bg-canvas);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+}
+
+.fan-curve__track small {
+  position: absolute;
+  bottom: -21px;
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+}
+
+.fan-curve > p {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.55;
+}
+
+.fan-curve > p svg {
+  flex: 0 0 auto;
+  color: var(--success);
+}
+
+.lighting-section {
+  margin-top: var(--space-8);
+  padding-top: var(--space-7);
+  border-top: 1px solid var(--border-default);
+}
+
+.lighting-section__heading h2 {
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: clamp(26px, 3vw, 38px);
+}
+
+.lighting-console {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.75fr) minmax(480px, 1.25fr);
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.lighting-preview {
+  min-height: 500px;
+  position: relative;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  align-items: center;
+  overflow: hidden;
+  padding: var(--space-6);
+  background:
+    radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--lighting-color) var(--lighting-brightness), transparent), transparent 40%),
+    linear-gradient(145deg, #111, var(--bg-canvas) 62%);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+  transition: background var(--motion-base) ease;
+}
+
+.lighting-preview::before {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgb(255 255 255 / 2%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 2%) 1px, transparent 1px);
+  background-size: 32px 32px;
+  content: "";
+  mask-image: linear-gradient(to bottom, black, transparent 85%);
+}
+
+.lighting-preview__case {
+  width: min(78%, 290px);
+  aspect-ratio: 0.92;
+  position: relative;
+  z-index: 1;
+  justify-self: center;
+  background:
+    linear-gradient(100deg, rgb(255 255 255 / 8%), transparent 28%),
+    linear-gradient(145deg, #1b1b1c, #070707);
+  border: 1px solid rgb(255 255 255 / 13%);
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-md) var(--radius-md);
+  box-shadow:
+    inset -32px 0 42px rgb(0 0 0 / 50%),
+    0 30px 60px rgb(0 0 0 / 50%);
+}
+
+.lighting-preview__case::after {
+  width: 78%;
+  height: 76%;
+  position: absolute;
+  inset: 12% 11%;
+  background:
+    repeating-linear-gradient(90deg, rgb(255 255 255 / 7%) 0 1px, transparent 1px 18px),
+    rgb(0 0 0 / 34%);
+  border: 1px solid rgb(255 255 255 / 8%);
+  content: "";
+}
+
+.lighting-preview__case > span {
+  width: 18px;
+  height: 18px;
+  position: absolute;
+  z-index: 2;
+  right: 15%;
+  background: var(--lighting-color);
+  border: 4px solid #111;
+  border-radius: 50%;
+  box-shadow:
+    0 0 24px var(--lighting-color),
+    0 0 48px color-mix(in srgb, var(--lighting-color) 55%, transparent);
+  opacity: var(--lighting-opacity);
+}
+
+.lighting-preview__case > span:nth-child(1) { top: 20%; }
+.lighting-preview__case > span:nth-child(2) { top: 38%; }
+.lighting-preview__case > span:nth-child(3) { top: 56%; }
+.lighting-preview__case > span:nth-child(4) { top: 74%; }
+
+.lighting-preview--breathing .lighting-preview__case > span {
+  animation: lighting-breathe var(--lighting-speed) ease-in-out infinite alternate;
+}
+
+.lighting-preview--flow .lighting-preview__case > span,
+.lighting-preview--flow_reverse .lighting-preview__case > span {
+  animation: lighting-flow var(--lighting-speed) linear infinite;
+}
+
+.lighting-preview--flow_reverse .lighting-preview__case > span {
+  animation-direction: reverse;
+}
+
+.lighting-preview--rainbow .lighting-preview__case > span,
+.lighting-preview--rainbow_reverse .lighting-preview__case > span,
+.lighting-preview--hue_cycle .lighting-preview__case > span {
+  animation: lighting-rainbow var(--lighting-speed) linear infinite;
+}
+
+.lighting-preview--rainbow_reverse .lighting-preview__case > span {
+  animation-direction: reverse;
+}
+
+.lighting-preview__case > span:nth-child(2) { animation-delay: -0.3s; }
+.lighting-preview__case > span:nth-child(3) { animation-delay: -0.6s; }
+.lighting-preview__case > span:nth-child(4) { animation-delay: -0.9s; }
+
+.lighting-preview__copy {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.lighting-preview__copy small {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.lighting-preview__copy strong {
+  font-size: var(--font-size-heading-sm);
+  text-transform: capitalize;
+}
+
+.lighting-preview__copy span {
+  color: var(--text-secondary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+}
+
+.lighting-controls {
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+}
+
+.lighting-power-row {
+  min-height: 74px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.lighting-power-row > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.lighting-power-row span {
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.switch-control {
+  min-width: 84px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  color: var(--text-secondary);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+}
+
+.switch-control > span {
+  width: 17px;
+  height: 17px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition:
+    background var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
+}
+
+.switch-control[aria-checked="true"] {
+  color: var(--success);
+  border-color: var(--success-border);
+}
+
+.switch-control[aria-checked="true"] > span {
+  background: var(--success);
+  box-shadow: 0 0 12px var(--success);
+}
+
+.lighting-controls fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.lighting-controls legend {
+  margin-bottom: var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.color-picker-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/*
+ * The entry grid cannot render below its own min-content (measured 392.8px for
+ * the five-column desktop layout). `min-width: 0` let the flex item shrink to
+ * its 340px basis anyway, so the grid painted outside its own box and slid
+ * under `.color-presets` — which is later in DOM order, paints on top, and
+ * captured the pointer for roughly two thirds of the Blue field between 830px
+ * and 868px.
+ *
+ * Sizing the item from `min-content` makes the flex line break decision use
+ * the real floor (the hypothetical main size is the base size clamped by
+ * min-width), so the presets wrap to their own row before anything overlaps.
+ */
+.color-field {
+  min-width: min-content;
+  flex: 1 1 392px;
+}
+
+/* Hex is the widest value in the row, so it gets the larger share of the free
+   space rather than an equal quarter of it. */
+.color-field__entry {
+  display: grid;
+  grid-template-columns: auto minmax(9ch, 1.6fr) repeat(3, minmax(7ch, 1fr));
+  align-items: start;
+  gap: var(--space-2);
+}
+
+/*
+ * The colour trigger is a real, visible, full-size control. Alpha 11 hid a
+ * 6x4px opacity-0 input behind a decorative swatch, which could not be hit
+ * with a pointer and gave keyboard users no visible focus.
+ */
+.color-field__swatch {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: end;
+  padding: 0 var(--space-3);
+  color: var(--text-secondary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-body-sm);
+  cursor: pointer;
+}
+
+.color-field__swatch:focus-within {
+  border-color: var(--focus);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/*
+ * The native colour input is the only part of the trigger the browser can
+ * disable, and it is invisible. Without this the label kept `cursor: pointer`
+ * and near-full-strength text while the control underneath was dead, so the
+ * one visible colour affordance advertised itself as clickable and did
+ * nothing.
+ */
+.color-field__swatch:has(.color-field__picker:disabled) {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.color-field__swatch:has(.color-field__picker:disabled) .color-field__swatch-chip {
+  border-color: var(--text-muted);
+}
+
+.color-field__swatch-chip {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border: 2px solid var(--text-primary);
+  border-radius: 50%;
+}
+
+/* Native colour inputs cannot be styled consistently, so the swatch above is
+   the visible affordance. The input keeps a real 28px target underneath it
+   rather than being collapsed to a hairline. */
+.color-field__picker {
+  width: 28px;
+  height: 28px;
+  margin-left: calc(-28px - var(--space-2));
+  opacity: 0;
+  cursor: pointer;
+}
+
+.color-field__picker:disabled {
+  cursor: not-allowed;
+}
+
+/*
+ * `.color-field__hex` IS the input: `Input` puts the caller's className on the
+ * control, not on the `.ui-field` wrapper. The old `.color-field__hex input`
+ * descendant selector therefore matched nothing, and hex typed in lower case
+ * stayed in lower case while only externally-set values were upper-cased in
+ * JS.
+ */
+.color-field__hex {
+  text-transform: uppercase;
+}
+
+/*
+ * The colour note tells the user this value is being kept for them, so it is
+ * content they are directed to read, not an inert control. The shared disabled
+ * style (`--text-muted` at `opacity: .7`) composites to about #6f6f6f on this
+ * panel — roughly 3.8:1, under the 4.5:1 minimum. The disabled affordance is
+ * carried by the background, border and cursor instead.
+ */
+.color-field .ui-control:disabled {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+.color-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.color-presets button {
+  width: 44px;
+  height: 44px;
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  border: 5px solid var(--bg-surface-raised);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--border-default);
+}
+
+.color-presets button > span {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 50%;
+}
+
+.color-presets button[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px var(--bg-surface),
+    0 0 0 4px var(--text-primary);
+}
+
+.lighting-color-note {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.lighting-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.lighting-actions__state {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.lighting-actions__buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lighting-effects {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.lighting-effects button {
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  color: var(--text-secondary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-body-sm);
+  text-align: left;
+}
+
+.lighting-effects button[aria-pressed="true"] {
+  color: var(--text-primary);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.effect-glyph {
+  width: 22px;
+  height: 22px;
+  display: block;
+  background: var(--lighting-color, var(--accent));
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 50%;
+}
+
+.effect-glyph--rainbow,
+.effect-glyph--rainbow_reverse,
+.effect-glyph--hue_cycle {
+  background: conic-gradient(#ff4d4d, #ffd84d, #4dff88, #4dc4ff, #9d4dff, #ff4d9d, #ff4d4d);
+}
+
+.lighting-sliders {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.lighting-sliders label {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.lighting-sliders label > span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: space-between;
+  font-size: var(--font-size-body-sm);
+}
+
+.lighting-sliders strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lighting-sliders output {
+  color: var(--accent);
+  font-family: var(--font-family-data);
+}
+
+.lighting-sliders input {
+  width: 100%;
+  min-height: 44px;
+  accent-color: var(--accent);
+}
+
+.lighting-apply {
+  width: 100%;
+}
+
+@keyframes lighting-breathe {
+  from { opacity: 0.25; }
+  to { opacity: var(--lighting-opacity); }
+}
+
+@keyframes lighting-flow {
+  0%, 100% { transform: translateY(-4px); opacity: 0.25; }
+  50% { transform: translateY(4px); opacity: 1; }
+}
+
+@keyframes lighting-rainbow {
+  to { filter: hue-rotate(360deg); }
+}
+
+.fan-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.workspace-route-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.cooling-telemetry {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.cooling-telemetry > div {
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.45;
+}
+
+.cooling-telemetry > div {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-left: 2px solid var(--border-default);
+  background: var(--bg-surface-raised);
+}
+
+.cooling-telemetry strong {
+  color: var(--text-primary);
+}
+
+.cooling-policy-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+  margin-top: var(--space-5);
+}
+
+.cooling-policy-actions h2,
+.cooling-policy-actions p {
+  margin: var(--space-1) 0 0;
+}
+
+.cooling-policy-actions p {
+  max-width: 720px;
+  color: var(--text-secondary);
+}
+
+.cooling-policy-actions__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+@media (max-width: 720px) {
+  .cooling-telemetry,
+  .cooling-policy-actions {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .cooling-policy-actions__buttons {
+    justify-content: stretch;
+  }
+
+  .cooling-policy-actions__buttons .ui-button {
+    flex: 1 1 220px;
+  }
+}
+
+/*
+ * Absent hardware, stated rather than hidden. These surfaces carry no
+ * interactive control at all: their whole job is to say what this machine does
+ * not have and why, so they are typeset as prose, not as a dead console.
+ */
+.cooling-absent__list {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.cooling-absent__list > div {
+  display: grid;
+  gap: var(--space-1);
+  padding-block: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cooling-absent__list > div:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.cooling-absent__list dt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.cooling-absent__list dd {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.lighting-unavailable {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  max-width: 62ch;
+  margin: 0;
+  color: var(--text-muted);
+}

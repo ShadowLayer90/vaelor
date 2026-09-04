@@ -1,0 +1,373 @@
+/*
+ * How AI Chat responds to the viewport.
+ *
+ * `ai-chat.css` is at its module line limit, so the corrections below live in
+ * their own file. It is imported last, which is what lets these single-class
+ * rules beat the equal-specificity originals they replace.
+ *
+ * Every rule here stands for a measurement taken in Chrome against the built
+ * app. The numbers in the comments are those measurements, not estimates.
+ */
+
+/*
+ * The page title was the only `h1` in the product rendered at the compact
+ * scale: 24.2px against 33px on Home, System, Activity and Assistant at
+ * 1100x800, and 22px against 28px at 500x812. `.ai-chat-page__heading h1`
+ * carries two classes, so it silently outranked the shared `.page-heading h1`
+ * ramp on every viewport. Use the shared ramp.
+ */
+.ai-chat-page__heading h1 {
+  font-size: var(--font-size-heading-md);
+}
+
+/*
+ * Below 720px the shared heading becomes a column, and a column whose items
+ * are aligned to `end` shrink-wraps them against its right edge. The title
+ * block collapsed to the 250px `max-width` its paragraph carries at this width
+ * and sat at x=234 in a 500px window, while every card below it started at
+ * x=16. Stretch it back across the column.
+ */
+@media (max-width: 720px) {
+  .ai-chat-page__heading {
+    align-items: stretch;
+  }
+}
+
+/*
+ * `.ui-button` pairs 24px of inline padding with `overflow-wrap: anywhere`.
+ * In the rail's two-column action strip that leaves a 48px content box, so
+ * "Rename" and "Archive" broke mid-word into "Renam"/"e" and stood 62px tall
+ * next to their 44px neighbours. Give the text the width instead.
+ */
+.ai-chat-rail__actions button {
+  padding-inline: var(--space-1);
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Tablet and compact-desktop widths.
+ *
+ * At 1024x768 the pane is 499px tall and the toolbar wraps to two rows, so the
+ * measured budget was toolbar 146 + transcript 129 + composer 210. A 19-turn
+ * conversation showed two lines of text and the empty state's starter cards
+ * were entirely below the fold of a 129px window. Nothing here changes the
+ * pane height; it changes how the pane spends it.
+ */
+@media (max-width: 1024px) {
+  /*
+   * The pane reserved 205px of the window for the shell around it and then
+   * left 91px of that unused at 1024x768: 64px of page padding below the pane
+   * and 27px of shell slack. What is actually there measures 222-224px across
+   * 721-1024px wide, so reserving 229px covers it with room to spare and the
+   * pane grows from 499px to 539px without the page starting to scroll.
+   */
+  .ai-chat-workspace,
+  .ai-chat-workspace.has-details {
+    height: clamp(480px, calc(100dvh - var(--topbar-height) - 165px), 800px);
+  }
+
+  .main:has(.ai-chat-page) {
+    padding-bottom: var(--space-4);
+  }
+
+  /* The rail identity block repeats the page title, and the privacy line is a
+   * static reassurance. Both were taking rows away from the conversation list,
+   * which measured 46px - not one whole entry - once a chat was open. */
+  .ai-chat-rail__brand,
+  .ai-chat-rail__privacy {
+    display: none;
+  }
+
+  .ai-chat-rail {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
+  .ai-chat-toolbar {
+    gap: var(--space-2);
+    padding: var(--space-2);
+  }
+
+  /*
+   * 32px of vertical padding around a 257px transcript is 12% of it. The empty
+   * state measured 256px inside 288px of scrollable content, so the four cards
+   * overflowed a window they would otherwise have fitted.
+   */
+  .ai-chat-messages {
+    padding-block: var(--space-3);
+  }
+
+  /*
+   * 112px of empty textarea outranked the conversation it belongs to. The
+   * `min-height` alone never did anything: `rows={3}` is an intrinsic height,
+   * so the field still measured 81px inside a 179px composer while the
+   * transcript had 204px. The height is stated outright.
+   */
+  .ai-chat-composer textarea {
+    height: 64px;
+    min-height: 64px;
+  }
+
+  /*
+   * The empty state opens with a 60px glyph, a 38px heading and two lines of
+   * prose before the four starter cards it exists to offer. In a 129px window
+   * none of the cards were on screen at all. Lead with the cards.
+   */
+  .ai-chat-empty {
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .ai-chat-empty__intro {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-chat-empty__glyph,
+  .ai-chat-empty__intro .page-eyebrow,
+  .ai-chat-empty__intro > div > p:not(.page-eyebrow) {
+    display: none;
+  }
+
+  .ai-chat-empty h2 {
+    margin: 0;
+    font-size: 18px;
+  }
+
+  /*
+   * The four cards measured 295px of a 204px transcript at 1024x768, so the
+   * third and fourth stood 82px below the fold of the only scroller that could
+   * reach them - with the composer painted over the gap, which is what made
+   * them read as "half covered" rather than "further down". They now measure
+   * inside the window they are offered in.
+   */
+  .ai-chat-empty__starters {
+    gap: var(--space-1);
+  }
+
+  .ai-chat-empty__starters button {
+    min-height: 64px;
+    padding: var(--space-2) var(--space-3);
+  }
+}
+
+/*
+ * Compact desktop widths keep the toolbar on one row.
+ *
+ * Wrapping it to two cost 61px of a 539px pane - measured 142px of toolbar
+ * against 204px of transcript at 1024x768, which is one whole turn of a
+ * two-turn conversation. The single row is what these widths can already
+ * afford: title, model, agent and the Details button measure 660px of the
+ * 780px the pane has at 1010px wide. Below 900px it goes back to two rows,
+ * where it is genuinely needed.
+ */
+@media (min-width: 900px) and (max-width: 1024px) {
+  .ai-chat-toolbar {
+    grid-template-columns: minmax(120px, 1fr) minmax(170px, 240px) minmax(150px, 220px) auto;
+  }
+
+  .ai-chat-toolbar > div:first-child {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .ai-chat-toolbar > .ui-field {
+    grid-row: 1;
+  }
+
+  .ai-chat-toolbar__actions {
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  /*
+   * On one row the title shares the width with two pickers, and
+   * `overflow-wrap: anywhere` spent that narrow column on height instead: an
+   * open conversation wrapped its name over four lines and stood the toolbar
+   * at 162px, taller than the two-row layout this replaces. The full name is
+   * on the element's own tooltip and in the rail beside it.
+   */
+  .ai-chat-toolbar > div:first-child strong,
+  .ai-chat-toolbar > div:first-child span {
+    overflow: hidden;
+    overflow-wrap: normal;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/*
+ * Phone widths.
+ *
+ * The rail's conversation section was `display: none` here, so the list had a
+ * measured `clientHeight` of 0 while the search box above it stayed live: you
+ * could type a query, watch nothing appear, and never reopen a chat from a
+ * phone. Show the section and bound the list instead of hiding it.
+ */
+@media (max-width: 720px) {
+  /* Phones never used the fixed-height pane; the tablet clamp above must not
+   * take it away from them. */
+  .ai-chat-workspace,
+  .ai-chat-workspace.has-details {
+    height: auto;
+    min-height: 720px;
+  }
+
+  .ai-chat-rail {
+    grid-template-rows: auto auto auto;
+  }
+
+  .ai-chat-rail__section {
+    display: grid;
+  }
+
+  .ai-chat-rail__list {
+    max-height: 220px;
+  }
+}
+
+/*
+ * Short viewports.
+ *
+ * The pane will not go below 480px, and the topbar, page heading and page
+ * padding around it measure 202px at desktop widths and up to 224px at tablet
+ * widths. Below 715px of window height the two together no longer fit, so the
+ * page has to scroll to reach the composer.
+ *
+ * It could not. A wheel gesture latches to whichever scroller it starts over
+ * and keeps it for the whole gesture, so the leftover never chains to the
+ * document. Measured at 837x415: one gesture over the transcript left
+ * `scrollY` at 0 with Send below the fold, while the same gesture over the
+ * page title reached the bottom of the page.
+ *
+ * The pane stops being a fixed-height app shell at these heights. The document
+ * becomes the only scroller, so there is no inner scroller left to swallow the
+ * gesture, and the composer is pinned to the bottom of the window so it is
+ * reachable at any scroll position.
+ *
+ * Focus view is excluded: it is a fixed overlay that owns the whole window and
+ * has to keep its own scrolling.
+ */
+@media (max-height: 715px) {
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-workspace,
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-workspace.has-details {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  /*
+   * Block flow, not grid. A sticky grid item is confined to its own grid area,
+   * so the composer measured as `position: sticky` and still scrolled away
+   * with the page. In normal flow its containing block is the whole pane and
+   * the pin actually holds.
+   */
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-main {
+    display: block;
+    overflow: visible;
+  }
+
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-messages {
+    min-height: 0;
+    overflow: visible;
+  }
+
+  /* Without a cap the rail would price every saved conversation into the
+   * height of the page. */
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-rail__list {
+    max-height: 240px;
+  }
+
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-composer {
+    position: sticky;
+    bottom: var(--space-3);
+    z-index: 3;
+  }
+
+  /* "Jump to latest" belongs to a scroll container that no longer exists. */
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-messages__resume {
+    position: static;
+  }
+
+  /*
+   * The pinned composer floats over the transcript here, which is the price of
+   * keeping Send reachable at any scroll position. What it must not float over
+   * is the one screen that exists to be read before anything is typed: at
+   * 1010x586 the first two starter cards were behind it, descriptions and all.
+   *
+   * The composer keeps a 179px band at the bottom of the window, so everything
+   * above it has to fit in what is left: the page heading gives up its
+   * descriptor, the composer gives up a third of its empty typing area, and the
+   * starters stand in one row rather than two.
+   */
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-page__heading p {
+    display: none;
+  }
+
+  /*
+   * `rows={3}` is an intrinsic height, so the `min-height` above it was never
+   * the binding constraint: the empty typing area measured 81px and the whole
+   * composer 178px of a 586px window. Two lines is what a window this short can
+   * pay for; the field scrolls, and nothing about what can be typed changes.
+   */
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-composer textarea {
+    height: 56px;
+    min-height: 52px;
+  }
+
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-composer__bar {
+    min-height: 48px;
+  }
+
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-empty__intro {
+    display: none;
+  }
+
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-empty {
+    padding: var(--space-2) var(--space-3);
+  }
+}
+
+/* One row of four where the width pays for it; below that the cards stay
+ * stacked and the page scrolls to them. */
+@media (min-width: 860px) and (max-height: 715px) {
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-empty__starters {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  /*
+   * Four cards across leave each description a 121px column, which wrapped
+   * "Map prerequisites, risks, and next actions." over five lines and stood the
+   * row 162px tall - taller than the 154px band above the pinned composer. The
+   * "01"-"04" numerals are decoration; the sentence they were crowding is the
+   * content.
+   */
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-empty__starters button {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-empty__starters button > span {
+    display: none;
+  }
+}
+
+/* Clear the phone's fixed bottom navigation bar. */
+@media (max-width: 720px) and (max-height: 715px) {
+  .ai-chat-page:not(.ai-chat-page--focus) .ai-chat-composer {
+    bottom: calc(72px + var(--space-2));
+  }
+}
+
+/*
+ * The sentence that says an attached collection is constraining the answer.
+ *
+ * It takes the whole first line of the chip row so the chips stay a row of
+ * chips, and it is the same width as the composer it sits on top of.
+ */
+.ai-chat-composer__sources-note {
+  flex: 1 0 100%;
+  color: var(--text-secondary);
+  font-size: var(--font-size-data-sm);
+  line-height: 1.4;
+}

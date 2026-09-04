@@ -1,0 +1,524 @@
+.custom-agent-manager {
+  display: grid;
+  gap: var(--space-5);
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.custom-agent-manager > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.custom-agent-manager h2,
+.custom-agent-manager h3,
+.custom-agent-manager p { margin: 0; }
+
+.custom-agent-manager header p {
+  max-width: 760px;
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+}
+
+.custom-agent-form {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-top: 2px solid var(--focus);
+  background: var(--bg-surface-raised);
+}
+
+/*
+ * The four-step strip above the form is gone: it numbered the same form a
+ * second time, disagreeing with the body's own 1-5, and only ever moved its own
+ * highlight. Its styles went with it.
+ */
+
+.custom-agent-review,
+.custom-agent-activation {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: linear-gradient(120deg, var(--accent-soft), transparent 58%), var(--bg-surface-raised);
+  border: 1px solid var(--accent-deep);
+  border-radius: var(--radius-md);
+}
+
+.custom-agent-review h4 { margin: 0 0 var(--space-1); }
+.custom-agent-review p { margin: 0; color: var(--text-secondary); }
+.custom-agent-review dl,
+.custom-agent-activation__checks { display: grid; gap: var(--space-2); margin: 0; }
+.custom-agent-review dl > div { display: grid; grid-template-columns: minmax(120px, .35fr) minmax(0, 1fr); gap: var(--space-3); padding-top: var(--space-2); border-top: 1px solid var(--border-subtle); }
+.custom-agent-review dt { color: var(--text-muted); font-weight: var(--weight-semibold); }
+.custom-agent-review dd { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+.custom-agent-activation__checks { padding-left: var(--space-5); }
+.custom-agent-activation__checks li { display: grid; gap: 2px; color: var(--text-secondary); }
+.custom-agent-activation__checks span { color: var(--text-muted); }
+.custom-agent-activation__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
+
+.custom-agent-step,
+.custom-agent-step-group > summary {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.custom-agent-step > span,
+.custom-agent-step-group > summary > span {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--focus);
+  border: 1px solid currentColor;
+  font-family: var(--font-family-data);
+}
+
+.custom-agent-step > div,
+.custom-agent-step-group > summary > div {
+  display: grid;
+  gap: 2px;
+}
+
+.custom-agent-step small,
+.custom-agent-step-group summary small { color: var(--text-secondary); }
+
+.custom-agent-step-group {
+  padding: var(--space-3) 0 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.custom-agent-step-group > summary {
+  min-height: 52px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.custom-agent-step-group > summary::-webkit-details-marker { display: none; }
+.custom-agent-step-group[open] > summary { margin-bottom: var(--space-4); }
+.custom-agent-step-group > fieldset + fieldset { margin-top: var(--space-4); }
+
+.custom-agent-builder {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-3);
+}
+.custom-agent-builder label { display: grid; gap: var(--space-2); }
+
+.custom-agent-form label,
+.custom-agent-form fieldset { display: grid; gap: var(--space-2); }
+.custom-agent-form fieldset { margin: 0; padding: 0; border: 0; }
+.custom-agent-form fieldset > p { color: var(--text-secondary); }
+
+.custom-agent-scopes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.custom-agent-scopes label {
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+}
+
+.custom-agent-scopes span { display: grid; gap: 2px; }
+.custom-agent-scopes small { color: var(--text-muted); }
+
+.custom-agent-list { display: grid; gap: var(--space-2); }
+.custom-agent-list article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+/*
+ * Two actions in the open, the rest behind one disclosure.
+ *
+ * Seven equally weighted buttons per card - forty-two across six cards - wrapped
+ * into an uneven block that read as a wall rather than a choice. The row is now
+ * sized by its content instead of claiming 48rem of the card.
+ */
+.custom-agent-card { align-items: flex-start; }
+.custom-agent-card__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.custom-agent-card__actions .ui-button-wrap,
+.custom-agent-card__actions .ui-button {
+  flex: 0 0 auto;
+  min-width: max-content;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+.custom-agent-card__body { display: grid; gap: var(--space-1); min-width: 0; }
+.custom-agent-card__body > :is(small, h3, p) {
+  display: block;
+  width: 100%;
+  line-height: 1.45;
+}
+.custom-agent-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.custom-agent-card__menu { position: relative; margin-top: 0; }
+/* Outranks `.custom-agent-list details summary`, which styles the run-history
+   disclosure as a full-width row. */
+.custom-agent-list details.custom-agent-card__menu > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: max-content;
+  color: var(--text-primary);
+  white-space: nowrap;
+  cursor: pointer;
+  list-style: none;
+}
+.custom-agent-card__menu > summary::-webkit-details-marker { display: none; }
+.custom-agent-card__menu[open] > summary {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+/*
+ * Anchored to the disclosure's right edge at every width. Opening it leftwards
+ * on a 375px phone put the menu's own right edge at 412px - outside the window
+ * - because the row it hangs off starts two buttons in.
+ */
+.custom-agent-card__menu-items {
+  position: absolute;
+  right: 0;
+  z-index: var(--layer-raised);
+  display: grid;
+  gap: var(--space-1);
+  min-width: min(220px, calc(100vw - var(--space-8)));
+  max-width: calc(100vw - var(--space-8));
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-raised);
+  box-shadow: var(--shadow-modal);
+}
+.custom-agent-card__menu-items .ui-button-wrap,
+.custom-agent-card__menu-items .ui-button { width: 100%; }
+.custom-agent-card__menu-items .ui-button {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+/*
+ * App access is opened on request, so it needs a way back out. It used to be
+ * appended permanently for anybody who owned a single agent.
+ */
+.custom-agent-app-access-panel { display: grid; gap: var(--space-3); }
+.custom-agent-app-access-panel__dismiss { display: flex; justify-content: flex-end; }
+
+/*
+ * `.ui-button` carries `overflow-wrap: anywhere`, which is right for a label
+ * that can legitimately be long and wrong for "Close": in a `space-between`
+ * panel heading the button was squeezed until the word broke into "Clos e".
+ */
+.custom-agent-manager .panel-heading .ui-button {
+  min-width: max-content;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.custom-agent-list details { margin-top: var(--space-3); }
+.custom-agent-list details summary,
+.custom-agent-templates > summary { min-height: 44px; display: flex; align-items: center; color: var(--text-secondary); cursor: pointer; }
+.custom-agent-versions { display: grid; gap: var(--space-2); margin-top: var(--space-3); padding: var(--space-3); border-left: 2px solid var(--focus); background: var(--bg-surface-raised); }
+.custom-agent-versions ul { margin: 0; padding-left: var(--space-5); color: var(--text-secondary); }
+
+.custom-agent-policy {
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+.custom-agent-policy h4 { margin: 0 0 var(--space-3); }
+.custom-agent-policy dl { display: grid; gap: var(--space-2); margin: 0; }
+.custom-agent-policy dl > div {
+  display: grid;
+  grid-template-columns: minmax(160px, .45fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+.custom-agent-policy dt { color: var(--text-secondary); }
+.custom-agent-policy dd { margin: 0; }
+
+/*
+ * The run and automation dialogs render through ModalShell, which owns the
+ * backdrop, centring, sizing, and surface chrome. Only the inner content's
+ * padded grid stays here.
+ */
+.custom-agent-run-dialog {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-top: 2px solid var(--focus);
+  background: var(--bg-surface-raised);
+}
+.custom-agent-run-dialog label { display: grid; gap: var(--space-2); }
+.custom-agent-automation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.custom-agent-integrations { gap: var(--space-3); }
+.custom-agent-integrations > .panel-heading > div:last-child,
+.custom-agent-connector > .panel-heading > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.custom-agent-connector {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+.custom-agent-connector-grid,
+.custom-agent-operation {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.custom-agent-operation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.custom-agent-operation-heading > div { display: grid; gap: 2px; }
+.custom-agent-operation {
+  align-items: end;
+  padding: var(--space-3);
+  border-left: 2px solid var(--focus);
+  background: var(--bg-surface-raised);
+}
+.operation-risk {
+  display: grid;
+  gap: 2px;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  color: var(--success);
+  border: 1px solid currentColor;
+}
+.operation-risk--write { color: var(--warning); }
+.custom-agent-connector-audit {
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-raised);
+}
+
+@media (max-width: 1024px) {
+  .custom-agent-manager > header,
+  .custom-agent-list article { align-items: stretch; flex-direction: column; }
+  .custom-agent-scopes { grid-template-columns: 1fr; }
+  .custom-agent-builder { grid-template-columns: 1fr; }
+  .custom-agent-card__actions { flex-basis: auto; justify-content: flex-start; }
+  .custom-agent-policy dl > div { grid-template-columns: 1fr; }
+  .custom-agent-automation-grid { grid-template-columns: 1fr; }
+  .custom-agent-connector-grid,
+  .custom-agent-operation { grid-template-columns: 1fr; }
+  .custom-agent-operation-heading { align-items: stretch; flex-direction: column; }
+  .custom-agent-review dl > div { grid-template-columns: 1fr; gap: var(--space-1); }
+}
+
+/*
+ * A run in flight has to look different from one that has stopped. Alpha 12
+ * showed an approved run as a bare "ready" that never changed, so a run that
+ * was working looked identical to one that had died.
+ */
+.custom-agent-run-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+  color: var(--accent);
+  font-size: var(--font-size-body-sm);
+}
+
+.custom-agent-run-progress::before {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentcolor;
+  content: "";
+  animation: custom-agent-run-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes custom-agent-run-pulse {
+  0%, 100% { opacity: 100%; }
+  50% { opacity: 25%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .custom-agent-run-progress::before { animation: none; }
+}
+
+/*
+ * The run surface. A run is described, approved, watched and read in one
+ * place; previously the outcome lived two disclosures deep on a card the user
+ * had to go and find.
+ */
+.agent-run {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.agent-run__request {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.agent-run__stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-run__stages li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+.agent-run__stages li::before {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border: 1px solid currentcolor;
+  border-radius: 50%;
+  content: "";
+}
+
+.agent-run__stages li.is-done {
+  color: var(--text-primary);
+}
+
+.agent-run__stages li.is-done::before {
+  background: currentcolor;
+}
+
+.agent-run__stages li[data-current="true"] {
+  color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+.agent-run__stage {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.agent-run__result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.agent-run__result section h4 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-body-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.agent-run__result section ul {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+}
+
+/* The reply the user asked for leads, at reading size. */
+.agent-run__answer p {
+  margin: 0;
+  font-size: var(--font-size-body-lg);
+  line-height: 1.55;
+}
+
+.agent-run__warnings {
+  color: var(--warning);
+}
+
+/* #247w: when the run could not verify an answer it asks the user, and those
+   questions lead the result rather than a guess. */
+.agent-run__clarifications {
+  border-inline-start: var(--space-1) solid var(--accent);
+  padding-inline-start: var(--space-3);
+}
+
+.agent-run__clarifications-hint {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-body-sm);
+  color: var(--text-secondary);
+}
+
+/* The user-triggered re-run on the more capable GPU model. Set apart from the
+   default dialog actions so the reader sees it as a distinct offer, with its
+   one-line explanation of what the graphics model is. */
+.agent-run__escalate,
+.agent-task-card__escalate {
+  margin-block-start: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.agent-run__escalate-hint,
+.agent-task-card__escalate small {
+  margin: 0;
+  font-size: var(--font-size-body-sm);
+  color: var(--text-secondary);
+}
+
+/* Skill revision editor. Wrapped in ModalShell for the shared focus trap, so
+   it supplies its own padded chrome the way every other ModalShell dialog
+   does (the standard shell has no padding of its own). */
+.skill-editor > form {
+  padding: var(--space-6);
+}
+
+.skill-editor h2 {
+  margin: 0 0 var(--space-3);
+  font-size: 21px;
+}
+
+.skill-editor > form > p {
+  margin: 0 0 var(--space-4);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.skill-editor > form > .ui-field {
+  margin-bottom: var(--space-4);
+}

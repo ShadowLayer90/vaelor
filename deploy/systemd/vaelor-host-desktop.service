@@ -1,0 +1,30 @@
+[Unit]
+Description=Vaelor fixed-command host desktop broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=vaelor-jobs
+ExecStart=/opt/vaelor/venv/bin/python -m vaelor.host_desktop
+Restart=on-failure
+RestartSec=3
+Environment=VAELOR_HOST_DESKTOP_SOCKET=/run/vaelor/host-desktop.sock
+Environment=VAELOR_SERVICE_USER=vaelor
+UMask=0007
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=false
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

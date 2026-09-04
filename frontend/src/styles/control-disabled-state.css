@@ -1,0 +1,19 @@
+/*
+ * A disabled control must look disabled.
+ *
+ * The shared Button primitive had no disabled appearance at all: `.ui-control`
+ * (inputs, selects, textareas) had one, but `.ui-button` did not, so a button
+ * that was genuinely `disabled` rendered in full enabled styling. A tester
+ * pressing the run action during a sixty-second appliance check saw a control
+ * that looked live, did nothing, and gave no reason — indistinguishable from
+ * the app having hung.
+ *
+ * Individual surfaces that already define a stronger disabled treatment keep
+ * it; this is only the baseline every Button was missing.
+ */
+
+.ui-button:disabled,
+.ui-button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.7;
+}

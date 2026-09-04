@@ -1,0 +1,613 @@
+/* Work areas use a flatter instrument-panel language; pills remain for status only. */
+.workloads-page .workload-runtime,
+.workloads-page .workload-product,
+.workloads-page .deployment-copilot,
+.workloads-page .model-catalog,
+.workloads-page .app-catalog,
+.workloads-page .managed-section,
+.workloads-page .app-drawer,
+.agent-center .assistant-chat,
+.agent-center .assistant-engine,
+.agent-center .assistant-first-run,
+.agent-center .profile-card,
+.agent-center .agent-task-card {
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.workloads-page .workload-product::after {
+  display: none;
+}
+
+.workloads-page .workload-product {
+  grid-template-rows:
+    auto
+    auto
+    minmax(46px, auto)
+    minmax(40px, auto)
+    auto;
+  gap: var(--space-3);
+  border-top: 2px solid color-mix(in srgb, var(--accent) 65%, var(--border-default));
+}
+
+.workloads-page .workload-product--ai {
+  border-top-color: color-mix(in srgb, var(--focus) 65%, var(--border-default));
+}
+
+.workloads-page .workload-product__features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  align-items: start;
+  gap: 0;
+  min-height: 40px;
+  margin-top: var(--space-1);
+}
+
+.workloads-page .workload-product__features span {
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border-default);
+  border-radius: 0;
+  line-height: 1.4;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.workloads-page .workload-product__features span:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+@media (max-width: 720px) {
+  .workloads-page .workload-product__features {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .workloads-page .workload-product__features span,
+  .workloads-page .workload-product__features span:first-child {
+    padding: var(--space-2) 0;
+    border: 0;
+    border-top: 1px solid var(--border-subtle);
+    overflow-wrap: normal;
+  }
+
+  .workloads-page .workload-product__features span:first-child {
+    border-top: 0;
+  }
+}
+
+.workloads-page .workload-product .ui-button {
+  align-self: end;
+  margin-top: var(--space-2);
+}
+
+.workloads-page .agent-quick-prompts button,
+.workloads-page .workload-section-tabs,
+.workloads-page .workload-section-tabs button,
+.agent-center .assistant-tabs,
+.agent-center .assistant-tab {
+  border-radius: var(--radius-status);
+}
+
+.workloads-page .workload-section-tabs,
+.agent-center .assistant-tabs {
+  padding: 0;
+  background: transparent;
+  border-width: 0 0 1px;
+}
+
+.agent-center .assistant-tabs {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(7.5rem, 1fr));
+  width: 100%;
+  max-width: 100%;
+}
+
+.agent-center .assistant-tab,
+.agent-center .assistant-tabs .ui-button-wrap {
+  width: 100%;
+  min-width: 0;
+}
+
+.agent-center .assistant-tab {
+  justify-content: center;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.workloads-page .workload-section-tabs button[aria-selected="true"],
+.agent-center .assistant-tab--active {
+  background: transparent;
+  border-bottom: 2px solid var(--accent);
+  box-shadow: none;
+}
+
+.agent-center .assistant-message {
+  width: min(94%, 900px);
+  border-radius: 3px;
+  background: transparent;
+}
+
+.agent-center .assistant-message--user {
+  border-color: var(--border-default);
+  border-right: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.agent-center .assistant-message--assistant {
+  border-left: 3px solid var(--focus);
+}
+
+.agent-center .assistant-first-run__choice,
+.agent-center .assistant-first-run__icon,
+.agent-center .assistant-chat__welcome,
+.agent-center .assistant-evidence,
+.agent-center .assistant-proposal {
+  border-radius: 3px;
+}
+
+.job-model-active {
+  grid-column: 2 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: color-mix(in srgb, var(--success) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border-default));
+  border-radius: 3px;
+}
+
+.job-model-active > span {
+  color: var(--success);
+}
+
+.job-model-active > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.job-model-active small {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 720px) {
+  .job-model-active {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .job-model-active .ui-button {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1024px) {
+  .host-access__connection,
+  .host-access__settings-body {
+    grid-template-columns: 1fr;
+  }
+
+  .host-access__actions,
+  .rdp-credential-form__actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .host-access {
+    padding: var(--space-4);
+  }
+
+  .host-access__identity {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .host-access__identity > .status-pill {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .host-access__actions,
+  .host-access__browser > div,
+  .rdp-credential-form__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .host-access__actions .ui-button,
+  .host-access__browser .ui-button,
+  .rdp-credential-form__actions .ui-button {
+    width: 100%;
+  }
+
+  .rdp-password-field {
+    grid-template-columns: 1fr;
+  }
+
+  .pagination {
+    flex-wrap: wrap;
+  }
+  .pagination > span {
+    flex-basis: 100%;
+  }
+}
+
+.agent-center small {
+  font-size: 14px;
+}
+
+.profile-card > *,
+.panel-heading > *,
+.page-heading > * {
+  min-width: 0;
+}
+
+.agent-task-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+}
+
+.agent-task-card__handoff {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.agent-task-card__handoff label {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.agent-task-card__handoff select {
+  min-height: 44px;
+  min-width: min(100%, 15rem);
+}
+
+.transport-security {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.transport-security > span {
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.transport-security div,
+.certificate-fingerprint span {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.transport-security small,
+.certificate-fingerprint small {
+  color: var(--text-muted);
+}
+
+.certificate-fingerprint {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.certificate-fingerprint code {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .transport-security {
+    grid-template-columns: 1fr;
+  }
+
+  .certificate-fingerprint {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+/* Operational labels must remain legible on dense and high-DPI displays. */
+.lighting-preview__copy small,
+.workload-runtime small,
+.workload-runtime__paths small,
+.agent-plan__summary small,
+.workload-product__top small,
+.workload-product__features span,
+.hardware-verdict small,
+.copilot-choice > small,
+.fit-badge,
+.provider-form label,
+.credential-row small,
+.credential-status,
+.job-list small {
+  font-size: var(--font-size-body-sm);
+}
+
+.skill-proposal {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface-raised);
+}
+
+.skill-proposal label {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+}
+
+.skill-proposal__content {
+  grid-column: 1 / -1;
+}
+
+.skill-proposal .ui-button {
+  justify-self: start;
+}
+
+.skill-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.skill-card {
+  padding: var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-surface-raised) 92%, transparent);
+}
+
+.skill-card h2 {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-heading-sm);
+}
+
+.skill-card p {
+  color: var(--text-secondary);
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.profile-card,
+.agent-task-card {
+  padding: var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-surface-raised) 92%, transparent);
+}
+
+.profile-card__icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  color: var(--focus);
+  border: 1px solid color-mix(in srgb, var(--focus) 32%, transparent);
+  border-radius: 50%;
+}
+
+.profile-card h2 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--font-size-heading-sm);
+}
+
+.profile-card p,
+.agent-task-card p {
+  color: var(--text-secondary);
+}
+
+.profile-card__meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  margin-top: var(--space-4);
+}
+
+.profile-card__meta .status-pill {
+  margin: 0;
+}
+
+.profile-card__meta small {
+  color: var(--text-secondary);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.agent-task-board {
+  margin-top: var(--space-7);
+}
+
+.agent-task-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.agent-task-card__header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.agent-task-card__header > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.field-error {
+  display: block;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.agent-task-card__header h3 {
+  margin: var(--space-1) 0 0;
+}
+
+.agent-task-card ul {
+  padding-left: var(--space-5);
+  color: var(--text-secondary);
+}
+
+@media (max-width: 1440px) {
+  .profile-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  .agent-center .assistant-tabs,
+  .agent-center .assistant-tab,
+  .agent-center .assistant-tabs .ui-button-wrap {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .agent-center .assistant-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 720px) {
+  .agent-center,
+  .agent-center > [role="tabpanel"],
+  .agent-center .memory-page {
+    min-width: 0;
+    max-width: calc(100vw - (var(--space-4) * 2));
+  }
+  .agent-center .memory-page > *,
+  .agent-center .memory-stats,
+  .agent-center .memory-stats > div,
+  .agent-center .memory-layout,
+  .agent-center .memory-library,
+  .agent-center .memory-create,
+  .agent-center .memory-recent,
+  .agent-center .memory-list {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .agent-center .assistant-tabs,
+  .agent-center .assistant-tab,
+  .agent-center .assistant-tabs .ui-button-wrap {
+    width: 100%;
+    min-width: 0;
+  }
+  .agent-center .assistant-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: calc(100vw - (var(--space-4) * 2));
+    max-width: calc(100vw - (var(--space-4) * 2));
+  }
+  .profile-grid,
+  .agent-task-list,
+  .skill-list,
+  .skill-proposal {
+    grid-template-columns: 1fr;
+  }
+  .assistant-message {
+    width: 100%;
+  }
+  .profile-card__meta {
+    grid-template-columns: 1fr;
+  }
+  .assistant-chat__composer > div,
+  .assistant-chat__welcome,
+  .assistant-chat__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .assistant-chat__toolbar-actions,
+  .agent-task-board__actions {
+    flex-wrap: wrap;
+  }
+}
+/* Shared card rhythm: 24px desktop, 16px compact, and 16px grid gutters. */
+:where(.managed-card, .memory-card, .skill-card, .agent-task-card) {
+  padding: var(--space-5);
+}
+
+:where(.managed-card-grid, .memory-list, .skill-list, .agent-task-list) {
+  gap: var(--space-4);
+}
+
+@media (max-width: 720px) {
+  :where(.managed-card, .memory-card, .skill-card, .agent-task-card) {
+    padding: var(--space-4);
+  }
+}
+
+/*
+ * Disclosure affordance.
+ *
+ * A `<summary>` is only recognisable as expandable if something on it says so.
+ * Two places drew their own chevron; everywhere else the control was styled
+ * with `display: flex` or a colour change, which removes the browser's native
+ * triangle and leaves what looks like inert bold text. One marker is drawn for
+ * every disclosure in the product, and the native one is suppressed so the two
+ * can never appear together.
+ *
+ * Two summaries are excluded because they are fixed-column grids whose layout
+ * an extra generated box would break: the sidebar's mobile "More" nav item, and
+ * the numbered custom-agent step groups. Both already carry their own icon.
+ */
+details:not(.custom-agent-step-group) > summary:not(.nav-item) {
+  cursor: pointer;
+  list-style: none;
+}
+
+details:not(.custom-agent-step-group) > summary:not(.nav-item)::-webkit-details-marker {
+  display: none;
+}
+
+details:not(.custom-agent-step-group) > summary:not(.nav-item)::before {
+  content: "";
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  margin-right: var(--space-2);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid currentColor;
+  transition: transform var(--motion-fast) ease;
+}
+
+details[open]:not(.custom-agent-step-group) > summary:not(.nav-item)::before {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  details:not(.custom-agent-step-group) > summary:not(.nav-item)::before {
+    transition: none;
+  }
+}

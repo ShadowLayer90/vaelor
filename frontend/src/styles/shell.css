@@ -1,0 +1,958 @@
+/* Intentional decorative literals retained: translucent black shadows and warm ambient shell glow. */
+
+/* Application shell */
+.app-shell {
+  position: relative;
+  isolation: isolate;
+  min-height: 100vh;
+}
+
+.ambient-background {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  /*
+   * `clip`, not `hidden`. The decorative layers deliberately overhang the
+   * window - the perspective grid alone is 116% wide and offset right - so
+   * this box measures a 1763px `scrollWidth` inside a 1440px viewport. Under
+   * `hidden` that made it a real scroll container: nothing offers to scroll
+   * it, but script or a focus restore can, and the whole backdrop then slides
+   * out from under the page. `clip` paints identically and cannot scroll at
+   * all. It does not change the reported `scrollWidth`, and it never was the
+   * source of a page-level horizontal scrollbar: the document's own
+   * `scrollWidth` measures exactly the viewport width on every route.
+   */
+  overflow: clip;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, transparent 0 42%, rgb(0 0 0 / 34%) 100%),
+    var(--bg-canvas);
+}
+
+/*
+ * The layers are fixed, not absolute, so the overhang is painted rather than
+ * laid out.
+ *
+ * `clip` stopped the box being scrollable but left it *reporting* the
+ * overhang: measured 1254px of content inside a 1024px box (469/375, 940/768,
+ * 1567/1280, 1763/1440), which is the number that keeps being reported as a
+ * stray horizontal scrollbar. A fixed-position box contributes nothing to any
+ * ancestor's scrollable overflow, and because `.ambient-background` is itself
+ * `position: fixed; inset: 0` and establishes no containing block for fixed
+ * descendants, every percentage below still resolves against exactly the same
+ * rectangle: measured layer geometry is unchanged to the pixel, and the box
+ * now reports 1024/1024 and 768/768.
+ */
+.ambient-background > span {
+  position: fixed;
+}
+
+.ambient-background__thermal {
+  position: absolute;
+  width: min(52vw, 760px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  filter: blur(90px);
+  will-change: transform;
+}
+
+.ambient-background__thermal--orange {
+  top: -20%;
+  right: -2%;
+  background: radial-gradient(circle, var(--ambient-orange), transparent 68%);
+  animation: thermal-drift-orange 18s ease-in-out infinite alternate;
+}
+
+.ambient-background__thermal--green {
+  bottom: -38%;
+  left: 10%;
+  background: radial-gradient(circle, var(--ambient-green), transparent 68%);
+  animation: thermal-drift-green 22s ease-in-out infinite alternate;
+}
+
+.ambient-background__grid {
+  position: absolute;
+  right: -12%;
+  bottom: -14%;
+  width: 116%;
+  height: 92%;
+  background-image:
+    linear-gradient(var(--border-subtle) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-subtle) 1px, transparent 1px);
+  background-size: 54px 54px;
+  opacity: 0.42;
+  mask-image:
+    linear-gradient(to top, black 12%, transparent 92%),
+    linear-gradient(90deg, transparent 6%, black 35%, black 88%, transparent);
+  transform: perspective(700px) rotateX(62deg) scale(1.18);
+  transform-origin: bottom;
+  animation: grid-drift 16s linear infinite;
+}
+
+.ambient-background__nodes {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, var(--border-strong) 1px, transparent 1.5px);
+  background-size: 72px 72px;
+  opacity: 0.34;
+  mask-image: radial-gradient(circle at 66% 42%, black, transparent 62%);
+  animation: node-breathe 7s ease-in-out infinite;
+}
+
+.ambient-background__radar {
+  position: absolute;
+  top: 3%;
+  right: -8%;
+  width: min(58vw, 820px);
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(
+      circle,
+      transparent 0 10%,
+      color-mix(in srgb, var(--accent) 12%, transparent) 10.2% 10.5%,
+      transparent 10.7% 20%
+    ),
+    linear-gradient(90deg, transparent 49.8%, color-mix(in srgb, var(--accent) 13%, transparent) 50%, transparent 50.2%),
+    linear-gradient(transparent 49.8%, color-mix(in srgb, var(--accent) 13%, transparent) 50%, transparent 50.2%);
+  box-shadow:
+    inset 0 0 80px color-mix(in srgb, var(--accent) 4%, transparent),
+    0 0 90px color-mix(in srgb, var(--accent) 8%, transparent);
+  opacity: 0.72;
+}
+
+.ambient-background__radar::before {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 304deg,
+    color-mix(in srgb, var(--accent) 4%, transparent) 314deg,
+    color-mix(in srgb, var(--accent) 24%, transparent) 350deg,
+    transparent 360deg
+  );
+  content: "";
+  animation: radar-sweep 13s linear infinite;
+}
+
+.ambient-background__radar::after {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: 9px;
+  height: 9px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 18px var(--accent),
+    0 0 48px var(--accent-glow);
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.ambient-background__scan-band {
+  position: absolute;
+  inset: 0 auto 0 -18%;
+  width: 18%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 3%, transparent) 34%,
+    color-mix(in srgb, var(--accent) 10%, transparent) 50%,
+    color-mix(in srgb, var(--accent) 3%, transparent) 66%,
+    transparent
+  );
+  opacity: 0.8;
+  transform: skewX(-10deg);
+  animation: background-scan 11s ease-in-out infinite;
+}
+
+.ambient-background__trace {
+  position: absolute;
+  width: clamp(220px, 28vw, 520px);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--ambient-trace), transparent);
+  transform-origin: left;
+}
+
+.ambient-background__trace::before,
+.ambient-background__trace::after {
+  position: absolute;
+  content: "";
+}
+
+.ambient-background__trace::before {
+  top: -2px;
+  left: 0;
+  width: 5px;
+  height: 5px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 8px var(--accent),
+    0 0 18px var(--accent),
+    0 0 34px var(--accent-glow);
+  animation: signal-travel 6.8s ease-in-out infinite;
+}
+
+.ambient-background__trace::after {
+  top: -3px;
+  right: 0;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--ambient-trace);
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.ambient-background__trace--one {
+  top: 24%;
+  left: 52%;
+  transform: rotate(-11deg);
+}
+
+.ambient-background__trace--two {
+  top: 58%;
+  left: 68%;
+  opacity: 0.72;
+  transform: rotate(17deg);
+}
+
+.ambient-background__trace--two::before {
+  animation-delay: -3.1s;
+}
+
+.ambient-background__trace--three {
+  bottom: 12%;
+  left: 31%;
+  opacity: 0.5;
+  transform: rotate(-6deg);
+}
+
+.ambient-background__trace--three::before {
+  animation-delay: -5.2s;
+}
+
+@keyframes thermal-drift-orange {
+  to {
+    opacity: 0.72;
+    transform: translate(-9vw, 10vh) scale(1.12);
+  }
+}
+
+@keyframes thermal-drift-green {
+  to {
+    opacity: 0.8;
+    transform: translate(12vw, -8vh) scale(0.9);
+  }
+}
+
+@keyframes grid-drift {
+  to {
+    background-position: 54px 54px;
+  }
+}
+
+@keyframes node-breathe {
+  0%,
+  100% {
+    opacity: 0.12;
+  }
+  50% {
+    opacity: 0.46;
+  }
+}
+
+@keyframes radar-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes background-scan {
+  0%,
+  16% {
+    left: -18%;
+    opacity: 0;
+  }
+  24% {
+    opacity: 0.8;
+  }
+  76% {
+    opacity: 0.8;
+  }
+  86%,
+  100% {
+    left: 108%;
+    opacity: 0;
+  }
+}
+
+@keyframes signal-travel {
+  0%,
+  12% {
+    left: 0;
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  78% {
+    opacity: 1;
+  }
+  88%,
+  100% {
+    left: calc(100% - 5px);
+    opacity: 0;
+  }
+}
+
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-width);
+  /*
+   * The nav is about 562px tall. Below that viewport height - which 150% zoom
+   * on a 720p screen reaches - the last items simply fell off a fixed element
+   * that could not scroll, so "Settings" became physically unclickable with no
+   * way to recover. Scroll the rail instead of truncating it.
+   */
+  overflow-y: auto;
+  /*
+   * Vertically only. A long volume label in the health block pushed the rail
+   * wider than itself, which produced a horizontal scrollbar under the sidebar
+   * that scrolled nothing a reader wanted - the labels truncate instead.
+   */
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  background:
+    linear-gradient(180deg, var(--bg-surface-warm), var(--bg-sidebar) 180px),
+    var(--bg-sidebar);
+  border-right: 1px solid var(--border-subtle);
+  box-shadow: 18px 0 64px rgb(0 0 0 / 26%);
+}
+
+.sidebar::before {
+  position: absolute;
+  top: var(--topbar-height);
+  right: -1px;
+  width: 1px;
+  height: 148px;
+  background: linear-gradient(transparent, var(--accent), transparent);
+  box-shadow: 0 0 14px var(--accent-glow);
+  content: "";
+}
+
+.sidebar__brand {
+  min-height: var(--topbar-height);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.brand-glyph,
+.topbar__mark {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  font-size: var(--font-size-body-sm);
+}
+
+.brand-glyph svg,
+.topbar__mark svg {
+  width: 20px;
+  height: 20px;
+}
+
+.brand-copy {
+  display: grid;
+  gap: 1px;
+}
+
+.brand-copy strong {
+  font-size: var(--font-size-body-sm);
+}
+
+.brand-copy span {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebar__nav {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-3);
+}
+
+.sidebar__nav--mobile {
+  display: none;
+}
+
+.nav-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  transition:
+    color var(--motion-fast) ease,
+    background var(--motion-fast) ease,
+    border-color var(--motion-fast) ease;
+}
+
+.nav-item:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* Rail destinations are links now (#150), styled identically to the buttons
+   they replaced. */
+a.nav-item {
+  text-decoration: none;
+}
+
+/* A grouping wrapper that exists to carry role="tabpanel" (#150) without
+   changing the layout of the sections inside it. */
+.settings-tabpanel {
+  display: contents;
+}
+
+.nav-item--active {
+  color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft), rgb(30 12 0 / 45%));
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.nav-item__icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+}
+
+.nav-item__label {
+  /* One canonical name per destination means some labels are longer than the
+     abbreviations they replaced ("Remote console" for "KVM"). They wrap inside
+     their own column instead of widening the rail or the mobile tab bar. */
+  min-width: 0;
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.nav-item__state {
+  color: var(--text-muted);
+  padding: 3px 5px;
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.nav-item:disabled {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/*
+ * Cascade fix (#12). Planned/restricted rows render through the <Button>
+ * primitive, so `.ui-button` / `.ui-button:disabled` chrome (raised bg, border,
+ * radius, opacity 0.7) lands on them from shared-primitives.css, which imports
+ * LAST at equal specificity. Re-assert the intended-flat treatment one level
+ * deeper (`.sidebar__nav …`) so it wins the cascade without touching the Button
+ * primitive itself. Scoped to the disabled rows only, so active <a> links keep
+ * their highlight.
+ */
+.sidebar__nav .nav-item:disabled,
+.sidebar__nav .nav-item[aria-disabled="true"] {
+  padding: 0 var(--space-3);
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  opacity: 1;
+}
+
+.sidebar__hardware {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0 var(--space-3) var(--space-3);
+  padding: var(--space-3);
+  background:
+    linear-gradient(135deg, var(--panel-highlight), transparent 42%),
+    var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 var(--panel-highlight);
+}
+
+@media (min-width: 1025px) {
+  .sidebar__hardware {
+    gap: var(--space-2);
+    margin: 0 var(--space-2) var(--space-2);
+    padding: var(--space-2);
+  }
+
+  .hardware-signal {
+    padding-block: var(--space-1);
+  }
+
+  .hardware-signal strong {
+    font-size: var(--font-size-data-sm);
+    line-height: 1.3;
+  }
+
+  .hardware-signal small {
+    font-size: var(--font-size-data-sm);
+    line-height: 1.3;
+  }
+}
+
+/*
+ * The health block used to be `display: none` below 800px of viewport height.
+ *
+ * 1484x765 is an ordinary desktop window, and on one the CPU temperature,
+ * storage and health verdict simply vanished with nothing in their place -
+ * the rail kept its heading and lost every reading under it. Hiding was never
+ * needed: this rail has scrolled since the nav outgrew short viewports (see
+ * `.sidebar`), so the block is reachable by scrolling exactly like the
+ * navigation above it. A reading a reader can scroll to is worth more than a
+ * gap where one used to be.
+ */
+
+.hardware-signals__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hardware-signals__heading {
+  border-top: 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/*
+ * Task #74. This rule carried `color: var(--success)`, so the word beside the
+ * LED was green unless something actively took it away — and "Paused" is not
+ * something that took it away. The rail printed PAUSED in success green next
+ * to a correctly grey light: the same two-sources-for-one-fact defect #52
+ * removed from the top bar, surviving in the component next door.
+ *
+ * Colour now lives only on `.hardware-state--<state>`, exactly as geometry vs.
+ * colour is split on `.live-dot`. An unclassed label inherits the heading's
+ * muted grey rather than a false reassurance.
+ */
+.hardware-signals__heading strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-body-sm);
+}
+
+.hardware-state--live {
+  color: var(--success);
+}
+
+/* Paused and unknown are true, deliberate states: neutral, not reassuring and
+ * not alarming. Same reading as `.live-dot--paused` / `--unknown`. */
+.hardware-state--paused,
+.hardware-state--unknown {
+  color: var(--text-muted);
+}
+
+.hardware-state--error {
+  color: var(--danger);
+}
+
+.hardware-signal {
+  display: grid;
+  /* `minmax(0, 1fr)`, not `1fr`: a grid column's automatic minimum is its
+     content, so a long label widened the rail rather than truncating. */
+  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  text-align: left;
+}
+
+.hardware-signal:hover,
+.hardware-signal:focus-visible {
+  color: var(--accent);
+}
+
+.hardware-signal > svg:last-child {
+  color: var(--text-muted);
+}
+
+.hardware-signal > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.hardware-signal strong {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.hardware-signal small {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.hardware-led {
+  width: 6px;
+  height: 6px;
+  background: var(--text-muted);
+  border-radius: 50%;
+}
+
+.hardware-led--ssd {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.hardware-led--live {
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+}
+
+.hardware-led--paused {
+  background: var(--text-muted);
+  box-shadow: none;
+}
+
+.hardware-led--unknown {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+}
+
+.hardware-led--error {
+  background: var(--danger);
+  box-shadow: 0 0 8px var(--danger);
+}
+
+/*
+ * Task #74. `--attention` existed on the label and not on the light, so a hot
+ * or unhealthy machine showed an amber word beside a green LED — the same
+ * defect with the two halves swapped. Both halves have all five states now.
+ */
+.hardware-led--attention {
+  background: var(--warning);
+  box-shadow: 0 0 8px var(--warning);
+}
+
+.hardware-state--attention {
+  color: var(--warning);
+}
+
+.hardware-alert {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.4;
+  text-align: left;
+}
+
+.hardware-storage-more {
+  padding-left: 26px;
+  color: var(--text-muted);
+  font: var(--font-size-body-sm) var(--font-family-data);
+}
+
+/*
+ * Cascade fix (#12). The signal rows and the alert row render through the
+ * <Button> primitive, so `.ui-button` chrome (raised bg, border, radius, bold)
+ * overrides their intended-flat look because shared-primitives.css imports LAST
+ * at equal specificity. Re-assert the flat treatment one level deeper
+ * (`.sidebar__hardware …`, specificity 0,2,0 > `.ui-button` 0,1,0) so it wins
+ * without changing the Button primitive. Keyboard focus rings are left to the
+ * primitive's :focus-visible.
+ */
+.sidebar__hardware .hardware-signal {
+  min-width: 0;
+  padding: var(--space-2) 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-weight: var(--weight-medium);
+}
+
+.sidebar__hardware .hardware-signal:hover:not(:disabled),
+.sidebar__hardware .hardware-signal:focus-visible {
+  color: var(--accent);
+  background: transparent;
+  border-color: transparent;
+}
+
+.sidebar__hardware .hardware-signal:active:not(:disabled) {
+  transform: none;
+}
+
+.sidebar__hardware .hardware-alert {
+  min-width: 0;
+  padding: var(--space-2);
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-weight: var(--weight-medium);
+}
+
+.sidebar__hardware .hardware-alert:hover:not(:disabled),
+.sidebar__hardware .hardware-alert:focus-visible {
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.avatar,
+.operator-chip > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  color: var(--bg-canvas);
+  background: var(--accent);
+  border-radius: 50%;
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-body-sm);
+  font-weight: 800;
+}
+
+.workspace {
+  min-width: 0;
+  max-width: calc(100vw - var(--sidebar-width));
+  min-height: 100vh;
+  margin-left: var(--sidebar-width);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: var(--topbar-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-5);
+  background: rgb(5 5 5 / 90%);
+  border-bottom: 1px solid var(--border-subtle);
+  backdrop-filter: blur(14px);
+}
+
+.topbar__identity {
+  display: none;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.topbar__identity strong {
+  font-size: var(--font-size-body-sm);
+}
+
+.topbar__actions,
+.operator-chip {
+  display: flex;
+  align-items: center;
+}
+
+.topbar__actions {
+  gap: var(--space-4);
+  margin-left: auto;
+}
+
+.connection-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+}
+
+/*
+ * #52. The base class carried the green, so the connection dot was green
+ * unless something actively took it away - and one late-resolving fetch was
+ * enough to put it back while the sentence beside it read "Paused". Geometry
+ * lives on the base class and colour lives only on a state modifier, so an
+ * unclassed dot is grey rather than a false reassurance.
+ */
+.live-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--text-muted);
+  border-radius: 50%;
+}
+
+.live-dot--live {
+  background: var(--success);
+  box-shadow: 0 0 0 4px var(--success-soft);
+  animation: status-pulse 2.4s ease-out infinite;
+}
+
+/* Paused is a true, deliberate state - neutral, not a warning and not an
+ * error. It is drawn still, because nothing is moving. */
+.live-dot--paused {
+  background: var(--text-muted);
+  box-shadow: 0 0 0 4px var(--bg-hover);
+}
+
+/* Never connected: hollow, because there is nothing to report yet. */
+.live-dot--unknown {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  box-shadow: none;
+}
+
+.live-dot--error {
+  background: var(--danger);
+  box-shadow: 0 0 0 4px var(--danger-soft);
+}
+
+.topbar__divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border-default);
+}
+
+.operator-chip {
+  gap: var(--space-2);
+}
+
+.operator-chip > span {
+  width: 32px;
+  height: 32px;
+}
+
+.operator-chip > div {
+  display: grid;
+  gap: 1px;
+}
+
+.operator-chip strong {
+  font-size: var(--font-size-body-sm);
+}
+
+.operator-chip small {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  text-transform: capitalize;
+}
+
+.workspace-error {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 720px;
+  margin: clamp(var(--space-8), 9vh, 112px) auto;
+  padding: clamp(var(--space-5), 5vw, var(--space-8));
+  border: 1px solid var(--border-default);
+  border-left: 3px solid var(--warning);
+  background: var(--bg-surface-raised);
+}
+
+.workspace-error h1,
+.workspace-error p {
+  margin: 0;
+}
+
+.workspace-error p {
+  max-width: 62ch;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+.workspace-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.workspace-error details {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+
+.workspace-error summary {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.workspace-error code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding-top: var(--space-3);
+  color: var(--text-secondary);
+}
+
+/*
+ * Honour prefers-reduced-motion. The AmbientBackground layers and the topbar
+ * live-dot otherwise animate infinitely with no way to stop them, which is
+ * exactly the class of motion this media query exists to suppress. Each
+ * animated layer is pinned to a static state (the same gate shared-primitives
+ * and professional-polish already apply to their own motion).
+ */
+@media (prefers-reduced-motion: reduce) {
+  .ambient-background__thermal--orange,
+  .ambient-background__thermal--green,
+  .ambient-background__grid,
+  .ambient-background__nodes,
+  .ambient-background__radar::before,
+  .ambient-background__scan-band,
+  .ambient-background__trace::before,
+  .ambient-background__trace--two::before,
+  .ambient-background__trace--three::before,
+  .live-dot--live {
+    animation: none;
+  }
+}
