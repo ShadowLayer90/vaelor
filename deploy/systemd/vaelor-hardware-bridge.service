@@ -1,0 +1,59 @@
+[Unit]
+# Two jobs: drive the optional Pironman enclosure, and hold the privilege
+# needed to power the host. The second applies to every machine, so this unit
+# must start everywhere.
+#
+# It previously carried ConditionPathExists=/opt/pironman5/config.json. That
+# file never exists on a workstation, so systemd skipped the unit and the only
+# component permitted to reboot or power off the appliance never ran. The
+# enclosure is now optional at runtime: the bridge serves power regardless and
+# returns a reason when asked for enclosure controls this machine lacks.
+#
+# Privilege: this service runs as root, so logind authorizes Reboot and
+# PowerOff unconditionally. No polkit rule is required, and none is shipped.
+# The unprivileged control-plane account deliberately cannot power the host
+# itself; it asks this bridge over its Unix socket.
+Description=Vaelor hardware bridge and privileged host power
+After=local-fs.target
+Before=vaelor-control-plane.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+# Optional: absent on any host without the SunFounder runtime. The leading "-"
+# stops a missing directory from failing the unit.
+WorkingDirectory=-/opt/pironman5
+ExecStart=/opt/vaelor/venv/bin/python -m vaelor.hardware_bridge
+Restart=on-failure
+RestartSec=3
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+# /var/log/vaelor holds flm-real.log (the NPU model server's stdout/stderr,
+# LESSONS 8 - it must never be DEVNULL). Under ProtectSystem=strict the bridge
+# needs it explicitly writable, or the root flm-real launch aborts at log-open
+# with EROFS before the model starts. The legacy /var/log/pironman5 below never
+# existed on Vaelor; this is the migrated path (#51/VD-001).
+ReadWritePaths=/run/vaelor /var/log/vaelor
+# The NPU model home the bridge serves from, writable so `flm_install_release`
+# can unpack a fine-tuned model + its bundled runtime there as root. The bridge
+# already OWNS this path (it launches flm-real from it), so writing the model it
+# will serve is consistent; without it the install aborts at mkdir with EROFS
+# under ProtectSystem=strict. Optional (`-`): a host with no lemonade snap has no
+# such directory and never installs an NPU model, and the bridge must still start.
+ReadWritePaths=-/var/snap/lemonade-server/common
+# Enclosure-only paths, optional for the same reason as WorkingDirectory.
+ReadWritePaths=-/opt/pironman5 -/var/log/pironman5
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

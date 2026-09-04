@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vaelor-control-plane"
+authors = [
+  { name="Vaelor contributors" },
+]
+description = "Vaelor edge-compute control plane with SunFounder Pironman hardware support"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-2.0-only"
+license-files = ["LICENSE"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+]
+dynamic = ["version"]
+
+dependencies = [
+  "flask",
+  "flask_cors",
+  "influxdb",
+  "pyudev",
+  "configupdater",
+  "cryptography>=41",
+  "packaging",
+  "paramiko>=3.4",
+  "websockify>=0.12",
+  "waitress>=3.0",
+]
+
+[project.scripts]
+vaelor = "vaelor:main"
+vaelor-workload-executor = "vaelor.executor_service:main"
+vaelor-workload-broker = "vaelor.workload_broker:main"
+vaelor-application-research = "vaelor.application_research_server:main"
+vaelor-credential-broker = "vaelor.credential_broker:main"
+vaelor-system-update = "vaelor.system_update:main"
+vaelor-appliance-upgrade = "vaelor.appliance_upgrade:main"
+vaelor-migrate = "vaelor.migration:main"
+vaelor-state = "vaelor.portable_state:main"
+vaelor-refresh-models = "vaelor.deployment_refresh:main"
+vaelor-vnc-tls-proxy = "vaelor.tls_proxy:main"
+# Compatibility aliases retained for one documented deprecation window.
+pm_dashboard = "pm_dashboard:main"
+pm_workload_executor = "pm_dashboard.executor_service:main"
+pm_credential_broker = "pm_dashboard.credential_broker:main"
+pm_system_update = "pm_dashboard.system_update:main"
+
+[tool.setuptools.packages.find]
+include = ["pm_dashboard*", "vaelor*"]
+
+[tool.setuptools.package-data]
+vaelor = ["www_v2/**/*"]
+
+[tool.setuptools.data-files]
+"share/doc/vaelor" = [
+  "README.md",
+  "THIRD_PARTY_NOTICES.md",
+  "ASSET_PROVENANCE.md",
+  "SUPPORTED_PLATFORMS.md",
+  "HISTORY.md",
+  "ARCHITECTURE.md",
+  "CONTRIBUTING.md",
+  "RELEASE.md",
+  "SECURITY.md",
+  "SUPPORT.md",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "vaelor.__version__"}

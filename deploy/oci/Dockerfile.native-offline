@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1
+# Developer/release fallback used only by tools/qemu-lab/oci_release_build.py.
+# dependency-site-packages.tar.gz is generated from the already accepted,
+# architecture-matched native package environment and is never committed.
+FROM python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
+
+ARG VAELOR_VERSION=development
+LABEL org.opencontainers.image.title="Vaelor Control Plane" \
+      org.opencontainers.image.version="${VAELOR_VERSION}" \
+      org.opencontainers.image.licenses="GPL-2.0-only"
+
+RUN groupadd --gid 10001 vaelor \
+    && useradd --uid 10001 --gid 10001 --home-dir /nonexistent \
+      --shell /usr/sbin/nologin vaelor \
+    && install -d -m 0700 -o vaelor -g vaelor \
+      /var/lib/vaelor /var/lib/vaelor/credentials \
+    && install -d -m 0750 -o vaelor -g vaelor \
+      /var/lib/vaelor/logs /run/vaelor
+
+COPY dependency-site-packages.tar.gz /tmp/dependency-site-packages.tar.gz
+RUN tar -xzf /tmp/dependency-site-packages.tar.gz \
+      -C /usr/local/lib/python3.12/site-packages \
+    && rm /tmp/dependency-site-packages.tar.gz
+
+COPY dist/release/vaelor_control_plane-*-py3-none-any.whl /tmp/wheels/
+COPY requirements-release.txt /tmp/requirements-release.txt
+RUN python -m pip install --no-cache-dir --no-deps /tmp/wheels/*.whl \
+    && python -m pip check \
+    && rm -rf /tmp/wheels
+
+COPY deploy/oci/entrypoint.sh /usr/local/bin/vaelor-container
+COPY LICENSE /usr/local/share/doc/vaelor/LICENSE
+COPY THIRD_PARTY_NOTICES.md /usr/local/share/doc/vaelor/THIRD_PARTY_NOTICES.md
+COPY ASSET_PROVENANCE.md /usr/local/share/doc/vaelor/ASSET_PROVENANCE.md
+RUN chmod 0755 /usr/local/bin/vaelor-container \
+    && chmod 0644 \
+      /usr/local/share/doc/vaelor/LICENSE \
+      /usr/local/share/doc/vaelor/THIRD_PARTY_NOTICES.md \
+      /usr/local/share/doc/vaelor/ASSET_PROVENANCE.md
+
+ENV VAELOR_HOST=0.0.0.0 \
+    VAELOR_PORT=34001 \
+    VAELOR_STATE_ROOT=/var/lib/vaelor \
+    VAELOR_DATA_ROOT=/var/lib/vaelor \
+    VAELOR_LOG_ROOT=/var/lib/vaelor/logs \
+    VAELOR_RUN_ROOT=/run/vaelor \
+    VAELOR_CREDENTIAL_BROKER_SOCKET=/run/vaelor/credentiald.sock \
+    VAELOR_CREDENTIAL_MASTER_KEY_FILE=/var/lib/vaelor/credentials/master.key
+
+USER 10001:10001
+VOLUME ["/var/lib/vaelor", "/run/vaelor"]
+EXPOSE 34001
+ENTRYPOINT ["/usr/local/bin/vaelor-container"]
+CMD ["vaelor"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:34001/api/v2/auth/status', timeout=3).read(32)"]

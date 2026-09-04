@@ -1,0 +1,32 @@
+[Unit]
+Description=Vaelor TLS transport for the authenticated noVNC gateway
+After=network-online.target vaelor-vnc-gateway.service
+Requires=vaelor-vnc-gateway.service
+
+[Service]
+Type=simple
+User=vaelor-vnc
+Group=vaelor-vnc
+Environment=VAELOR_TLS_CERT=/opt/vaelor/tls/vaelor.crt
+Environment=VAELOR_TLS_KEY=/opt/vaelor/tls/vaelor.key
+Environment=VAELOR_TLS_PROXY_PORT=34002
+Environment=VAELOR_TLS_PROXY_TARGET_PORT=34003
+ExecStart=/opt/vaelor/venv/bin/vaelor-vnc-tls-proxy
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

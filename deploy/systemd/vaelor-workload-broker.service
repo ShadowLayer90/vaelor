@@ -1,0 +1,33 @@
+[Unit]
+Description=Vaelor allowlisted Docker workload broker
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vaelor-workloads
+Group=vaelor-jobs
+SupplementaryGroups=vaelor
+ExecStart=/opt/vaelor/venv/bin/vaelor-workload-broker
+Restart=on-failure
+RestartSec=3
+Environment=VAELOR_DATA_ROOT=/var/lib/vaelor
+Environment=VAELOR_RUN_ROOT=/run/vaelor
+Environment=VAELOR_WORKLOAD_BROKER_SOCKET=/run/vaelor/workloadd.sock
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vaelor /run/vaelor
+RestrictAddressFamilies=AF_UNIX
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

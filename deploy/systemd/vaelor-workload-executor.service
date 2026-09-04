@@ -1,0 +1,41 @@
+[Unit]
+Description=Vaelor allowlisted workload executor
+# vaelor-hardware-bridge ordered before us so the boot-time NPU Assistant
+# reconcile (VD-001) can reach the bridge. After= orders START only, not the
+# moment the bridge's Unix socket is accepting, so ensure_npu_assistant_served
+# still keeps its own bounded bridge-readiness retry. Wants (not Requires): the
+# executor must still start if the bridge fails - a Pi has no bridge at all.
+After=docker.service network-online.target vaelor-credential-broker.service vaelor-application-research.service vaelor-hardware-bridge.service
+Wants=network-online.target vaelor-application-research.service vaelor-hardware-bridge.service
+
+[Service]
+Type=simple
+User=vaelor-workloads
+Group=vaelor-jobs
+SupplementaryGroups=vaelor-credentials vaelor
+ExecStart=/opt/vaelor/venv/bin/vaelor-workload-executor
+Restart=on-failure
+RestartSec=3
+Environment=VAELOR_DATA_ROOT=/var/lib/vaelor
+Environment=VAELOR_JOBS_DB=/var/lib/vaelor/jobs/jobs.sqlite3
+Environment=VAELOR_CREDENTIAL_BROKER_SOCKET=/run/vaelor/credentiald.sock
+Environment=VAELOR_APPLICATION_SEARCH_URL=http://127.0.0.1:8888
+EnvironmentFile=-/etc/vaelor/application.env
+UMask=0007
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vaelor
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

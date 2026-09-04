@@ -1,0 +1,41 @@
+services:
+  credential-broker:
+    image: ${VAELOR_IMAGE:-vaelor-control-plane:local}
+    command: ["vaelor-credential-broker"]
+    restart: unless-stopped
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    volumes:
+      - vaelor-state:/var/lib/vaelor
+      - vaelor-run:/run/vaelor
+    tmpfs: ["/tmp:mode=1777"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os; raise SystemExit(0 if os.path.exists('/run/vaelor/credentiald.sock') else 1)"
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  control-plane:
+    image: ${VAELOR_IMAGE:-vaelor-control-plane:local}
+    restart: unless-stopped
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    depends_on:
+      credential-broker:
+        condition: service_healthy
+    ports:
+      - "${VAELOR_BIND_ADDRESS:-127.0.0.1}:${VAELOR_PORT:-34001}:34001"
+    volumes:
+      - vaelor-state:/var/lib/vaelor
+      - vaelor-run:/run/vaelor
+    tmpfs: ["/tmp:mode=1777"]
+
+volumes:
+  vaelor-state:
+  vaelor-run:

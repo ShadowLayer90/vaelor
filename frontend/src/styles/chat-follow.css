@@ -1,0 +1,24 @@
+/*
+ * Shared "jump to latest" affordance for both conversation surfaces.
+ *
+ * Each thread follows its newest message while the reader is at the bottom and
+ * releases when they scroll up to read earlier turns. This control is what
+ * brings them back, so it is styled once and consumed by Ask Vaelor and AI
+ * Chat alike rather than duplicated per surface.
+ */
+
+.assistant-chat__resume,
+.ai-chat-messages__resume {
+  display: flex;
+  justify-content: center;
+  z-index: 1;
+}
+
+.assistant-chat__resume {
+  margin-top: calc(var(--space-2) * -1);
+}
+
+.ai-chat-messages__resume {
+  position: sticky;
+  bottom: var(--space-2);
+}
