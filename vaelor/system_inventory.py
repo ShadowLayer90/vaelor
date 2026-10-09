@@ -20,6 +20,19 @@ def _run(command, **kwargs):
     return subprocess.run(command, **kwargs)
 
 
+def _updates_unread(reason: str) -> dict:
+    """An update check that did not run: no count, and the reason why.
+
+    ``count`` is ``None`` rather than ``0`` because nothing was counted; the
+    console and the Assistant both read ``collected`` before the count.
+    """
+    return {
+        "collected": False, "reason": reason, "available": None, "count": None,
+        "packages": [], "details": [], "staged": False,
+        "reboot_required": Path("/var/run/reboot-required").exists(),
+    }
+
+
 class SystemInventory:
     def __init__(
         self,
@@ -208,11 +221,21 @@ class SystemInventory:
 
     def updates(self):
         self._platform_dependencies()
+        # Review B2 (LESSONS 8): a list that was never read is not an empty
+        # list. Both failures below used to return `count: 0`, and the
+        # Assistant then said "0 operating-system updates are available".
         try:
             command = self.package_manager.list_upgradable_command()
         except (AttributeError, RuntimeError):
-            return {"available": False, "count": 0, "packages": [], "staged": False}
+            return _updates_unread(
+                "This machine has no package manager Vaelor can ask for updates."
+            )
         result = self._command(command, timeout=15)
+        if getattr(result, "returncode", 1) != 0:
+            return _updates_unread(
+                "The package manager did not answer the update check cleanly, "
+                "so whether any updates are waiting is not known."
+            )
         details = self.package_manager.parse_upgradable(result.stdout)
         packages = [item["name"] for item in details]
         state = {}
@@ -242,6 +265,7 @@ class SystemInventory:
             else "unlikely"
         )
         return {
+            "collected": True,
             "available": bool(packages),
             "count": len(packages),
             "packages": packages[:100],
@@ -253,6 +277,12 @@ class SystemInventory:
                 1, math.ceil((len(packages) * 2 + staged_size / (20 * 1024 * 1024)) / 60)
             ) if packages else 0,
             "reboot_likelihood": reboot_likelihood,
+            # W4d-D31: what the last install left waiting, and why, so the card
+            # names it instead of only counting it.
+            "held_back": [
+                item for item in (state.get("held_back") or [])
+                if isinstance(item, dict) and item.get("name") in packages
+            ] if state.get("action") == "apply" else [],
             "last_action": state.get("action"),
             "last_completed_at": state.get("completed_at"),
             "reboot_required": bool(

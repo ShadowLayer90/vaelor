@@ -134,6 +134,8 @@ export interface AuditEvent {
   result: "success" | "failure";
   remote_addr: string;
   details: Record<string, unknown>;
+  /** The target in words, resolved by the backend (W6-D1). */
+  target_view?: { kind: string; label: string; known: boolean; job_type?: string };
 }
 
 export interface ApiEnvelope<T> {

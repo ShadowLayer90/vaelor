@@ -1,6 +1,5 @@
 import type { KeyboardEvent } from "react";
 import type { Role } from "../types";
-import { Icon, type IconName } from "./Icon";
 import { Button } from "./ui";
 
 export type AssistantTab = "ask" | "routines" | "history";
@@ -29,13 +28,22 @@ export type AssistantTab = "ask" | "routines" | "history";
 const tabs: ReadonlyArray<{
   id: AssistantTab;
   label: string;
-  icon: IconName;
+  /** The top bar breadcrumb's words for the tab (VD-200, the Assist boards). */
+  place: string;
   adminOnly?: boolean;
 }> = [
-  { id: "ask", label: "Ask", icon: "cpu" },
-  { id: "routines", label: "Routines", icon: "memory", adminOnly: true },
-  { id: "history", label: "History", icon: "activity" },
+  { id: "ask", label: "Ask", place: "Ask about this machine" },
+  { id: "routines", label: "Routines", place: "Routines", adminOnly: true },
+  { id: "history", label: "History", place: "History" },
 ];
+
+/**
+ * Each tab's place in the breadcrumb ("Assistant / Ask about this machine"),
+ * from the same table as the strip, so the two cannot drift.
+ */
+export const ASSISTANT_TAB_PLACES: Readonly<Record<AssistantTab, string>> = Object.fromEntries(
+  tabs.map((tab) => [tab.id, tab.place]),
+) as Record<AssistantTab, string>;
 
 /**
  * The canonical `TabSet` primitive owns a single panel and swaps its children;
@@ -43,7 +51,7 @@ const tabs: ReadonlyArray<{
  * components (`AgentAssistantPanel`, `AssistantHistoryPanel`,
  * `CustomAgentsPanel`) that its consumer renders as siblings after the strip,
  * each already exposing its own `role="tabpanel"` id (`#ask-panel`,
- * `#history-panel`, `#routines-panel`). Wrapping those in `TabSet`'s own panel
+ * `#history-panel`, `#routines-panel`) while it is the one shown. Wrapping those in `TabSet`'s own panel
  * would nest one tabpanel inside another and break the `aria-controls` link to
  * the real ids. So the ARIA tabs pattern is implemented here directly — the
  * same roving `tabIndex` and Arrow/Home/End behaviour `TabSet` provides — and
@@ -84,14 +92,16 @@ export function AssistantNavigationTabs({
   };
 
   return (
-    <div className="assistant-tabs" role="tablist" aria-label="Vaelor assistant workspaces">
+    <div className="as-tabs" role="tablist" aria-label="Vaelor assistant workspaces">
       {visibleTabs.map((tab) => {
         const selected = active === tab.id;
         return (
           <Button
-            aria-controls={tab.id + "-panel"}
+            // Only the selected tab's panel is rendered; naming an absent
+            // panel points a screen reader at nothing (UX-A4).
+            aria-controls={selected ? tab.id + "-panel" : undefined}
             aria-selected={selected}
-            className={selected ? "assistant-tab assistant-tab--active" : "assistant-tab"}
+            className={selected ? "as-tab as-tab--active" : "as-tab"}
             id={"assistant-tab-" + tab.id}
             key={tab.id}
             onClick={() => onChange(tab.id)}
@@ -101,7 +111,7 @@ export function AssistantNavigationTabs({
             type="button"
             variant="quiet"
           >
-            <Icon name={tab.icon} size={18} /> {tab.label}
+            {tab.label}
           </Button>
         );
       })}

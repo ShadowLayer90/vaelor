@@ -12,6 +12,8 @@ original Vaelor work and is not derived from the legacy Pironman dashboard,
 whose compiled bundle ships in no Vaelor release artifact (see the legacy
 dashboard row below).
 
+## Included in Vaelor's source or release artifacts
+
 | Component | Upstream project | Role in this repository |
 | --- | --- | --- |
 | `pm_dashboard` | [sunfounder/pm_dashboard](https://github.com/sunfounder/pm_dashboard) | Original dashboard package, API, packaging, and legacy web interface |
@@ -20,27 +22,58 @@ dashboard row below).
 | `sf_rpi_status` | [sunfounder/sf_rpi_status](https://github.com/sunfounder/sf_rpi_status) | Raspberry Pi status and telemetry dependency |
 | Legacy dashboard web project | [sunfounder/pm_dashboard_www](https://github.com/sunfounder/pm_dashboard_www) | Provenance for the former interface; its compiled bundle is not included in Vaelor release artifacts |
 | Python 3.12 slim Bookworm OCI base | [Docker Official Image: python](https://hub.docker.com/_/python) | Pinned multi-architecture runtime base for the restricted OCI core; includes Python Software Foundation and Debian components with their own notices |
-| FastFlowLM (`flm-real`) | [ROCm/FastFlowLM](https://github.com/ROCm/FastFlowLM) | NPU inference runtime Vaelor is to supervise directly for the Assistant NPU tier (VD-001, VD-002). **Split licensing — see the section below. Not currently redistributed in any Vaelor artifact.** |
+| React and React DOM | [facebook/react](https://github.com/facebook/react) | Compiled into the web interface bundle (`vaelor/www_v2`). MIT License. |
+| Hugeicons Free icons | [Hugeicons](https://hugeicons.com) (`@hugeicons/core-free-icons` 4.3.5) | 46 stroke-rounded glyphs copied into `frontend/src/components/hugeicons.ts` and drawn by the web interface. MIT License; see the section below. |
+| On-device Assistant model (`Qwen3.5-4B-NPU2`) | Derived from the Qwen3.5-4B model, in FastFlowLM's NPU model format | Published as split assets on the Vaelor GitHub release and fetched by `deploy/fetch-npu-model.sh`. Not part of the wheel or the source. See the section below. |
+
+Python dependencies (Flask, cryptography, paramiko, PyYAML, pypdf, xlrd, and the
+others pinned in `requirements-release.txt`) are installed from PyPI at install
+time and are not bundled in the wheel; each keeps its own licence.
+
+## Downloaded at install or deploy time, not redistributed
+
+Vaelor's installer and console download these components from their upstream
+sources onto the machine they run on. No Vaelor artifact contains them. Each is
+pinned by version, checksum, or image digest in the code that fetches it, and
+each is governed by its own licence, which applies to whoever runs it.
+
+| Component | Source | When it is fetched | Licence |
+| --- | --- | --- | --- |
+| FastFlowLM runtime 1.0.2 | [ROCm/FastFlowLM](https://github.com/ROCm/FastFlowLM) release, SHA-256 verified | install, on a machine with a neural accelerator | split: MIT orchestration code, proprietary NPU kernels — see below |
+| InfluxDB 1.12.4 | InfluxData's package pool, SHA-256 verified | install | MIT |
+| Telegraf 1.32.3 | InfluxData's downloads, SHA-256 verified | staged at install on the controller; copied by the controller to each cluster worker | MIT |
+| AMD `amd-smi` and the ROCm runtime | AMD's package repository | install on an AMD GPU or NPU host; `amd-smi` alone on a cluster worker | AMD's licences for those packages |
+| Docker Engine | the host's or Docker's repositories | install, only with your approval when Docker is absent | Apache-2.0 |
+| `nginx:stable-alpine` | Docker Hub | install (pre-pull) | BSD-2-Clause (nginx) and Alpine's package licences |
+| `arizephoenix/phoenix` 20.9.0 | Docker Hub | install (pre-pull) | Elastic License 2.0 (Arize Phoenix) |
+| `kyuz0/amd-strix-halo-toolboxes` (llama.cpp on ROCm) | Docker Hub | install (pre-pull) on a gfx1151/gfx1150 GPU | MIT (llama.cpp) and the image's other components' licences |
+| `julianmb/q38rocm` (llama.cpp fork for the FP4 model) | GitHub Container Registry | install (pre-pull) on a gfx1151/gfx1150 GPU | MIT (llama.cpp) and the image's other components' licences |
+| `rocm/vllm` (vLLM 0.27 on ROCm 10) | Docker Hub | per machine, when a cluster model is served | Apache-2.0 (vLLM) and AMD's licences for ROCm |
+| `ryai-vllm` (vLLM 0.22) | `oci-registry.ryai.dev` | per machine, only when a deployment selects it | Apache-2.0 (vLLM) and the image's other components' licences |
+| SearXNG | Docker Hub (`searxng/searxng`, by digest) | when web research is enabled | AGPL-3.0 |
+| Model weights | Hugging Face or the source you choose | when you download or serve a model | each model's own licence |
+
+Where a model or image's licence restricts use, the restriction is between you
+and its publisher; Vaelor neither grants nor narrows it.
 
 ## FastFlowLM
 
-Vaelor has decided to drive FastFlowLM's `flm-real` directly for the Assistant's
-NPU tier and to remove Lemonade from the machine (VD-001, VD-002). Both rows are
-`Built: no` at the time of writing, and **no Vaelor artifact currently contains
-any FastFlowLM code or binary.** This section is recorded ahead of that work,
-because an attribution or licence term satisfied *after* a release ships is one
-that was breached in the interim.
+The Assistant's NPU tier runs on FastFlowLM's `flm` runtime, which Vaelor
+supervises directly. The installer downloads the pinned upstream release
+(v1.0.2) from [ROCm/FastFlowLM](https://github.com/ROCm/FastFlowLM), verifies
+its SHA-256, and installs it under `/var/lib/vaelor/flm`. **No Vaelor artifact
+contains any FastFlowLM code or binary.**
 
 ### Attribution
 
 FastFlowLM asks to be acknowledged in a README, project page, or product. Vaelor
-carries the requested line verbatim in [README.md](README.md):
+carries the requested line in [README.md](README.md):
 
 ```text
 Powered by [FastFlowLM](https://github.com/ROCm/FastFlowLM)
 ```
 
-Keep it there. Removing it while shipping or driving the runtime withdraws the
+Keep it there. Removing it while driving the runtime withdraws the
 acknowledgement the upstream project asks for.
 
 ### The licence is split, and the two upstream sources disagree
@@ -54,7 +87,7 @@ must not be summarised as one.
   with Vaelor's GPL-2.0-only distribution. This half is not in dispute.
 - **NPU binary kernels — the two sources conflict.**
   - The project README describes them as free for any use including commercial
-    use, with no further condition. This is the wording quoted in VD-002a.
+    use, with no further condition.
   - `TERMS.md`, in the same repository, states the binary components are
     **"NOT open source"**, says they are covered by pending patents, and caps
     free commercial use by revenue: above **USD 10 million** annual revenue an
@@ -65,47 +98,51 @@ specific document, so it is the one to rely on. Its section headings are
 *Open-Source Code (MIT License)* and *Proprietary Binaries (NPU Kernels)* — the
 split is deliberate upstream, not an artefact of how it is being read here.
 
-### The redistribution grant is not established
+### Why Vaelor downloads the runtime instead of shipping it
 
 **`TERMS.md` grants no redistribution or bundling right for the proprietary
 kernels.** It sets out a usage model for whoever runs them and is silent on
-shipping them inside another product. Silence is not permission.
+shipping them inside another product. Silence is not permission, and a
+proprietary, patent-pending binary shipped alongside GPL-2.0-only work would
+raise a combination question this notice cannot settle. So Vaelor ships none of
+it: the installer fetches the runtime from upstream's own release onto the
+machine that runs it, and the operator who runs it is bound by its terms.
+Release rule 5 below applies if that ever changes. This notice records
+provenance and is not a substitute for legal advice.
 
-**This conflicts with a later maintainer review**, which recorded the licence
-question as resolved and concluded that redistribution is permitted and that the
-earlier "do not bundle, terms unclear" position is lifted. That conclusion rests
-on the README wording above; `TERMS.md` was evidently not read alongside it. The
-ledger is authoritative for decisions and this notice does not overrule it — but
-a licence position is a fact about someone else's document, not a decision
-Vaelor gets to make, so the discrepancy is recorded here rather than resolved.
-**Reconcile VD-002a against `TERMS.md` before any artifact carries the binary.**
+## The on-device Assistant model
 
-Two questions still need answering in writing:
+The model the Assistant runs on the NPU, `Qwen3.5-4B-NPU2`, is a fine-tune of
+the Qwen3.5-4B model converted to FastFlowLM's NPU model format. It is published
+as split assets on the Vaelor GitHub release (a release asset is capped at
+2 GB) and is verified against a SHA-256 pinned in the Vaelor wheel before it is
+unpacked. It is not part of the wheel or the source tree.
 
-1. **Is redistribution granted at all?** If not, Vaelor may supervise a runtime
-   the operator installed — `sudo apt install ./fastflowlm*.deb` from upstream's
-   own Linux packages, per VD-002a — but must not package one. Release rule 5
-   below already covers this: remove anything whose redistribution terms are
-   unclear.
-2. **Is a proprietary, patent-pending binary compatible with distributing
-   Vaelor under GPL-2.0-only?** Shipping a non-free component alongside GPL v2
-   work raises a combination question this notice cannot settle.
+The model is a derivative of Qwen3.5-4B and carries that model's licence terms
+as published by its authors; the converted format is produced with FastFlowLM's
+tooling. Check both sets of terms before redistributing the model yourself.
 
-Until both are answered, the conservative position costs Vaelor almost nothing:
-install `flm-real` from upstream's published `.deb` on the appliance and ship
-none of it. VD-002a itself notes that upstream packaging makes bundling a
-*choice* rather than a requirement. This notice records provenance and is not a
-substitute for legal advice.
+## Hugeicons
+
+The web interface draws 46 icons copied from Hugeicons Free, stroke-rounded
+(`@hugeicons/core-free-icons` 4.3.5): only those glyphs' path data, in
+`frontend/src/components/hugeicons.ts`, with no Hugeicons package installed.
+They are distributed under the MIT License, Copyright (c) 2025 Hugeicons. The
+full licence text is at the top of that file, in a comment marked `@license`
+so the build keeps it in the compiled bundle. The glyphs are Hugeicons'
+work, not Vaelor's.
 
 ## Product illustrations
 
 Vaelor does not ship SunFounder product photographs or derivatives. The nine
 unlicensed raster files found during release review were removed. The current
 overview and enclosure selector use original code-native Vaelor SVG technical
-illustrations based on factual product features.
+illustrations based on factual product features. Their creation and the hashes
+of the removed files are kept in the project's asset-provenance record.
 
 SunFounder product names and factual specifications remain SunFounder
-references. Attribution does not imply SunFounder endorsement of Vaelor.
+references, as do HP's product names for the machines Vaelor was tested on.
+Attribution does not imply SunFounder's or HP's endorsement of Vaelor.
 
 Vaelor adds a new control-plane interface and expanded services for guarded
 workload deployment, AI models, assistant and agent workflows, remote access,

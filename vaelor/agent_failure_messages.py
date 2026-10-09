@@ -29,7 +29,7 @@ def _unreachable(
 ) -> str:
     """One sentence on what happened, one on what to do, then the endpoint.
 
-    Leading with "Check the model server log at http://192.168.0.72:6354/v1" was
+    Leading with "Check the model server log at http://192.0.2.72:6354/v1" was
     the entire remediation offered to a person who wanted baseball scores. The
     address still matters - an operator cannot debug without it - so it keeps
     its place at the end, where it does not stand in for an explanation.

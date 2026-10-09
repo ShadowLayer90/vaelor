@@ -1,63 +1,55 @@
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type {
-  AuditEvent,
   Device,
   Health,
-  Metrics,
   Session,
   TelemetrySample,
 } from "../types";
 import { apiRequest } from "../lib/api";
 import { brand } from "../lib/brand";
 import {
-  formatQuantity,
-  formatPercent,
-  formatTemperature,
-  formatUptime,
-  timeAgo,
-} from "../lib/format";
-import {
+  appendSample,
   connectionStatus,
   sampleTimeMs,
   STALE_AFTER_MS,
   type TelemetryOutcome,
 } from "../lib/connectionState";
-import { metricNumber, metricSum } from "../lib/metrics";
 import { machineNoun, thermalLimits, unknownMachine } from "../lib/machine";
 import { healthClaim } from "../lib/health";
-import { headlineFan, parseBoardSensors } from "../lib/wmiSensors";
 import { useMachineProfile } from "../hooks/useMachineProfile";
-import { overviewCards } from "./overviewCards";
-import { OverviewStoragePanel } from "./OverviewStoragePanel";
-import { retentionNote, type RetentionStatus } from "../lib/retention";
-import { OverviewHardwareChips } from "./OverviewHardwareChips";
-import { EnclosurePanel } from "./EnclosurePanel";
-import { PiPowerPanel } from "./PiPowerPanel";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { CLUSTER_SUMMARY_REFRESH_MS, clusterData, clusterRoleOf, useClusterSummary } from "../hooks/useClusterSummary";
+import { SUMMARY_POLL_MS } from "../hooks/useHomeSummary";
+import {
+  coolingSectionFromHash,
+  resolvedSystemSection,
+  SYSTEM_SECTION_EVENT,
+  SYSTEM_SECTION_LABELS,
+} from "../lib/systemSections";
+import { CLUSTER_SECTION_EVENT, CLUSTER_SECTION_LABELS, clusterSectionFrom } from "../lib/clusterSections";
+import { TOPBAR_PAGE_SLOT_ID, useReportedPagePlace } from "../lib/topbarSlot";
 import { AmbientBackground } from "./AmbientBackground";
-import { Icon, type IconName } from "./Icon";
-import { MetricCard } from "./MetricCard";
+import { BuildReloadNotice } from "./BuildReloadNotice";
+import { Icon, ICON_SIZE } from "./Icon";
 import { Sidebar, type StorageSummary } from "./Sidebar";
+import { CommandSearch } from "./CommandSearch";
+import { HomePage } from "./HomePage";
+import { PowerMenu, type PowerCapabilities } from "./PowerMenu";
+import type { ShellTelemetry } from "./SystemCompute";
 import {
   hashForPage,
   hashTargetsPage,
+  memoryRailItem,
   navigationPages,
   resolveHash,
   standaloneRouteFromHash,
   type NavigationPage,
   type StandaloneRoute,
 } from "../lib/navigation";
-import { destinationDescriptorFor, destinations, documentTitleForPage } from "../lib/destinations";
-import { auditActionLabel } from "../lib/auditLabels";
-import { OverviewQuickActions } from "./OverviewQuickActions";
-import { StatusPill } from "./StatusPill";
+import { destinations, documentTitleForPage } from "../lib/destinations";
+import { SkipLink } from "./SkipLink";
 import { ProductMark } from "./ProductMark";
-import { PironmanDeviceIcon } from "./PironmanDeviceIcon";
-import { DeviceHeroIcon } from "./DeviceHeroIcon";
-import { ModalShell } from "./ModalShell";
-import { MemoryOptimizer } from "./MemoryOptimizer";
 import { WorkspaceErrorBoundary } from "./WorkspaceErrorBoundary";
-import { Button, Notice, Select, UnavailableValue } from "./ui";
+import { Button, Notice } from "./ui";
 import {
   ActivityCenter,
   Administration,
@@ -71,63 +63,21 @@ import {
   Workloads,
 } from "./overviewRoutes";
 
-type PowerAction = "restart_service" | "reboot" | "shutdown";
-type PowerCapabilities = {
-  actions: Record<PowerAction, { available: boolean; reason: string }>;
-};
-
-const actionCopy: Record<
-  PowerAction,
-  {
-    title: string;
-    description: string;
-    label: string;
-    confirmation: string;
-    /** Shown on the control itself, before the confirmation dialog opens. */
-    consequence: string;
-  }
-> = {
-  restart_service: {
-    // The control and its confirmation have to be the same action. A card
-    // labelled "Restart service" that opens "Restart hardware service?" reads
-    // as a second, broader thing happening.
-    title: "Restart service?",
-    description:
-      "Live telemetry will disconnect briefly. The device will remain powered on.",
-    label: "Restart service",
-    confirmation: "restart-service",
-    consequence: "Interrupts live telemetry for a few seconds",
-  },
-  reboot: {
-    title: "Reboot this device?",
-    description:
-      "All active sessions and services will stop while the device restarts.",
-    label: "Reboot device",
-    confirmation: "reboot-device",
-    consequence: "Stops every session and running app until it restarts",
-  },
-  shutdown: {
-    title: "Shut down this device?",
-    description:
-      "Remote access will be lost and physical power may be required to start it again.",
-    label: "Shut down",
-    confirmation: "shutdown-device",
-    consequence: "Ends remote access; restarting may need physical power",
-  },
-};
-
 function WorkspacePage({
   page,
   session,
   onBack,
+  telemetry,
 }: {
   page: Exclude<NavigationPage, "overview">;
   session: Session;
   onBack: () => void;
+  /** The shell's live sample, which System › Compute shows (VD-200). */
+  telemetry: ShellTelemetry;
 }) {
   switch (page) {
     case "system":
-      return <FanControl onBack={onBack} session={session} />;
+      return <FanControl onBack={onBack} session={session} telemetry={telemetry} />;
     case "kvm":
       return <RemoteConsole onBack={onBack} session={session} />;
     case "workloads":
@@ -153,13 +103,15 @@ export function Overview({
   onLogout: () => Promise<void>;
 }) {
   const [device, setDevice] = useState<Device | null>(null);
+  // The address bar, for the breadcrumb's System and Cluster sections; set wherever the location is applied.
+  const [locationHash, setLocationHash] = useState(() => window.location.hash);
+  const [locationSearch, setLocationSearch] = useState(() => window.location.search);
   const [health, setHealth] = useState<Health>({
     status: "offline",
     reasons: [],
     sampled_at: 0,
   });
   const [history, setHistory] = useState<TelemetrySample[]>([]);
-  const [audit, setAudit] = useState<AuditEvent[]>([]);
   /*
    * The two facts the connection indicator is allowed to be built from. They
    * are kept apart on purpose: `telemetryOutcome` says what the last request
@@ -171,9 +123,9 @@ export function Overview({
   const [telemetryOutcome, setTelemetryOutcome] = useState<TelemetryOutcome>("pending");
   const [polling, setPolling] = useState(() => !document.hidden);
   const [clock, setClock] = useState(() => Date.now());
-  const [selectedAction, setSelectedAction] = useState<PowerAction | null>(null);
-  const [actionBusy, setActionBusy] = useState(false);
-  const [notice, setNotice] = useState("");
+  const [notice, setNoticeText] = useState(""), [noticeRefused, setNoticeRefused] = useState(false);
+  // VD-189 (N3): a refusal is an alert, never an info notice.
+  const setNotice = useCallback((message: string, refused = false) => { setNoticeText(message); setNoticeRefused(refused); }, []);
   const pageAllowed = useCallback((page: NavigationPage) =>
     !(
       ((page === "assistant" || page === "admin") && session.user.role !== "administrator")
@@ -197,17 +149,15 @@ export function Overview({
     const requested = resolveHash(window.location.hash).page;
     return pageAllowed(requested) ? requested : "overview";
   });
-  const [deviceChoice, setDeviceChoice] = useState("");
-  const [deviceChoiceBusy, setDeviceChoiceBusy] = useState(false);
-  const [showDeviceSelector, setShowDeviceSelector] = useState(false);
+  // The console's one `/cluster` read: at Home's pace on Home, slower elsewhere.
+  const clusterRead = useClusterSummary(session.user.role, activePage === "overview" ? SUMMARY_POLL_MS : CLUSTER_SUMMARY_REFRESH_MS);
+  const cluster = clusterData(clusterRead);
   const [storage, setStorage] = useState<StorageSummary | null>(null);
-  const [retention, setRetention] = useState<RetentionStatus | null>(null);
   const [connectivity, setConnectivity] = useState<{
     dns: boolean;
     internet: boolean;
     latency_ms: number | null;
-  } | null>(null);
-  const [showMemoryOptimizer, setShowMemoryOptimizer] = useState(false);
+  } | "unread" | null>(null);
   const [powerCapabilities, setPowerCapabilities] = useState<PowerCapabilities | null>(null);
   /**
    * `null` until discovery answers. Nothing that depends on a capability may
@@ -244,6 +194,8 @@ export function Overview({
    * kept claiming otherwise, so the link simply looked broken.
    */
   const applyLocation = useCallback(() => {
+    setLocationHash(window.location.hash);
+    setLocationSearch(window.location.search);
     const standalone = standaloneRouteFromHash(window.location.hash);
     if (standalone && standaloneAllowed(standalone)) {
       setStandaloneRoute(standalone);
@@ -266,7 +218,16 @@ export function Overview({
     window.addEventListener("popstate", applyLocation);
     window.addEventListener("hashchange", applyLocation);
     window.addEventListener("pironman:navigate", navigate);
+    // System and Cluster move their tab with pushState, which fires no popstate.
+    const sectionMoved = () => {
+      setLocationHash(window.location.hash);
+      setLocationSearch(window.location.search);
+    };
+    window.addEventListener(SYSTEM_SECTION_EVENT, sectionMoved);
+    window.addEventListener(CLUSTER_SECTION_EVENT, sectionMoved);
     return () => {
+      window.removeEventListener(SYSTEM_SECTION_EVENT, sectionMoved);
+      window.removeEventListener(CLUSTER_SECTION_EVENT, sectionMoved);
       window.removeEventListener("popstate", applyLocation);
       window.removeEventListener("hashchange", applyLocation);
       window.removeEventListener("pironman:navigate", navigate);
@@ -293,13 +254,7 @@ export function Overview({
     setHealth(nextHealth);
     setStorage(nextStorage);
     setPowerCapabilities(nextPower);
-    setHistory((current) => [...current, sample].slice(-30));
-    // Retention (#186) is a soft add: an appliance whose control plane predates
-    // this route must still render the summary, so its failure is swallowed and
-    // the note simply stays absent.
-    void apiRequest<RetentionStatus>("/telemetry/retention")
-      .then(setRetention)
-      .catch(() => undefined);
+    setHistory((current) => appendSample(current, sample));
   }, []);
 
   /*
@@ -316,45 +271,19 @@ export function Overview({
       .catch(() => setTelemetryOutcome("failed"));
   }, [refreshSummary]);
 
-  const saveDeviceChoice = async () => {
-    if (!deviceChoice) return;
-    setDeviceChoiceBusy(true);
-    setNotice("");
-    try {
-      await apiRequest(
-        "/device/model",
-        { method: "PATCH", body: JSON.stringify({ model: deviceChoice }) },
-        session.csrf_token,
-      );
-      const selectedDevice = await apiRequest<Device>("/device");
-      setDevice(selectedDevice);
-      setShowDeviceSelector(false);
-      setNotice("Pironman model saved. Hardware labels and the product image now match your selection.");
-      void refreshSummary().catch(() => {
-        setNotice("Pironman model saved. Some unrelated live telemetry is still refreshing.");
-      });
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The Pironman model could not be saved.");
-    } finally {
-      setDeviceChoiceBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activePage === "overview" && session.user.role !== "viewer") {
-      void apiRequest<AuditEvent[]>("/audit?limit=6").then(setAudit);
-    }
-  }, [activePage, session.user.role]);
+  const deviceSaved = useCallback(async (saved: Device) => {
+    setDevice(saved);
+    await refreshSummary();
+  }, [refreshSummary]);
 
   useEffect(() => {
     if (session.user.role === "viewer") return;
+    // The console's own probe is a status read, never audited; the owner's
+    // Test press is the POST, always audited (W8-4: not a body flag).
     void apiRequest<{ dns: boolean; internet: boolean; latency_ms: number | null }>(
-      "/system/network/test",
-      { method: "POST", body: "{}" },
-      session.csrf_token,
-    ).then(setConnectivity).catch(() => setConnectivity({
-      dns: false, internet: false, latency_ms: null,
-    }));
+      "/system/network/status",
+    // LESSONS 8: a failed read is "not read", never {internet: false}.
+    ).then(setConnectivity).catch(() => setConnectivity("unread"));
   }, [session.csrf_token, session.user.role]);
 
   useEffect(() => {
@@ -368,7 +297,7 @@ export function Overview({
       telemetryPending = true;
       void apiRequest<TelemetrySample>("/telemetry/current")
         .then((sample) => {
-          setHistory((current) => [...current, sample].slice(-30));
+          setHistory((current) => appendSample(current, sample));
           setTelemetryOutcome("ok");
         })
         .catch(() => setTelemetryOutcome("failed"))
@@ -390,9 +319,11 @@ export function Overview({
       }
     };
     document.addEventListener("visibilitychange", visibilityChanged);
+    // Home's tiles and System's live readings read every 2.5 s; elsewhere
+    // only the top bar and the rail read it.
     const telemetryInterval = window.setInterval(
       pollTelemetry,
-      activePage === "overview" ? 2_500 : 30_000,
+      activePage === "overview" || activePage === "system" ? 2_500 : 30_000,
     );
     const healthInterval = window.setInterval(() => {
       if (!document.hidden) void apiRequest<Health>("/health").then(setHealth);
@@ -425,7 +356,7 @@ export function Overview({
   useEffect(() => {
     const timer = window.setInterval(
       () => setClock(Date.now()),
-      document.hidden ? 10_000 : activePage === "overview" ? 1_000 : 5_000,
+      document.hidden ? 10_000 : activePage === "overview" || activePage === "system" ? 1_000 : 5_000,
     );
     return () => window.clearInterval(timer);
   }, [activePage, polling]);
@@ -442,59 +373,9 @@ export function Overview({
    */
   const connectionInput = { lastSample, now: clock, outcome: telemetryOutcome, polling };
   const connection = connectionStatus(connectionInput);
-  const heroSignal = connectionStatus(connectionInput, "signal-orb");
-  const busPulse = connectionStatus(connectionInput, "telemetry-bus__pulse");
-  const networkTotal = metricSum(metrics, ["network_download_speed", "network_upload_speed"]);
   const resolvedMachine = machine ?? unknownMachine;
   const isAppliance = resolvedMachine.machine_class === "pi-appliance";
   const noun = machineNoun(resolvedMachine.machine_class);
-  /*
-   * The appliance publishes one PWM fan under `pwm_fan_speed`; the workstation
-   * publishes several through the board. Either is a fan reading, and neither
-   * is a fan control.
-   */
-  const boardFan = headlineFan(parseBoardSensors(metrics));
-  const fanRpm = metricNumber(metrics, "pwm_fan_speed") ?? boardFan?.rpm ?? null;
-  const gpuAvailable = resolvedMachine.capabilities.gpu.available;
-
-  const cards = useMemo(
-    () => overviewCards({
-      metrics,
-      history,
-      machine: resolvedMachine,
-      onTuneMemory: () => setShowMemoryOptimizer(true),
-    }),
-    [history, metrics, resolvedMachine],
-  );
-
-  const performAction = async () => {
-    if (!selectedAction) return;
-    setActionBusy(true);
-    try {
-      await apiRequest(
-        "/power/actions",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            action: selectedAction,
-            confirmation: actionCopy[selectedAction].confirmation,
-          }),
-        },
-        session.csrf_token,
-      );
-      setNotice(`${actionCopy[selectedAction].label} request accepted.`);
-      setSelectedAction(null);
-      window.setTimeout(() => setNotice(""), 5000);
-      if (session.user.role !== "viewer") {
-        window.setTimeout(() => {
-          void apiRequest<AuditEvent[]>("/audit?limit=6").then(setAudit);
-        }, 500);
-      }
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
   /*
    * The hero's mark, its sentence and the pill in the page heading are one
    * value. During a telemetry outage the hero read "All systems operational"
@@ -503,11 +384,46 @@ export function Overview({
    * with a machine is not evidence that its systems are operational.
    */
   const claim = healthClaim(health, connection.state, noun);
+  const clusterRole = clusterRoleOf(cluster);
+  const shellTelemetry: ShellTelemetry = {
+    claim,
+    cluster,
+    connectionState: connection.state,
+    device,
+    healthSampledAt: health.sampled_at,
+    history,
+    metrics,
+    noun,
+    onDeviceSaved: deviceSaved,
+    onNotice: setNotice,
+    role: clusterRole,
+    sampledAt: lastSample,
+    stale: telemetryStale,
+    storage,
+  };
+  /*
+   * The board's breadcrumb (VD-200): the page, then where you are on it -
+   * "Home / This controller", "System / Compute", "Cluster / Fleet",
+   * "Assistant / Routines / Agents". The rail group ("Overview /") named the
+   * menu the page sits in, which the rail already shows. Cluster and System
+   * keep their place in the address; every other page says its own
+   * (`usePagePlace`), in the words of the tab strip it owns.
+   */
+  const reportedPlace = useReportedPagePlace();
+  const crumbPlace: readonly string[] = standaloneRoute === "memory"
+    ? [`Used by ${destinations.assistant.name} and ${destinations["ai-chat"].name}`]
+    : activePage === "overview"
+      ? [`This ${clusterRole ?? noun}`]
+      : activePage === "system"
+        ? [SYSTEM_SECTION_LABELS[resolvedSystemSection(coolingSectionFromHash(locationHash), resolvedMachine)]]
+        : activePage === "fleet"
+          ? [CLUSTER_SECTION_LABELS[clusterSectionFrom(locationSearch)]]
+          : reportedPlace ?? [];
 
   return (
     <div className="app-shell">
       <AmbientBackground />
-      <a className="skip-link" href="#main-content">Skip to main content</a>
+      <SkipLink />
       <Sidebar
         activePage={activePage}
         connection={connection.state}
@@ -517,6 +433,8 @@ export function Overview({
         thermalWarningC={thermalLimits(resolvedMachine).cpuWarn}
         metrics={metrics}
         onNavigate={navigateTo}
+        cluster={cluster}
+        onSignOut={() => void onLogout()}
         storage={storage}
         user={session.user}
       />
@@ -527,7 +445,34 @@ export function Overview({
             <span className="topbar__mark" aria-hidden="true"><ProductMark /></span>
             <strong>{brand.name}</strong>
           </div>
+          {/*
+            * Where you are, as the redesign's breadcrumb: the rail group, then
+            * the page. On Home the page name is the page's level-one heading
+            * (the greeting below is not a heading); every other page owns its
+            * own.
+            */}
+          <nav aria-label="Breadcrumb" className="topbar__crumb">
+            {standaloneRoute === null && activePage === "overview"
+              ? <h1 className="topbar__title">{destinations.overview.name}</h1>
+              : <strong aria-current={crumbPlace.length ? undefined : "page"}>{standaloneRoute === "memory" ? memoryRailItem.label : destinations[activePage].name}</strong>}
+            {/* The whole place is one box that shortens behind one ellipsis: with
+                each part its own flex item, only the last could give way, and a
+                three-part place ("Assistant / Ask about this machine / Skills")
+                scrolled the bar sideways at 768 (VD-200 assist verify S2). */}
+            {crumbPlace.length > 0 && (
+              <span className="topbar__place">
+                {crumbPlace.map((part, index) => (
+                  <Fragment key={`${index}-${part}`}>
+                    <span aria-hidden="true" className="topbar__sep">/</span>
+                    <span aria-current={index === crumbPlace.length - 1 ? "page" : undefined}>{part}</span>
+                  </Fragment>
+                ))}
+              </span>
+            )}
+          </nav>
           <div className="topbar__actions">
+            {/* The open page's pill and actions (`TopbarPageActions`); the shell draws nothing in it. */}
+            <div className="topbar__page" id={TOPBAR_PAGE_SLOT_ID} style={{ display: "contents" }} />
             <div
               aria-label="Connection status"
               aria-live="polite"
@@ -535,28 +480,44 @@ export function Overview({
               data-connection={connection.state}
             >
               <span className={connection.indicatorClassName} />
-              {connection.label}
+              <span className="connection-state__label">{connection.label}</span>
+              {/* A phone shows the state's one word (the PhoneHome board); a screen reader still hears the sentence and its age. */}
+              <span aria-hidden="true" className="connection-state__short">{connection.short}</span>
             </div>
-            <span className="topbar__divider" aria-hidden="true" />
-            <div className="operator-chip">
-              <span>{session.user.username.slice(0, 1).toUpperCase()}</span>
-              <div>
-                <strong>{session.user.username}</strong>
-                <small>{session.user.role}</small>
-              </div>
-            </div>
-            <Button
-              aria-label="Sign out"
-              className="icon-button"
-              onClick={() => void onLogout()}
-              title="Sign out"
-            >
-              <Icon name="logout" />
-            </Button>
+            {/*
+              * A paused poller is deliberate (the tab was in the background);
+              * this is a one-shot read on demand, not a resume switch. It
+              * replaces old Home's polling strip and sits beside the pill, so
+              * the pill's own sentence stays one value.
+              */}
+            {connection.state === "paused" && (
+              <Button
+                aria-label="Refresh now — read live telemetry once"
+                className="connection-state__refresh"
+                onClick={refreshTelemetryNow}
+                title="Live updates pause while this tab is in the background and resume automatically when it is active."
+                variant="quiet"
+              >
+                Refresh now
+              </Button>
+            )}
+            {activePage === "system" && standaloneRoute === null && (
+              <PowerMenu capabilities={powerCapabilities} onNotice={setNotice} session={session} />
+            )}
+            <CommandSearch allowed={pageAllowed} machine={resolvedMachine} memoryAllowed={standaloneAllowed("memory")} />
+            <UserMenu onLogout={onLogout} role={session.user.role} username={session.user.username} />
           </div>
         </header>
 
         <main className="main" id="main-content" tabIndex={-1}>
+          <BuildReloadNotice />
+          {/* The outcome of a power request or an enclosure choice, on the page it was made from. */}
+          {notice && (
+            <Notice className="shell-notice" severity={noticeRefused ? "danger" : "info"}>
+              <Icon name="shield" size={ICON_SIZE.nav} />
+              {notice}
+            </Notice>
+          )}
           {standaloneRoute === "memory" ? (
             <WorkspaceErrorBoundary
               onBack={() => navigateTo("overview", false)}
@@ -572,403 +533,87 @@ export function Overview({
                workspaceKey={activePage}
              >
                <Suspense fallback={<div className="page-loading" role="status">Loading workspace…</div>}>
-                 <WorkspacePage onBack={() => navigateTo("overview", false)} page={activePage} session={session} />
+                 <WorkspacePage onBack={() => navigateTo("overview", false)} page={activePage} session={session} telemetry={shellTelemetry} />
                </Suspense>
             </WorkspaceErrorBoundary>
           ) : (
-            <>
-          <div className="page-heading">
-            <div>
-              <h1>{destinations.overview.name}</h1>
-              <p>{destinationDescriptorFor("overview", resolvedMachine.machine_class)} · {device?.name ?? "Detecting hardware"}</p>
-            </div>
-            <StatusPill status={claim.pillStatus} />
-          </div>
-
-          {notice && (
-            <Notice severity="info">
-              <Icon name="shield" size={17} />
-              {notice}
-            </Notice>
-          )}
-
-          <section className="device-hero" aria-label="System summary">
-            <div className="device-hero__content">
-              <div className="system-strip__lead">
-                <span className={heroSignal.indicatorClassName} />
-                <div>
-                  <strong>{claim.title}</strong>
-                  {/*
-                    * Four alert categories were enumerated here and two were
-                    * evaluated. `/health` computes from `cpu_temperature` and
-                    * `memory_percent` alone, so a workstation with its
-                    * graphics processor at 100 °C read "No thermal … alerts"
-                    * on its landing page. The sentence now names what was
-                    * checked and nothing else, and grows by itself the moment
-                    * the route reports a wider `checked` list.
-                    */}
-                  <span>{claim.detail}</span>
-                </div>
-              </div>
-              <dl className="system-strip__facts">
-                <div>
-                  <dt>Uptime</dt>
-                  {/*
-                    * A permanent em dash reads as a value. `boot_time` is only
-                    * emitted by some telemetry providers, so when it is absent
-                    * the fact says it is absent.
-                    */}
-                  <dd>{metricNumber(metrics, "boot_time") === null
-                    ? <UnavailableValue label="Uptime unavailable" reason={`Boot time is not reported by this ${noun}`} />
-                    : formatUptime(metrics.boot_time)}</dd>
-                </div>
-                <div>
-                  <dt>Version</dt>
-                  <dd>{device?.version ?? "—"}</dd>
-                </div>
-                <div>
-                  <dt>Access</dt>
-                  <dd>{session.user.role}</dd>
-                </div>
-                <div className="system-strip__os">
-                  <dt>Operating system</dt>
-                  <dd title={device?.platform?.os.name}>
-                    {device?.platform?.os.name ?? "Detecting"}
-                  </dd>
-                </div>
-              </dl>
-              <OverviewHardwareChips device={device} machine={resolvedMachine} storage={storage} />
-              {/*
-                * Offering a Pironman model on a machine that is not one lets a
-                * reader give a workstation a Pi enclosure's artwork, NVMe slot
-                * count, OLED and RGB chips and a two-fan case-fan count. The
-                * picker belongs to the appliance class and nowhere else.
-                */}
-              {device && isAppliance && !device.platform?.product.confident && (
-                <div className="device-identification">
-                  {/*
-                    * What discovery actually found, before asking the reader to
-                    * decide. This was framed as a chooser with no statement of
-                    * what had been detected or how sure it was, so the one
-                    * option offered read as an arbitrary menu of one rather
-                    * than as a reading the reader is being asked to confirm.
-                    */}
-                  <div>
-                    <strong>Which Pironman enclosure is this?</strong>
-                    <small>
-                      {device.platform?.product.detected_from
-                        ? `Detected as ${device.platform.product.name} from ${device.platform.product.detected_from}, but not confidently. `
-                        : "Automatic identification was inconclusive. "}
-                      Your choice controls hardware labels, available controls, and the product image.
-                    </small>
-                  </div>
-                  <Select
-                    aria-label="Pironman enclosure model"
-                    label={<span className="sr-only">Pironman enclosure model</span>}
-                    onChange={(event) => setDeviceChoice(event.target.value)}
-                    value={deviceChoice}
-                  >
-                    <option value="">Choose a model</option>
-                    {device.model_choices?.map((choice) => <option key={choice.id} value={choice.id}>{choice.name}</option>)}
-                  </Select>
-                  <Button disabled={!deviceChoice || deviceChoiceBusy} onClick={() => void saveDeviceChoice()} variant="primary">
-                    {deviceChoiceBusy ? "Saving…" : "Use this model"}
-                  </Button>
-                </div>
-              )}
-            </div>
-            <figure className="device-hero__visual">
-              <div className="device-hero__glow" aria-hidden="true" />
-              <DeviceHeroIcon device={device} isAppliance={isAppliance} machine={resolvedMachine} />
-              <figcaption>
-                <span>{isAppliance ? "Active appliance" : "This machine"}</span>
-                <strong>{device?.name ?? (isAppliance ? "Local appliance" : "This machine")}</strong>
-                {session.user.role === "administrator" && isAppliance && device?.platform?.board.is_raspberry_pi && <Button onClick={() => {
-                  setDeviceChoice(device?.id ?? "");
-                  setShowDeviceSelector(true);
-                }} variant="quiet">Change enclosure</Button>}
-              </figcaption>
-            </figure>
-          </section>
-
-          {showDeviceSelector && device && <ModalShell labelledBy="device-selector-title" onClose={() => setShowDeviceSelector(false)} size="standard">
-            <section className="device-selector" aria-labelledby="device-selector-title">
-              <div className="panel-heading">
-                <div><span className="page-eyebrow">Hardware identity</span><h2 id="device-selector-title">Choose your Pironman enclosure</h2><p>This changes the product image, labels, fan layout, NVMe count, and available hardware controls.</p></div>
-                <Button onClick={() => setShowDeviceSelector(false)} variant="quiet">Close</Button>
-              </div>
-              {/*
-                * A single-select list, marked up as one. These carried
-                * `aria-pressed`, which announces a toggle that happens to be
-                * on — nothing said the options were alternatives or which one
-                * is currently in force, and with one option offered there was
-                * no visible answer either.
-                */}
-              <div aria-labelledby="device-selector-title" className="device-selector__grid" role="radiogroup">
-                {device.model_choices?.map((choice) => (
-                  <Button
-                    aria-checked={deviceChoice === choice.id}
-                    key={choice.id}
-                    onClick={() => setDeviceChoice(choice.id)}
-                    role="radio"
-                  >
-                    <span><PironmanDeviceIcon model={choice.id} size={126} /></span>
-                    <strong>{choice.name}</strong>
-                    {device.platform?.product.id === choice.id && (
-                      <small>{device.platform.product.confident ? "Detected" : "Best match from discovery"}</small>
-                    )}
-                  </Button>
-                ))}
-              </div>
-              <div className="device-selector__actions">
-                <span><Icon name="shield" /> You can change this later without reinstalling.</span>
-                <Button disabled={!deviceChoice || deviceChoiceBusy} onClick={() => void saveDeviceChoice()} variant="primary">{deviceChoiceBusy ? "Saving…" : "Use selected enclosure"}</Button>
-              </div>
-            </section>
-          </ModalShell>}
-          {showMemoryOptimizer && <ModalShell labelledBy="memory-optimizer-title" onClose={() => setShowMemoryOptimizer(false)}>
-            <MemoryOptimizer onClose={() => setShowMemoryOptimizer(false)} session={session} />
-          </ModalShell>}
-
-          <OverviewQuickActions machineClass={resolvedMachine.machine_class} pageAllowed={pageAllowed} />
-
-          <section className={telemetryStale ? "telemetry-bus telemetry-bus--stale" : "telemetry-bus"} aria-label="Telemetry polling status">
-            <div className="telemetry-bus__state">
-              <span className={busPulse.indicatorClassName} />
-              <span>
-                <small>Telemetry polling</small>
-                <strong>{busPulse.label}</strong>
-              </span>
-            </div>
-            <div className="telemetry-bus__channels">
-              <span><small>CPU</small><strong>{formatPercent(metrics.cpu_percent)}</strong></span>
-              {/*
-                * One reading, one name. This strip called it "Core" while the
-                * chart below called it "CPU temperature"; both read
-                * `cpu_temperature` from the same sample.
-                */}
-              <span><small>CPU temperature</small><strong>{formatTemperature(metrics.cpu_temperature)}</strong></span>
-              {/*
-                * The `Fan` channel could never carry a value on a machine with
-                * no readable fan, so it is a channel only where one was found.
-                * Where a GPU was found it takes the slot, because that is the
-                * reading a workstation owner actually watches.
-                */}
-              {/*
-                * Gated on being able to *read* a fan, not on being able to set
-                * one. This machine has three readable tachometers and no
-                * writable control, and while the channel keyed off `cpu_fan`
-                * the product showed nothing — which a reader takes as "no
-                * fans", on a chassis that is plainly cooling itself.
-                *
-                * The channel names the fan it is quoting. A machine with three
-                * of them has no single "fan speed", and presenting one of
-                * three under that word would be the same class of claim.
-                */}
-              {resolvedMachine.capabilities.fan_readings.available && (
-                <span>
-                  <small>{boardFan?.label ?? "Fan"}</small>
-                  <strong>{fanRpm === null
-                    ? <UnavailableValue label="Fan speed unavailable" reason="This cooling controller does not report fan RPM" />
-                    : `${Math.round(fanRpm)} RPM`}</strong>
-                </span>
-              )}
-              {gpuAvailable && (
-                <span><small>GPU</small><strong>{formatPercent(metrics.gpu_busy_percent)}</strong></span>
-              )}
-              {gpuAvailable && (
-                <span><small>GPU temperature</small><strong>{formatTemperature(metrics.gpu_temperature_c)}</strong></span>
-              )}
-              <span><small>Memory</small><strong>{formatPercent(metrics.memory_percent)}</strong></span>
-              <span><small>Network</small><strong>{formatQuantity(networkTotal, "transfer", "/s")}</strong></span>
-            </div>
-            {/*
-              * A suspended poller is intentional, not a fault — and it used to
-              * have no exit but a full page reload. The strip now says the pause
-              * is automatic and reversible, and offers a one-shot read on
-              * demand. "Refresh now" is not a resume switch: the interval still
-              * owns the steady state and returns to it when the tab is active.
-              */}
-            {connection.state === "paused" && (
-              <div className="telemetry-bus__resume">
-                <small>
-                  Live updates pause while this tab is in the background and resume
-                  automatically when it is active.
-                </small>
-                <Button onClick={refreshTelemetryNow} type="button" variant="quiet">
-                  Refresh now
-                </Button>
-              </div>
-            )}
-            <span className="telemetry-bus__sweep" aria-hidden="true" />
-          </section>
-
-          <section aria-labelledby="live-metrics-heading" className="section-block">
-            <div className="section-heading">
-              <div>
-                <h2 id="live-metrics-heading">Live telemetry</h2>
-                {/*
-                  * The tile colours group readings; they are not a severity
-                  * scale. A tester read the pink trace under a 33 °C processor
-                  * as an alarm — on a page whose own health line said "All
-                  * systems operational" — and nothing on screen contradicted
-                  * that reading, because there was no legend and no tooltip.
-                  * The colours cannot carry severity without a thermal band
-                  * per series, which is the health strip's job, so the caption
-                  * says what they are instead of implying what they are not.
-                  */}
-                <p>Thirty-second rolling window · colours group the readings and do not indicate health</p>
-              </div>
-              <span className="section-heading__meta">
-                Updated {lastSample ? timeAgo(lastSample) : "when connected"}
-              </span>
-            </div>
-            {/* The span rules are tuned for the four-tile layout; the GPU pair
-                makes six, which tiles evenly as two rows of three instead. */}
-            <div
-              className={telemetryStale ? "metric-grid metric-grid--stale" : "metric-grid"}
-              data-cards={cards.length}
-            >
-              {cards.map((card) => (
-                <MetricCard {...card} key={card.label} />
-              ))}
-            </div>
-          </section>
-
-          {/*
-            * The enclosure is the reason this product exists and it was not on
-            * Home at all: "is the fan about to be loud", "are the lights on",
-            * "how long will the UPS hold" were each two clicks away, while the
-            * UPS itself was a 13-pixel chip beside the NVMe slot count. Both
-            * panels are appliance-only — there is no enclosure and no PiPower
-            * on a workstation, and a panel that rendered "—" on one would be
-            * the defect these fixes remove.
-            */}
-          {isAppliance && (
-            <div className="lower-grid">
-              <EnclosurePanel machine={resolvedMachine} />
-              <PiPowerPanel device={device} />
-            </div>
-          )}
-
-          <div className="lower-grid">
-            <OverviewStoragePanel machineNoun={noun} metrics={metrics} storage={storage} retentionNote={retentionNote(retention)} />
-
-            {/*
-              * The KVM readiness list used to sit here. It is genuinely wired
-              * to `/kvm/capabilities` — that fix was worth making — but on a
-              * machine that will never have a capture card fitted, three rows
-              * reading "Not connected" forever are a commissioning checklist
-              * occupying a third of the landing page. It moved, whole, to
-              * `Remote console`, where commissioning is the subject.
-              */}
-            <section className="data-panel data-panel--actions" aria-labelledby="actions-heading">
-              <div className="panel-heading">
-                <div>
-                  <h2 id="actions-heading">Power controls</h2>
-                  <p>Each one interrupts service and asks you to confirm first</p>
-                </div>
-                <Icon name="power" />
-              </div>
-              {session.user.role === "viewer" ? (
-                <div className="empty-state">
-                  <Icon name="lock" />
-                  <strong>Viewer access</strong>
-                  <span>Operator permission is required.</span>
-                </div>
-              ) : (
-                // A destructive action must not look like a link. These carry
-                // the danger palette, an alert glyph instead of a navigation
-                // chevron, the consequence in plain words, and `aria-haspopup`
-                // so assistive technology announces that a confirmation step
-                // follows rather than a page change.
-                <div className="action-list action-list--destructive">
-                  {(Object.keys(actionCopy) as PowerAction[]).map((action) => {
-                    const available = Boolean(powerCapabilities?.actions[action]?.available);
-                    return (
-                      <Button
-                        aria-haspopup="dialog"
-                        disabled={!available}
-                        key={action}
-                        onClick={() => setSelectedAction(action)}
-                        title={powerCapabilities?.actions[action]?.reason || undefined}
-                        variant="danger"
-                      >
-                        <span className="action-list__copy">
-                          <strong>{actionCopy[action].label}</strong>
-                          <small>
-                            {available
-                              ? actionCopy[action].consequence
-                              : powerCapabilities?.actions[action]?.reason || "Checking platform support"}
-                          </small>
-                        </span>
-                        <Icon name="alert" size={17} />
-                      </Button>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-          </div>
-
-          <section className="activity-panel" aria-labelledby="activity-heading">
-            <div className="panel-heading">
-              <div>
-                <h2 id="activity-heading">Recent activity</h2>
-                <p>Authenticated actions on this {noun}</p>
-              </div>
-              <Icon name="activity" />
-            </div>
-            {audit.length ? (
-              <div className="activity-table-wrap">
-                <table className="activity-table">
-                  <thead>
-                    <tr>
-                      <th>Event</th>
-                      <th>Operator</th>
-                      <th>Time</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {audit.slice(0, 6).map((event) => (
-                      <tr key={event.id}>
-                        <td title={event.action}>{auditActionLabel(event.action)}</td>
-                        <td>{event.actor}</td>
-                        <td>{timeAgo(event.created_at * 1000)}</td>
-                        <td>
-                          <span className={`event-state event-state--${event.result}`}>
-                            {event.result}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="empty-state">
-                <Icon name="shield" />
-                <strong>No operator activity yet</strong>
-                <span>Privileged actions will appear here.</span>
-              </div>
-            )}
-          </section>
-            </>
+            <HomePage
+              cluster={clusterRead}
+              device={device}
+              health={health}
+              live={lastSample > 0 && !telemetryStale}
+              machine={resolvedMachine}
+              metrics={metrics}
+              noun={noun}
+              pageAllowed={pageAllowed}
+              session={session}
+            />
           )}
         </main>
       </div>
+    </div>
+  );
+}
 
-      {selectedAction && (
-        <ConfirmDialog
-          busy={actionBusy}
-          confirmLabel={actionCopy[selectedAction].label}
-          description={actionCopy[selectedAction].description}
-          onCancel={() => !actionBusy && setSelectedAction(null)}
-          onConfirm={() => void performAction()}
-          open
-          title={actionCopy[selectedAction].title}
-        />
+/**
+ * Who is signed in (VD-200, the board's top bar): the name as an outline pill
+ * that opens a menu with the role and Sign out. Sign out was a separate icon
+ * button beside it, which on a phone wrapped the top bar onto a second row;
+ * on a phone the bottom bar's More sheet carries Sign out instead.
+ */
+function UserMenu({ onLogout, role, username }: {
+  onLogout: () => Promise<void>;
+  role: string;
+  username: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event: PointerEvent) => {
+      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+  return (
+    <div
+      className="user-menu"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !open) return;
+        event.preventDefault();
+        setOpen(false);
+        trigger.current?.focus();
+      }}
+      ref={wrap}
+    >
+      <Button
+        aria-controls="user-menu-list"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`${username}, account`}
+        className="operator-chip"
+        onClick={() => setOpen((value) => !value)}
+        ref={trigger}
+        title={`Signed in as ${username} (${role})`}
+      >
+        <span className="operator-chip__name">{username}</span>
+      </Button>
+      {open && (
+        <div aria-label="Account" className="user-menu__list" id="user-menu-list" role="menu">
+          <p className="user-menu__who">Signed in as <strong>{username}</strong> · {role}</p>
+          <Button
+            autoFocus
+            className="user-menu__item"
+            onClick={() => { setOpen(false); void onLogout(); }}
+            role="menuitem"
+            variant="quiet"
+          >
+            <Icon name="logout" size={16} />
+            Sign out
+          </Button>
+        </div>
       )}
     </div>
   );

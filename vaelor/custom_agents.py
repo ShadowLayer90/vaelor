@@ -24,10 +24,38 @@ ALLOWED_SCOPES = {
     "research:read", "system:read", "workloads:read",
 }
 ALLOWED_PERMISSIONS = {"knowledge:read", "knowledge:write", "workloads:propose"}
+ASSISTANT_SURFACE = "assistant"
+INFERENCE_SURFACE = "inference"
+AGENT_SURFACES = (ASSISTANT_SURFACE, INFERENCE_SURFACE)
 MAX_WEB_DOMAINS = 20
 UNSAFE_INSTRUCTIONS = re.compile(
     r"(ignore\s+(all\s+)?previous|system\s+prompt|reveal\s+(a\s+)?secret|"
     r"(password|token|secret|api[_ -]?key)\s*[:=]|sudo\b|shell\s+command)",
+    re.I,
+)
+
+
+# A skill's how-to *body* (an imported SKILL.md) is a technical markdown
+# document, not the short surfaced description. It legitimately contains
+# ``sudo``, ``--env HF_TOKEN=...`` and secret-hygiene advice such as "never
+# print API keys", so the strict screen above wrongly rejects genuine skills.
+# What matters when a bounded, read-only-agent-facing excerpt is untrusted is
+# imperative *override* and secret-*exfiltration* phrasing, not secret-shaped
+# tokens; screen the body for those and keep the strict screen on name and
+# description. Three top-level branches (override, secret exfiltration,
+# system-prompt exfiltration), one per row in ``tests/alternation_coverage.py``
+# so none can be deleted unmeasured.
+UNSAFE_INSTRUCTIONS_BODY = re.compile(
+    r"((?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:of\s+)?"
+    r"(?:your\s+|the\s+|these\s+|any\s+)?"
+    r"(?:previous|prior|above|earlier|preceding|foregoing|system)\s+"
+    r"(?:instruction|message|prompt|direction|rule|context|guidance|command|step|order)"
+    r"|(?:reveal|disclose|leak|exfiltrate)\s+(?:me\s+)?"
+    r"(?:the\s+|your\s+|a\s+|all\s+)?"
+    r"(?:secret|password|api[_ -]?key|credential|private\s+key)"
+    r"|(?:print|output|reveal|disclose|repeat|echo|dump|expose|leak|return|send|give|show)"
+    r"\s+(?:me\s+)?(?:the\s+|your\s+|its\s+|entire\s+|a\s+|all\s+)*"
+    r"(?:system\s+prompt|system\s+message|developer\s+(?:prompt|message)))",
     re.I,
 )
 
@@ -134,6 +162,7 @@ class CustomAgentStore:
                     enabled INTEGER NOT NULL,
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
+                    surface TEXT NOT NULL DEFAULT 'assistant',
                     UNIQUE(actor, name)
                 );
                 CREATE TABLE IF NOT EXISTS custom_agent_revisions (
@@ -173,6 +202,10 @@ class CustomAgentStore:
             if "connectors_json" not in columns:
                 connection.execute(
                     "ALTER TABLE custom_agents ADD COLUMN connectors_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if "surface" not in columns:
+                connection.execute(
+                    "ALTER TABLE custom_agents ADD COLUMN surface TEXT NOT NULL DEFAULT 'assistant'"
                 )
             connection.commit()
 
@@ -229,9 +262,16 @@ class CustomAgentStore:
             connectors = validate_connectors(value.get("connectors", []))
         except ConnectorPolicyError as error:
             raise CustomAgentError(str(error)) from error
+        surface = str(value.get("surface", ASSISTANT_SURFACE) or ASSISTANT_SURFACE).strip()
+        if surface not in AGENT_SURFACES:
+            raise CustomAgentError("Choose a supported agent surface.")
+        if surface == INFERENCE_SURFACE and permissions:
+            raise CustomAgentError(
+                "An inference agent runs read-only and may hold no acting permission."
+            )
         return (
             name, description, instructions, scopes, permissions,
-            read_collections, write_collection, web_access, connectors,
+            read_collections, write_collection, web_access, connectors, surface,
         )
 
     def _validate_credential_references(self, connectors, actor):
@@ -349,7 +389,7 @@ class CustomAgentStore:
     def create(self, actor: str, definition: Dict[str, Any]):
         (
             name, description, instructions, scopes, permissions,
-            read_collections, write_collection, web_access, connectors,
+            read_collections, write_collection, web_access, connectors, surface,
         ) = self._validated_definition(definition)
         self._validate_credential_references(connectors, actor)
         agent_id = "custom_" + uuid.uuid4().hex
@@ -361,6 +401,7 @@ class CustomAgentStore:
             "write_collection_id": write_collection,
             "web_access": web_access,
             "connectors": connectors,
+            "surface": surface,
         }
         try:
             with closing(self._connect()) as connection:
@@ -369,13 +410,13 @@ class CustomAgentStore:
                     INSERT INTO custom_agents
                     (id,actor,name,description,instructions,scopes_json,version,
                      enabled,created_at,updated_at,permissions_json,
-                     read_collections_json,write_collection_id,web_policy_json,connectors_json)
-                    VALUES(?,?,?,?,?,?,1,1,?,?,?,?,?,?,?)
+                     read_collections_json,write_collection_id,web_policy_json,connectors_json,surface)
+                    VALUES(?,?,?,?,?,?,1,1,?,?,?,?,?,?,?,?)
                     """,
                     (agent_id, actor, name, description, instructions,
                      json.dumps(scopes), now, now, json.dumps(permissions),
                      json.dumps(read_collections), write_collection,
-                     json.dumps(web_access), json.dumps(connectors)),
+                     json.dumps(web_access), json.dumps(connectors), surface),
                 )
                 connection.execute(
                     """
@@ -397,7 +438,7 @@ class CustomAgentStore:
         merged = {**current, **patch}
         (
             name, description, instructions, scopes, permissions,
-            read_collections, write_collection, web_access, connectors,
+            read_collections, write_collection, web_access, connectors, surface,
         ) = self._validated_definition(merged)
         self._validate_credential_references(connectors, actor)
         enabled = patch.get("enabled", current["enabled"])
@@ -422,6 +463,7 @@ class CustomAgentStore:
             "write_collection_id": write_collection,
             "web_access": web_access,
             "connectors": connectors,
+            "surface": surface,
         }
         try:
             with closing(self._connect()) as connection:
@@ -430,13 +472,13 @@ class CustomAgentStore:
                     UPDATE custom_agents SET name=?,description=?,instructions=?,
                     scopes_json=?,version=?,enabled=?,updated_at=?,
                     permissions_json=?,read_collections_json=?,write_collection_id=?
-                    ,web_policy_json=?,connectors_json=?
+                    ,web_policy_json=?,connectors_json=?,surface=?
                     WHERE id=? AND actor=?
                     """,
                     (name, description, instructions, json.dumps(scopes), version,
                      int(enabled), now, json.dumps(permissions),
                      json.dumps(read_collections), write_collection,
-                     json.dumps(web_access), json.dumps(connectors), agent_id, actor),
+                     json.dumps(web_access), json.dumps(connectors), surface, agent_id, actor),
                 )
                 if not enabled_only:
                     connection.execute(
@@ -473,6 +515,7 @@ class CustomAgentStore:
         # Revisions created before web policy existed must not inherit access.
         definition.setdefault("web_access", {"enabled": False, "allowed_domains": []})
         definition.setdefault("connectors", [])
+        definition.setdefault("surface", ASSISTANT_SURFACE)
         return {
             **definition,
             "id": agent_id,
@@ -491,6 +534,7 @@ class CustomAgentStore:
             for key in (
                 "name", "description", "instructions", "scopes", "permissions",
                 "read_collection_ids", "write_collection_id", "web_access", "connectors",
+                "surface",
             )
         }
         return self.update(agent_id, actor, patch)

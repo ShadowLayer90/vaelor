@@ -1,5 +1,4 @@
 import type { Device } from "../types";
-import { Icon } from "./Icon";
 import { StatusPill } from "./StatusPill";
 import { UnavailableValue } from "./ui";
 
@@ -49,57 +48,68 @@ export function PiPowerPanel({ device }: { device: Device | null }) {
   const mains = power?.input_voltage != null || power?.output_watts != null;
   const runtime = battery ? batteryRuntimeText(battery) : { reason: "No battery has been reported" };
   const charging = battery?.charging;
+  const batteryRead = Boolean(battery?.available && battery.percentage != null);
+  const pill = power?.undervoltage_now
+    ? { label: "Undervoltage", tone: "warning" as const }
+    : mains ? { label: "Mains connected", tone: "success" as const } : { label: "Checking", tone: "neutral" as const };
 
+  /* The SystemComputePi board's Power card: input, battery, and how long it would hold. */
   return (
-    <section className="data-panel enclosure-panel" aria-labelledby="pi-power-heading">
-      <div className="panel-heading">
-        <div>
+    <section aria-labelledby="pi-power-heading" className="card ui-card sys-card enclosure-panel">
+      <header className="ui-card__header">
+        <div className="ui-card__titles">
           <h2 id="pi-power-heading">Power</h2>
           <p>Mains, battery, and how long it would hold</p>
         </div>
-        <StatusPill
-          status={power?.undervoltage_now ? "degraded" : mains ? "healthy" : "neutral"}
-          label={power?.undervoltage_now ? "Undervoltage" : mains ? "Mains connected" : "Checking"}
-        />
+        <div className="ui-card__actions">
+          <StatusPill label={pill.label} reading={pill.tone === "neutral" ? "unread" : undefined} tone={pill.tone} />
+        </div>
+      </header>
+      <div className="ui-card__body sys-stack">
+        <dl className="sys-kv sys-kv--readings">
+          <div className="sys-kv__cell">
+            <dt>Input</dt>
+            <dd className="sys-kv__reading">
+              {power?.input_voltage != null
+                ? `${power.input_voltage.toFixed(2)} V`
+                : <UnavailableValue label="Input voltage unavailable" mark="—" reason="This appliance reports no input voltage measurement" />}
+            </dd>
+            <dd className="sys-kv__detail">
+              {power?.input_voltage == null
+                ? "This appliance reports no input voltage measurement"
+                : power.output_watts != null ? `${power.output_watts.toFixed(1)} W` : "Power draw not reported"}
+            </dd>
+          </div>
+          <div className="sys-kv__cell">
+            <dt>Battery</dt>
+            <dd className="sys-kv__reading">
+              {batteryRead
+                ? `${Math.round(battery!.percentage!)}%`
+                : <UnavailableValue label="Battery charge unavailable" mark="—" reason="No battery or UPS has been reported for this appliance" />}
+            </dd>
+            <dd className="sys-kv__detail">
+              {!batteryRead
+                ? "No battery or UPS has been reported for this appliance"
+                : charging === true ? "charging" : charging === false ? "on battery" : "charge direction not reported"}
+            </dd>
+          </div>
+          <div className="sys-kv__cell">
+            <dt>If mains is lost</dt>
+            <dd className="sys-kv__reading">
+              {"minutes" in runtime
+                ? formatRuntime(runtime.minutes)
+                : <><UnavailableValue className="sys-unread-dot" label="Battery runtime unknown" mark="" reason={runtime.reason} />Not known yet</>}
+            </dd>
+            <dd className="sys-kv__detail">{"minutes" in runtime ? "From an observed discharge" : "Battery runtime unknown"}</dd>
+          </div>
+        </dl>
+        {!("minutes" in runtime) && battery?.available && (
+          <p className="sys-note enclosure-panel__note">
+            {runtime.reason}. Vaelor will estimate the runtime once it has seen this appliance run on
+            battery. It will not guess one before then.
+          </p>
+        )}
       </div>
-      <dl className="enclosure-facts">
-        <div>
-          <dt><Icon name="bolt" size={15} />Input</dt>
-          <dd>
-            {power?.input_voltage != null
-              ? `${power.input_voltage.toFixed(2)} V${power.output_watts != null ? ` · ${power.output_watts.toFixed(1)} W` : ""}`
-              : <UnavailableValue
-                label="Input voltage unavailable"
-                reason="This appliance reports no input voltage measurement"
-              />}
-          </dd>
-        </div>
-        <div>
-          <dt><Icon name="bolt" size={15} />Battery</dt>
-          <dd>
-            {battery?.available && battery.percentage != null
-              ? `${Math.round(battery.percentage)}%${charging === true ? " · charging" : charging === false ? " · on battery" : ""}`
-              : <UnavailableValue
-                label="Battery charge unavailable"
-                reason="No battery or UPS has been reported for this appliance"
-              />}
-          </dd>
-        </div>
-        <div>
-          <dt><Icon name="activity" size={15} />If mains is lost</dt>
-          <dd>
-            {"minutes" in runtime
-              ? formatRuntime(runtime.minutes)
-              : <UnavailableValue label="Battery runtime unknown" reason={runtime.reason} />}
-          </dd>
-        </div>
-      </dl>
-      {!("minutes" in runtime) && battery?.available && (
-        <p className="enclosure-panel__note">
-          Vaelor will estimate the runtime once it has seen this appliance run on
-          battery. It will not guess one before then.
-        </p>
-      )}
     </section>
   );
 }

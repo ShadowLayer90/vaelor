@@ -52,21 +52,39 @@ export function ColorField({
     b: String(rgb.b),
   });
 
-  // Presets, the picker and a reload all change the colour from outside; adopt
-  // it unless the user is mid-edit with an equivalent value.
-  useEffect(() => {
+  /*
+   * Presets, the picker, a Revert and the first `/lighting` response all change
+   * the colour from outside; adopt it unless the user is mid-edit with an
+   * equivalent value.
+   *
+   * This adjusts state *during render* rather than in an effect, and that is
+   * the whole point. As an effect it ran after the commit, so a colour arriving
+   * from outside painted one frame in which the owning form had already moved —
+   * the save strip reading "All changes saved", the sliders and preview showing
+   * the appliance's values — while these four fields still displayed the
+   * previous draft. React re-renders a render-phase update before it commits,
+   * so the committed colour and the fields that present it can no longer
+   * disagree in any frame the DOM ever holds.
+   *
+   * It is a real defect, not a test artefact: the reader sees the old colour
+   * beside a strip claiming it is saved. It surfaced as an intermittent failure
+   * because Testing Library resolves `findBy*` either from the MutationObserver
+   * (which sees that first commit) or from its interval poll (which usually
+   * arrives after the second), so which one won depended on machine load.
+   */
+  const [syncedValue, setSyncedValue] = useState(value);
+  if (value !== syncedValue) {
+    setSyncedValue(value);
     const next = hexToRgb(value);
-    if (!next) return;
-    if (normalizeHex(hexDraft) !== normalizeHex(value)) setHexDraft(value.toUpperCase());
-    setChannelDrafts((current) => {
-      const committed = { r: String(next.r), g: String(next.g), b: String(next.b) };
+    if (next) {
+      if (normalizeHex(hexDraft) !== normalizeHex(value)) setHexDraft(value.toUpperCase());
       const unchanged = (["r", "g", "b"] as const).every(
-        (key) => clampChannel(Number(current[key])) === next[key] && channelError(current[key]) === "",
+        (key) => clampChannel(Number(channelDrafts[key])) === next[key]
+          && channelError(channelDrafts[key]) === "",
       );
-      return unchanged ? current : committed;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
+      if (!unchanged) setChannelDrafts({ r: String(next.r), g: String(next.g), b: String(next.b) });
+    }
+  }
 
   /*
    * #149: committing on every keystroke half-applied entries that were still

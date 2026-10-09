@@ -1,32 +1,31 @@
-import { type FormEvent, type ReactNode, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { useAssistantChat } from "../hooks/useAssistantChat";
 import { useLatestInView } from "../hooks/useLatestInView";
-import { continueProposedWorkload } from "../lib/workloadHandoff";
 import { destinations } from "../lib/destinations";
-import { timeAgo } from "../lib/format";
 import type { Session } from "../types";
 import { ActionReviewDialog, type ProposedJob } from "./ActionReviewDialog";
-import { AssistantApplicationHandoff } from "./AssistantApplicationHandoff";
+import { AssistantAskFirstRun, AssistantAskFirstRunLoading, AssistantAskSuggestions } from "./AssistantAskFirstRun";
+import { AssistantBarActions, useAssistantPlace } from "./assistantBar";
 import { AssistantCapabilityStrip } from "./AssistantCapabilityStrip";
 import { AssistantChatComposer, AssistantResponseStatus } from "./AssistantChatComposer";
+import { AssistantConversationBar } from "./AssistantConversationBar";
 import { AssistantEngineSummary } from "./AssistantEngineSummary";
-import { AssistantModelState } from "./AssistantModelState";
-import { AssistantAnswerDestinations, AssistantNextStep } from "./AssistantNextStep";
-import { AssistantProposalCard } from "./AssistantProposalCard";
+import { AssistantIntelligenceDrawer } from "./AssistantIntelligenceDrawer";
+import { AssistantMessage } from "./AssistantMessage";
+import { AssistantModelSleepNote, AssistantModelState } from "./AssistantModelState";
+import { ASSISTANT_TAB_PLACES } from "./AssistantNavigationTabs";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CopilotSetup, type CopilotSetupData } from "./CopilotSetup";
-import { ModalShell } from "./ModalShell";
-import { UpdateJobStatus } from "./UpdateJobStatus";
+import { NpuInstallDialog } from "./NpuInstallDialog";
 import { useNpuInstall } from "../hooks/useNpuInstall";
 import { useMachineProfile } from "../hooks/useMachineProfile";
 import { unknownMachine } from "../lib/machine";
 import { suggestedAssistantPrompts } from "../lib/assistantPrompts";
-import { performanceLine } from "../lib/performanceLine";
 import { Icon } from "./Icon";
 import { Button, Checkbox, Notice, Select, type NoticeSeverity } from "./ui";
 import { StatusPill } from "./StatusPill";
+import { NOT_ANSWERING } from "./ui/status";
 import { TextPromptDialog } from "./TextPromptDialog";
-import { assistantSourceLabel } from "./assistantPresentation";
 import type {
   AgentProfile,
   AgentRunProposal,
@@ -56,32 +55,46 @@ interface AgentAssistantPanelProps {
   checkStartedAt: number;
   durable: boolean;
   intelligenceChoice: IntelligenceChoice;
-  /** Reviewed memories in the appliance-wide store, or null when not readable. */
-  memoryCount: number | null;
+  /**
+   * Reviewed memories in the appliance-wide store: a number when read, `null`
+   * when it could not be read (the chip then says "Not read", never 0), and
+   * `undefined` for a reader who may not open Memory (the chip is not shown).
+   */
+  memoryCount: number | null | undefined;
   modelReady: boolean;
   /** False until `/agent/status` has answered at least once. */
   modelStatusResolved: boolean;
+  /**
+   * Why the Assistant's state could not be read (empty once a read lands). The
+   * loading card gives way to this and a Retry, never spinning on (VD-200).
+   */
+  statusReadError?: string;
+  onRetryStatus?: () => void;
   /** Non-empty when a model is configured but its endpoint did not answer. */
   modelUnreachableReason?: string;
+  /** Non-empty when the endpoint answers but offers no model to use. */
+  modelNotOfferedReason?: string;
   notice: string;
   /** Travels with `notice`: a blocked run must not read like a clean pass. */
   noticeSeverity: NoticeSeverity;
   problemArea: string;
   profiles: AgentProfile[];
   proposalReview: ProposalReview | null;
+  /** Why approving the reviewed action was refused (VD-189): shown inside the review. */
+  proposalError: string;
   session: Session;
   setupData: CopilotSetupData | null;
   showIntelligenceSetup: boolean;
   showSkills: boolean;
-  skillCount: number | null;
+  /** Active skills: a number when read, `null` when the read failed ("Not read"), `undefined` before a read or for a non-administrator (no chip). */
+  skillCount: number | null | undefined;
   skillsPanel: ReactNode;
   onApproveProposal: () => void;
   /** Stops waiting for an appliance check; the run itself continues server-side. */
   onCancelCheck: () => void;
-  onChooseIntelligence: (choice: "basic" | "local" | "provider", openSetup?: boolean) => void;
+  onChooseIntelligence: (choice: "basic" | "local", openSetup?: boolean) => void;
   onCloseIntelligenceSetup: () => void;
   onPrepareAgentRun: (proposal: AgentRunProposal) => void;
-  onRefresh: () => void;
   onSubmit: (event: FormEvent) => void;
   onToggleSkills: () => void;
   setDurable: (durable: boolean) => void;
@@ -106,12 +119,20 @@ interface AgentAssistantPanelProps {
  * asking somebody to categorise a problem before they have stated it is the
  * wrong order.
  */
+/** The page line that says why Change intelligence is off until the state is read. */
+const ASSISTANT_STATE_REASON_ID = "assistant-state-reason";
+
+/** The skills view's place in the top bar breadcrumb, after Ask's. */
+export const SKILLS_PLACE = "Skills";
+
 export function AgentAssistantPanel(props: AgentAssistantPanelProps) {
   const chat = props.chat;
   // Same on-device install + live status the Workloads flow uses, so the
   // first-run panel's "Set up the on-device Assistant" actually sets it up here
   // rather than navigating to Workloads and dropping the intent.
   const npuInstall = useNpuInstall(props.session, chat.setChatNotice);
+  // "Assistant / Ask about this machine", and "/ Skills" while the skills view is open (the AssistSkills board).
+  useAssistantPlace([ASSISTANT_TAB_PLACES.ask, ...(props.showSkills ? [SKILLS_PLACE] : [])]);
   const latestRef = useRef<HTMLDivElement>(null);
   const machine = useMachineProfile() ?? unknownMachine;
   /*
@@ -120,6 +141,19 @@ export function AgentAssistantPanel(props: AgentAssistantPanelProps) {
    * capability filter — see `lib/assistantPrompts.ts`.
    */
   const suggestedPrompts = suggestedAssistantPrompts(machine);
+  const [moreOpen, setMoreOpen] = useState(false);
+  /*
+   * The skills chip is drawn on top of the skills view and under the chat, so
+   * toggling it remounts the button and focus fell to the page body. A toggle
+   * from the chip puts focus on the chip that is drawn next (VD-200 review).
+   */
+  const panelRef = useRef<HTMLDivElement>(null);
+  const skillsToggled = useRef(false);
+  useEffect(() => {
+    if (!skillsToggled.current) return;
+    skillsToggled.current = false;
+    panelRef.current?.querySelector<HTMLElement>(".as-strip button[aria-expanded]")?.focus();
+  }, [props.showSkills]);
   /*
    * Whether the refinement is showing. Collapsing it used to hide a ticked
    * "Keep this as a check I can re-run" while leaving the submit button reading
@@ -143,65 +177,105 @@ export function AgentAssistantPanel(props: AgentAssistantPanelProps) {
     ],
     { enabled: chat.chatMessages.length > 0 },
   );
-  const currentConversation = chat.conversations.find((item) => item.id === chat.conversationId);
-  const visibleConversations = chat.conversations.filter(
-    (conversation) => conversation.archived === (chat.conversationView === "archive"),
-  );
   const applianceProfiles = props.profiles.filter((item) => !item.custom);
   const selectedArea = applianceProfiles.find((item) => item.id === props.problemArea);
   const runsCheck = props.durable || props.problemArea !== AUTOMATIC_PROBLEM_AREA;
   const questionTooLong = chat.chatInput.trim().length > 4000;
   const areaUnavailable = Boolean(props.problemArea) && selectedArea?.operational === false;
   const composerBlocked = questionTooLong || areaUnavailable;
+  const firstRun = !props.agentStatus?.configured && props.intelligenceChoice === "";
+
+  /*
+   * Nothing is claimed about the appliance until the appliance has answered.
+   * `/agent/status` resolves about two seconds after paint, so an
+   * unconditional pill opened with an amber MODEL REQUIRED and then flipped to
+   * green: the first thing the product said to a beginner was a false alarm
+   * about their own machine.
+   *
+   * The pill NAMES the model that backs answers rather than making a generic
+   * "Evidence-backed" claim: an owner asked to be told which LLM is answering,
+   * and a named model is a truthful, checkable statement where the badge was an
+   * assertion about the product. The raw catalog tag leads (e.g. "qwen3.5:4b");
+   * the friendlier capability label is the fallback only when the tag is
+   * unknown. When ready but neither is known the pill says "Model connected",
+   * never "Evidence-backed" - the generic claim the owner rejected must not
+   * return through the fallback. With no model connected the pill says exactly
+   * that, degraded. "Checking…" and "Model unreachable" stay: they are honest
+   * states the model name must not paper over.
+   */
+  const modelPill = (
+    <StatusPill
+      reading={!props.modelStatusResolved && props.statusReadError ? "unread" : undefined}
+      status={!props.modelStatusResolved ? "neutral" : props.modelUnreachableReason || props.modelNotOfferedReason ? "degraded" : props.modelReady ? "healthy" : "degraded"}
+      label={
+        !props.modelStatusResolved
+          ? (props.statusReadError ? "Not read" : "Checking…")
+          : props.modelUnreachableReason
+            ? "Model unreachable"
+            : props.modelNotOfferedReason
+              ? "No model available"
+              : props.modelReady
+                ? (props.agentStatus?.model || props.agentStatus?.capability?.label || "Model connected")
+                : "No model connected"
+      }
+    />
+  );
+  // The Active intelligence card's own word for the same state, in the drawer.
+  const answeringPill = props.modelUnreachableReason || props.modelNotOfferedReason
+    ? <StatusPill label={NOT_ANSWERING.label} tone={NOT_ANSWERING.tone} />
+    : props.modelReady
+      ? <StatusPill label="Answering" tone="success" />
+      : <StatusPill label="Built-in help" tone="neutral" />;
+
+  const capabilityStrip = (
+    <AssistantCapabilityStrip
+      memory={props.memoryCount === undefined ? undefined : { count: props.memoryCount, href: "#/memory" }}
+      model={props.agentStatus?.model || props.agentStatus?.provider || "No model selected"}
+      scope={{ label: "This machine", detail: "Live readings only" }}
+      skills={props.skillCount === undefined ? undefined : {
+        count: props.skillCount,
+        expanded: props.showSkills,
+        onToggle: () => { skillsToggled.current = true; props.onToggleSkills(); },
+      }}
+    />
+  );
 
   return (
-    <div id="ask-panel" role="tabpanel">
-      <div className="page-heading agent-heading">
-        <div>
-          {/*
-            * One canonical name per destination: the heading names the place,
-            * and what you do here is subordinate to it. Three competing names
-            * for the same screen is what made this unnavigable for beginners.
-            */}
-          <h1>{destinations.assistant.name}</h1>
-          <p>{destinations.assistant.descriptor}.</p>
-        </div>
-        {/*
-          * Nothing is claimed about the appliance until the appliance has
-          * answered. `/agent/status` resolves about two seconds after paint, so
-          * an unconditional pill opened with an amber MODEL REQUIRED and then
-          * flipped to green: the first thing the product said to a beginner was
-          * a false alarm about their own machine.
-          */}
-        {/*
-          * The pill NAMES the model that backs answers rather than making a
-          * generic "Evidence-backed" claim: an owner asked to be told which LLM
-          * is answering, and a named model is a truthful, checkable statement
-          * where the badge was an assertion about the product. The raw catalog
-          * tag leads (e.g. "qwen3.5:4b"); the friendlier capability label is the
-          * fallback only when the tag is unknown. When ready but neither is
-          * known the pill says "Model connected", never "Evidence-backed" - the
-          * generic claim the owner rejected must not return through the
-          * fallback. With no model connected the pill says exactly that,
-          * degraded. "Checking…" and "Model unreachable" stay: they are honest
-          * states the model name must not paper over.
-          */}
-        <StatusPill
-          status={!props.modelStatusResolved ? "neutral" : props.modelUnreachableReason ? "degraded" : props.modelReady ? "healthy" : "degraded"}
-          label={
-            !props.modelStatusResolved
-              ? "Checking…"
-              : props.modelUnreachableReason
-                ? "Model unreachable"
-                : props.modelReady
-                  ? (props.agentStatus?.model || props.agentStatus?.capability?.label || "Model connected")
-                  : "No model connected"
-          }
-        />
-      </div>
+    <div className="as-panel as-ask" id="ask-panel" ref={panelRef} role="tabpanel">
+      {/*
+        * One canonical name per destination. The board draws no heading on Ask
+        * - the top bar names the page - so the level-one heading is for the
+        * reader who navigates by headings.
+        */}
+      <h1 className="sr-only">{destinations.assistant.name}</h1>
+      {/* The limit that separates this destination from AI Chat; the top bar's "Ask about this machine" says its first half. */}
+      <p className="sr-only">{destinations.assistant.descriptor}.</p>
+      <AssistantBarActions>
+        {modelPill}
+        {/* Change intelligence opens the drawer; the first run is its own choice, so it is not offered there. */}
+        {props.intelligenceChoice !== "" && (
+          <Button
+            aria-expanded={props.showIntelligenceSetup}
+            disabled={props.agentStatus === null}
+            // Its reason is the page's own line below (the failure, or the loading
+            // card), not a second line in the top-bar slot, which wrapped the bar.
+            aria-describedby={props.agentStatus === null ? ASSISTANT_STATE_REASON_ID : undefined}
+            onClick={() => props.setShowIntelligenceSetup((current) => !current)}
+            type="button"
+          >
+            Change intelligence
+          </Button>
+        )}
+      </AssistantBarActions>
 
-      {props.modelStatusResolved && props.agentStatus?.model_facts && (
-        <AssistantModelState model={props.agentStatus.model_facts} />
+      {props.modelNotOfferedReason && (
+        <Notice severity="warning">
+          <span>
+            <strong>The model server has no model to answer with.</strong> {props.modelNotOfferedReason}
+            {" "}Appliance checks still run using built-in read-only diagnostics. Load a model on
+            that server, then ask again.
+          </span>
+        </Notice>
       )}
 
       {props.modelUnreachableReason && (
@@ -221,446 +295,260 @@ export function AgentAssistantPanel(props: AgentAssistantPanelProps) {
         </Notice>
       )}
 
-      {!props.agentStatus?.configured && props.intelligenceChoice === "" && props.setupData && (
-        <section className="assistant-first-run" aria-labelledby="assistant-first-run-title">
-          <div className="assistant-first-run__intro">
-            <span className="assistant-first-run__icon"><Icon name="bolt" size={28} /></span>
-            <div>
-              <span className="page-eyebrow">First-time assistant setup</span>
-              <h2 id="assistant-first-run-title">How smart should Vaelor be?</h2>
-              <p>Choose once now. You can change this later without losing chats or appliance settings.</p>
-            </div>
-          </div>
-          <div className="assistant-first-run__choices">
-            <Button
-              className="assistant-first-run__choice assistant-first-run__choice--recommended"
-              disabled={props.busy || !props.setupData.recommendation.can_install}
-              onClick={() => props.onChooseIntelligence("local")}
-              type="button"
-              variant="quiet"
-            >
-              <span>Recommended</span>
-              <strong>Install {props.setupData.recommendation.primary.name}</strong>
-              {/*
-                * The size of the model named beside it. This read "about
-                * 1.1 GB" whatever was recommended, which is the sentence that
-                * made *"Install Qwen3 32B / about 1.1 GB"* internally
-                * contradictory on the Z2 — a 32B at Q4 is about 20 GB, so the
-                * size was the only honest figure of the three shown. It is the
-                * catalog entry's own note now, derived from the byte count the
-                * fit check divides by, so the name and the size cannot part
-                * company again.
-                */}
-              <small>Private local answers · {props.setupData.recommendation.primary.size_note} · reviewed before download</small>
-            </Button>
-            <Button
-              className="assistant-first-run__choice"
-              disabled={props.busy || props.session.user.role !== "administrator"}
-              onClick={() => props.onChooseIntelligence("provider")}
-              type="button"
-              variant="quiet"
-            >
-              <span>Bring your own AI</span>
-              <strong>Connect another model</strong>
-              <small>OpenAI, LM Studio, Lemonade, llama.cpp, or another compatible endpoint</small>
-            </Button>
-            <Button
-              className="assistant-first-run__choice"
-              disabled={props.busy}
-              onClick={() => props.onChooseIntelligence("basic")}
-              type="button"
-              variant="quiet"
-            >
-              <span>No download</span>
-              <strong>Use built-in basic mode</strong>
-              <small>Code-based live appliance answers and diagnostics; broader questions stay limited</small>
-            </Button>
-          </div>
-        </section>
-      )}
-
-      {props.intelligenceChoice !== "" && (
-        <AssistantEngineSummary
-          onToggle={() => props.setShowIntelligenceSetup((current) => !current)}
-          settingsOpen={props.showIntelligenceSetup}
-          status={props.agentStatus}
+      {!props.modelStatusResolved && (props.statusReadError ? (
+        <Notice severity="danger">
+          <span className="ar-notice-row">
+            <span id={ASSISTANT_STATE_REASON_ID}><strong>The Assistant's state could not be read.</strong> {props.statusReadError}</span>
+            {props.onRetryStatus && <Button onClick={props.onRetryStatus} type="button">Retry</Button>}
+          </span>
+        </Notice>
+      ) : <AssistantAskFirstRunLoading labelId={ASSISTANT_STATE_REASON_ID} />)}
+      {firstRun && props.setupData && (
+        <AssistantAskFirstRun
+          busy={props.busy}
+          onChoose={(choice) => props.onChooseIntelligence(choice)}
+          setupData={props.setupData}
         />
       )}
 
-      {props.showIntelligenceSetup && props.setupData && (
-        <CopilotSetup
-          busy={props.busy}
-          data={props.setupData}
-          onChooseLocal={() => {
-            props.onChooseIntelligence("local", false);
-            props.setShowIntelligenceSetup(false);
-            chat.setChatNotice("Opening Workloads so you can review a hardware-matched local model.");
-            window.dispatchEvent(new CustomEvent("pironman:navigate", { detail: "workloads" }));
-          }}
-          onInstallNpuRelease={(tag) => {
-            // Start the on-device install right here and show its live status,
-            // rather than navigating to Workloads and making the user find and
-            // click the same control again.
-            props.onChooseIntelligence("local", false);
-            props.setShowIntelligenceSetup(false);
-            npuInstall.start(tag);
-          }}
+      {props.showIntelligenceSetup && (
+        <AssistantIntelligenceDrawer
+          active={(
+            <AssistantEngineSummary pill={answeringPill} status={props.agentStatus}>
+              {props.agentStatus?.model_facts && <AssistantModelState model={props.agentStatus.model_facts} />}
+            </AssistantEngineSummary>
+          )}
           onClose={props.onCloseIntelligenceSetup}
-          onIntelligenceConnected={() => {
-            props.onChooseIntelligence("provider", false);
-            props.onRefresh();
-          }}
-          session={props.session}
+          setup={props.setupData ? (
+            <CopilotSetup
+              busy={props.busy}
+              data={props.setupData}
+              onChooseLocal={() => {
+                props.onChooseIntelligence("local", false);
+                props.setShowIntelligenceSetup(false);
+                chat.setChatNotice(`Opening ${destinations.workloads.name} so you can review a hardware-matched local model.`);
+                window.dispatchEvent(new CustomEvent("pironman:navigate", { detail: "workloads" }));
+              }}
+              onInstallNpuRelease={(tag) => {
+                // Start the on-device install right here and show its live status,
+                // rather than navigating to Workloads and making the user find and
+                // click the same control again.
+                props.onChooseIntelligence("local", false);
+                props.setShowIntelligenceSetup(false);
+                npuInstall.start(tag);
+              }}
+              onClose={props.onCloseIntelligenceSetup}
+              onChooseBasic={() => props.onChooseIntelligence("basic")}
+              session={props.session}
+              showHeader={false}
+            />
+          ) : (
+            <Notice severity="info" standing>The setup choices could not be read. Close this and open it again to retry.</Notice>
+          )}
         />
       )}
 
       {npuInstall.job && (
-        <ModalShell labelledBy="npu-install-panel-title" onClose={npuInstall.dismiss}>
-          <section aria-labelledby="npu-install-panel-title">
-            <div className="model-catalog__header">
-              <div>
-                <span className="page-eyebrow">On-device Assistant</span>
-                <h2 id="npu-install-panel-title">Setting up the on-device Assistant</h2>
-                <p>Vaelor is preparing the on-device model (downloading it first if it is not already on the machine), verifying it, and starting the Assistant on the neural processor.</p>
-              </div>
-              <Button variant="quiet" onClick={npuInstall.dismiss}>Close</Button>
-            </div>
-            <UpdateJobStatus job={npuInstall.job} onDismiss={npuInstall.dismiss} />
-          </section>
-        </ModalShell>
+        <NpuInstallDialog job={npuInstall.job} onDismiss={npuInstall.dismiss} onRetryRead={npuInstall.retryRead} readLost={npuInstall.readLost} />
       )}
 
-      <section className="assistant-chat" aria-labelledby="assistant-chat-title">
-        <div className="assistant-chat__toolbar">
-          <div>
-            <strong>{currentConversation?.title || "New chat"}</strong>
-            <small><Icon name="database" /> Saved automatically on this Vaelor node</small>
-          </div>
-          <div className="assistant-chat__toolbar-actions">
-            <Button onClick={chat.startNewChat} type="button" variant="quiet">New chat</Button>
-            <Button
-              aria-expanded={chat.showChatHistory}
-              onClick={() => chat.setShowChatHistory(!chat.showChatHistory)}
-              type="button"
-              variant="quiet"
-            >
-              {/*
-                * Not "History". The tablist above owns that word for the run
-                * archive, and two controls with one name on one screen sent a
-                * reader looking for a prepared agent run into their saved
-                * conversations. The tab name is the structural one, so this is
-                * the one that changes.
-                */}
-              Past chats{chat.conversations.length ? " (" + chat.conversations.length + ")" : ""}
-            </Button>
-            {chat.conversationId && (
-              <details className="assistant-chat__menu">
-                <summary className="ui-button ui-button--quiet">More</summary>
-                <Button onClick={chat.renameConversation} type="button" variant="quiet">Rename</Button>
-                <Button onClick={() => void chat.exportConversation()} type="button" variant="quiet">Export Markdown</Button>
-                <Button onClick={() => void chat.archiveConversation(!currentConversation?.archived)} type="button" variant="quiet">{currentConversation?.archived ? "Restore chat" : "Archive chat"}</Button>
-                <Button className="danger-text" onClick={() => chat.setConfirmChatDelete(true)} type="button" variant="danger">Delete chat</Button>
-              </details>
+      {props.showSkills ? (
+        /*
+         * Skills is a view inside Ask (the AssistSkills board): the chips stay
+         * on top, so the "Hide" that opened it is the way back, and the
+         * conversation waits underneath unchanged.
+         */
+        <>
+          {capabilityStrip}
+          {props.skillsPanel}
+        </>
+      ) : (
+        <section
+          // Named by whichever heading is drawn: the welcome while the transcript
+          // is empty, else the conversation bar's title. Keyed on firstRun, the
+          // first run pointed at a bar that was not drawn (VD-200 review).
+          aria-labelledby={chat.chatMessages.length === 0 ? "assistant-chat-title" : "assistant-chat-conversation"}
+          className="as-chat"
+        >
+          {/* The welcome heading names the chat only while it is shown; an open
+              conversation is named by its own title (UX-A4: the section once
+              pointed at a heading that was gone). */}
+          {(chat.chatMessages.length > 0 || chat.conversations.length > 0 || !firstRun) && (
+            <AssistantConversationBar chat={chat} moreOpen={moreOpen} setMoreOpen={setMoreOpen} />
+          )}
+          {/*
+            * No inner scroller and no fixed height. The page scrolls; the
+            * transcript is as tall as the answer it is showing.
+            */}
+          <div aria-live="polite" className="as-stream" role="log">
+            {chat.chatMessages.length === 0 && (
+              <AssistantAskSuggestions onPick={chat.setChatInput} prompts={suggestedPrompts} />
             )}
+            {chat.chatMessages.map((item, index) => (
+              <AssistantMessage
+                busy={props.busy}
+                item={item}
+                key={item.id ?? `${item.role}-${index}`}
+                onPrepareAgentRun={props.onPrepareAgentRun}
+                onReview={props.setProposalReview}
+              />
+            ))}
+            <AssistantResponseStatus
+              active={chat.chatRequestActive}
+              onCancel={chat.cancelRequest}
+              startedAt={chat.requestStartedAt}
+            />
+            {/*
+              * A question whose answer was still being written when the page
+              * reloaded. The appliance finishes it server-side, so the transcript
+              * showed the question with no answer, no spinner and no error until
+              * the reader navigated away and back — and in the meantime they
+              * re-asked, leaving two identical questions and two answers.
+              */}
+            {chat.awaitingAnswer && !chat.chatRequestActive && (
+              <p className="as-wait" role="status">
+                Your last question is still being answered on this appliance. The reply appears
+                here as soon as it lands — you do not need to ask again.
+              </p>
+            )}
+            {/* The end of the transcript, and the thing "Jump to latest" jumps to
+                now that the page rather than the stream is the scroller. */}
+            <div className="as-stream__anchor" ref={latestRef} />
           </div>
-        </div>
-        {chat.showChatHistory && (
-          <div className="assistant-chat__history" aria-label="Saved chats">
-            <div>
-              <strong>{chat.conversationView === "archive" ? "Archived chats" : "Saved chats"}</strong>
-              <small>{chat.conversationView === "archive" ? "Open, export, restore, or delete an archived chat." : "Select one to continue where you left off."}</small>
-              <Button
-                onClick={() => chat.setConversationView(chat.conversationView === "active" ? "archive" : "active")}
-                type="button"
-                variant="quiet"
-              >
-                {chat.conversationView === "active" ? "View archive" : "Back to saved chats"}
+          {!following && chat.chatMessages.length > 0 && (
+            <div className="as-jump">
+              <Button onClick={() => scrollToLatest("smooth")} type="button">
+                <Icon name="chevron" size={16} /> Jump to latest
               </Button>
-            </div>
-            {visibleConversations.length ? visibleConversations.map((conversation) => (
-              <Button
-                aria-current={conversation.id === chat.conversationId ? "true" : undefined}
-                className="assistant-chat__history-item"
-                key={conversation.id}
-                onClick={() => void chat.openConversation(conversation)}
-                type="button"
-                variant="quiet"
-              >
-                <span><strong>{conversation.title}</strong><small>{conversation.message_count} messages · {timeAgo(conversation.updated_at * 1000)}</small></span>
-                <Icon name="chevron" />
-              </Button>
-            )) : <p>{chat.conversationView === "archive" ? "No archived chats." : "No saved chats yet. Your first message starts one automatically."}</p>}
-          </div>
-        )}
-        {/*
-          * No inner scroller and no fixed height. The page scrolls; the
-          * transcript is as tall as the answer it is showing.
-          */}
-        <div className="assistant-chat__stream" role="log" aria-live="polite">
-          {chat.chatMessages.length === 0 && (
-            <div className="assistant-chat__welcome">
-              <span><Icon name="bolt" /></span>
-              <div>
-                <h2 id="assistant-chat-title">What do you want to know?</h2>
-                {/*
-                  * These are the only invitation the machine-reading tools
-                  * get. The Assistant can read both compute engines and the
-                  * suggestions were built around the enclosure, so on a
-                  * workstation nothing on screen led anywhere near them.
-                  */}
-                <p>Try {suggestedPrompts.map((prompt, index) => (
-                  <span key={prompt}>{index ? (index === suggestedPrompts.length - 1 ? ", or " : ", ") : ""}“{prompt}”</span>
-                ))}</p>
-              </div>
             </div>
           )}
-          {chat.chatMessages.map((item, index) => (
-            <article
-              className={`assistant-message assistant-message--${item.role}${item.metadata?.stopped ? " assistant-message--stopped" : ""}`}
-              key={item.id ?? `${item.role}-${index}`}
-            >
-              <div className="assistant-message__meta">
-                {/*
-                  * A stopped response was not Vaelor speaking, so it is not
-                  * signed as if it were. The byline is the terminal state.
-                  */}
-                <strong>{item.role === "user" ? "You" : item.metadata?.stopped ? "Response stopped" : "Vaelor"}</strong>
-                {item.metadata?.source && <span>{assistantSourceLabel(item.metadata.source, props.agentStatus)}</span>}
+
+          <AssistantChatComposer
+            blocked={composerBlocked}
+            busy={chat.chatBusy || props.busy}
+            input={chat.chatInput}
+            onChange={chat.setChatInput}
+            onSubmit={props.onSubmit}
+            submitLabel={runsCheck ? "Run this check" : "Ask Vaelor"}
+          >
+            {/*
+              * The armed mode, stated where the disclosure cannot hide it.
+              *
+              * Collapsing the refinement left the checkbox ticked out of sight
+              * while the button still read "Run this check": the next ordinary
+              * question became an approval-gated run with nothing on screen
+              * saying so. The arming is only ever invisible if it is not armed.
+              */}
+            {runsCheck && !refinementOpen && (
+              <div className="as-armed" role="status">
+                <span>
+                  <strong>This will run as an appliance check, not a chat answer.</strong>
+                  {" "}It needs your approval and its evidence is kept under History
+                  {selectedArea ? ` · ${selectedArea.name}` : ""}
+                  {props.durable ? " · saved to re-run" : ""}.
+                </span>
+                <Button
+                  className="as-btn-ghost"
+                  onClick={() => { props.setDurable(false); props.setProblemArea(AUTOMATIC_PROBLEM_AREA); }}
+                  type="button"
+                >
+                  Ask a normal question instead
+                </Button>
               </div>
-              {item.content.split("\n").filter(Boolean).map((paragraph, paragraphIndex) => (
-                <p key={paragraphIndex}>{paragraph}</p>
-              ))}
-              {item.role === "assistant" && performanceLine(item.metadata?.performance) ? (
-                <p className="assistant-message__performance">
-                  <small>{performanceLine(item.metadata?.performance)}</small>
-                </p>
-              ) : null}
-              {item.metadata?.evidence?.length ? (
-                <details className="assistant-evidence">
-                  <summary>Evidence used · {item.metadata.evidence.length} source{item.metadata.evidence.length === 1 ? "" : "s"}</summary>
-                  <ul>
-                    {item.metadata.evidence.map((evidence) => (
-                      <li key={`${evidence.source}-${evidence.summary}`}>
-                        <strong>{evidence.source.replaceAll(".", " ")}</strong>
-                        <span>{evidence.summary}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              ) : null}
-              {item.metadata?.suggested_actions?.length ? (
-                <div className="assistant-next-actions">
-                  <strong>Suggested next steps</strong>
-                  <ul>{item.metadata.suggested_actions.map((action) => <li key={action}><AssistantNextStep action={action} /></li>)}</ul>
-                </div>
-              ) : null}
-              {/*
-                * The routes the answer's destinations resolve to. The
-                * suggested steps above link a place they happen to name in a
-                * sentence; this is the answer's own machine-readable list, so
-                * a redirect that names AI Chat only in its prose — which is
-                * every model-authored refusal — still reaches it.
-                */}
-              <AssistantAnswerDestinations steps={item.metadata?.next_steps} />
-              {item.metadata?.proposed_job && !item.metadata?.application_intent ? (
-                <AssistantProposalCard
-                  busy={props.busy}
-                  job={item.metadata.proposed_job}
-                  onContinue={() => continueProposedWorkload(item.metadata!.proposed_job!)}
-                  onReview={() => props.setProposalReview({
-                    job: item.metadata!.proposed_job!,
-                    summary: item.content,
-                    evidence: item.metadata?.evidence ?? [],
-                    suggestedActions: item.metadata?.suggested_actions ?? [],
-                  })}
+            )}
+            {/*
+              * The refinement, not a mode switch, and it sits after the
+              * question. Both controls default to the do-nothing value; asking a
+              * beginner to categorise a problem they had not stated yet was the
+              * wrong order. The durable record is the best artefact this product
+              * produces, so it stays one click away rather than on a separate
+              * screen.
+              */}
+            <details
+              className="as-refinement"
+              onToggle={(event) => setRefinementOpen(event.currentTarget.open)}
+            >
+              <summary>
+                <span>{runsCheck ? "Save this as a check I can re-run · on" : "Save this as a check I can re-run"}</span>
+                <Icon name="chevron" size={16} />
+              </summary>
+              <div className="as-refinement__grid">
+                <Select
+                  hint="Optional. Automatic lets Vaelor answer from live readings."
+                  id="assistant-problem-area"
+                  label="Problem area"
+                  onChange={(event) => props.setProblemArea(event.target.value)}
+                  value={props.problemArea}
+                >
+                  <option value={AUTOMATIC_PROBLEM_AREA}>Automatic</option>
+                  {applianceProfiles.map((item) => (
+                    <option disabled={!item.operational} key={item.id} value={item.id}>
+                      {item.name}{item.operational ? "" : " unavailable"}
+                    </option>
+                  ))}
+                </Select>
+                <Checkbox
+                  checked={props.durable}
+                  hint="Saves the question, its evidence, and its result as a run you can approve and repeat."
+                  id="assistant-durable"
+                  label="Keep this as a check I can re-run"
+                  onChange={(event) => props.setDurable(event.target.checked)}
                 />
-              ) : null}
-              {item.metadata?.application_intent ? (
-                <AssistantApplicationHandoff intent={item.metadata.application_intent} />
-              ) : null}
-              {item.metadata?.proposed_agent_task ? (
-                <section className="assistant-proposal-card" aria-label="Custom agent run proposal">
-                  <div>
-                    <small>Custom agent · version {item.metadata.proposed_agent_task.profile_version}</small>
-                    <strong>{item.metadata.proposed_agent_task.profile_name}</strong>
-                    <p>{item.metadata.proposed_agent_task.task}</p>
-                    <small>{item.metadata.proposed_agent_task.capabilities.length ? `Granted capabilities: ${item.metadata.proposed_agent_task.capabilities.join(", ")}` : "No appliance capabilities granted"}</small>
-                    <small>{item.metadata.proposed_agent_task.integrations?.length ? `API integrations: ${item.metadata.proposed_agent_task.integrations.join(", ")}` : "No API integrations granted"}</small>
-                  </div>
-                  <Button disabled={props.busy} onClick={() => props.onPrepareAgentRun(item.metadata!.proposed_agent_task!)} type="button" variant="primary">Review agent run</Button>
-                </section>
-              ) : null}
-            </article>
-          ))}
+              </div>
+              <p className="as-small as-muted">
+                {runsCheck
+                  ? props.durable
+                    ? `Runs as a saved appliance check on ${selectedArea?.name ?? "system health"}. You approve it before it runs, and its evidence stays under History.`
+                    : `Runs a one-off appliance check on ${selectedArea?.name ?? "system health"} and records its evidence under History.`
+                  : "Answers in this chat from live readings. Any change it proposes still needs a separate approval."}
+              </p>
+            </details>
+          </AssistantChatComposer>
+          {/* Why the first question after a quiet spell is slow, stated where it is asked (VD-073; owner, 2026-10-07). */}
+          {props.modelStatusResolved && <AssistantModelSleepNote model={props.agentStatus?.model_facts} />}
+          {/*
+            * Scoped to the check itself, not to every busy state: an appliance
+            * check takes about a minute and the button label alone gave no sign
+            * of life, but "Checking this appliance" over a skill review is a lie.
+            */}
           <AssistantResponseStatus
-            active={chat.chatRequestActive}
-            onCancel={chat.cancelRequest}
-            startedAt={chat.requestStartedAt}
+            active={props.checkRunning}
+            label="Checking this appliance"
+            onCancel={props.onCancelCheck}
+            startedAt={props.checkStartedAt}
           />
           {/*
-            * A question whose answer was still being written when the page
-            * reloaded. The appliance finishes it server-side, so the transcript
-            * showed the question with no answer, no spinner and no error until
-            * the reader navigated away and back — and in the meantime they
-            * re-asked, leaving two identical questions and two answers.
+            * The messages about the question sit under the question box, never
+            * above it (the AssistAnswer board).
+            *
+            * A banner inserted above used to push the box down by its own height
+            * and pull it back up again when it was replaced — so a reader who
+            * clicked where the box had just been typed a whole sentence into the
+            * hint strip under it and lost every character. Nothing that appears
+            * and disappears on its own is allowed above the composer. Validation
+            * is here too, never inside the closed disclosure, where the one
+            * thing that could explain a disabled button would be folded away.
             */}
-          {chat.awaitingAnswer && !chat.chatRequestActive && (
-            <p className="assistant-resumed-wait" role="status">
-              Your last question is still being answered on this appliance. The reply appears
-              here as soon as it lands — you do not need to ask again.
-            </p>
-          )}
           {chat.awaitingAnswerLost && (
-            <p className="assistant-resumed-wait assistant-resumed-wait--lost" role="status">
+            <Notice severity="warning">
               No answer arrived for your last question, and Vaelor has stopped waiting for it.
               Nothing was changed. Ask it again when you are ready.
-            </p>
+            </Notice>
           )}
-          {/* The end of the transcript, and the thing "Jump to latest" jumps to
-              now that the page rather than the stream is the scroller. */}
-          <div className="assistant-chat__latest-anchor" ref={latestRef} />
-        </div>
-        {!following && chat.chatMessages.length > 0 && (
-          <div className="assistant-chat__resume">
-            <Button onClick={() => scrollToLatest("smooth")} type="button" variant="quiet">
-              <Icon name="chevron" /> Jump to latest
-            </Button>
-          </div>
-        )}
-        {/*
-          * Validation lives beside the composer, never inside the disclosure.
-          *
-          * Both sentences were moved into the closed "Save this as a check"
-          * details, so the reader was left with a disabled button and no
-          * readable reason: the one thing that could explain the dead end was
-          * folded behind a control they had no reason to open.
-          */}
-        {questionTooLong && <p className="field-error" role="alert">Keep the question to 4,000 characters or fewer.</p>}
-        {areaUnavailable && <p className="field-error" role="alert">That problem area is unavailable on this appliance. Choose another, or leave it on Automatic.</p>}
+          {questionTooLong && <Notice severity="danger">Keep the question to 4,000 characters or fewer.</Notice>}
+          {areaUnavailable && <Notice severity="danger">That problem area is unavailable on this appliance. Choose another, or leave it on Automatic.</Notice>}
+          {chat.chatNotice && <Notice severity={chat.chatNoticeRefused ? "danger" : "info"}>{chat.chatNotice}</Notice>}
+          {/*
+            * The skills view reports the same `notice` with a link to the
+            * proposal it just created, so it is shown here only while that view
+            * is closed.
+            */}
+          {props.notice && <Notice severity={props.noticeSeverity}>{props.notice}</Notice>}
+          {capabilityStrip}
+        </section>
+      )}
 
-        <AssistantChatComposer
-          blocked={composerBlocked}
-          busy={chat.chatBusy || props.busy}
-          input={chat.chatInput}
-          onChange={chat.setChatInput}
-          onSubmit={props.onSubmit}
-          submitLabel={runsCheck ? "Run this check" : "Ask Vaelor"}
-        />
-        {/*
-          * The refinement, not a mode switch, and it sits after the question.
-          *
-          * Both controls default to the do-nothing value, and both used to sit
-          * above the composer — so the first thing the product asked a beginner
-          * to do was categorise a problem they had not stated yet. Same
-          * controls, same copy, same behaviour; they are simply downstream of
-          * the sentence they refine. The durable record is the best artefact
-          * this product produces, so it stays one click away rather than on a
-          * separate screen.
-          */}
-        {/*
-          * The armed mode, stated where the disclosure cannot hide it.
-          *
-          * Collapsing the refinement left the checkbox ticked out of sight while
-          * the button still read "Run this check": the next ordinary question
-          * became an approval-gated run with nothing on screen saying so. The
-          * arming is only ever invisible if it is not armed.
-          */}
-        {runsCheck && !refinementOpen && (
-          <p className="assistant-refinement-armed" role="status">
-            <span>
-              <strong>This will run as an appliance check, not a chat answer.</strong>
-              {" "}It needs your approval and its evidence is kept under History
-              {selectedArea ? ` · ${selectedArea.name}` : ""}
-              {props.durable ? " · saved to re-run" : ""}.
-            </span>
-            <Button
-              onClick={() => { props.setDurable(false); props.setProblemArea(AUTOMATIC_PROBLEM_AREA); }}
-              type="button"
-              variant="quiet"
-            >
-              Ask a normal question instead
-            </Button>
-          </p>
-        )}
-        <details
-          className="assistant-refinement-disclosure"
-          onToggle={(event) => setRefinementOpen(event.currentTarget.open)}
-        >
-          <summary>{runsCheck ? "Saved as a check I can re-run · on" : "Save this as a check I can re-run"}</summary>
-          <div className="assistant-refinement">
-            <Select
-              hint="Optional. Automatic lets Vaelor answer from live readings."
-              id="assistant-problem-area"
-              label="Problem area"
-              onChange={(event) => props.setProblemArea(event.target.value)}
-              value={props.problemArea}
-            >
-              <option value={AUTOMATIC_PROBLEM_AREA}>Automatic</option>
-              {applianceProfiles.map((item) => (
-                <option disabled={!item.operational} key={item.id} value={item.id}>
-                  {item.name}{item.operational ? "" : " unavailable"}
-                </option>
-              ))}
-            </Select>
-            <Checkbox
-              checked={props.durable}
-              hint="Saves the question, its evidence, and its result as a run you can approve and repeat."
-              id="assistant-durable"
-              label="Keep this as a check I can re-run"
-              onChange={(event) => props.setDurable(event.target.checked)}
-            />
-            <p className="assistant-refinement__outcome">
-              {runsCheck
-                ? props.durable
-                  ? `Runs as a saved appliance check on ${selectedArea?.name ?? "system health"}. You approve it before it runs, and its evidence stays under History.`
-                  : `Runs a one-off appliance check on ${selectedArea?.name ?? "system health"} and records its evidence under History.`
-                : "Answers in this chat from live readings. Any change it proposes still needs a separate approval."}
-            </p>
-          </div>
-        </details>
-        {/*
-          * Scoped to the check itself, not to every busy state: an appliance
-          * check takes about a minute and the button label alone gave no sign
-          * of life, but "Checking this appliance" over a skill review is a lie.
-          */}
-        <AssistantResponseStatus
-          active={props.checkRunning}
-          label="Checking this appliance"
-          onCancel={props.onCancelCheck}
-          startedAt={props.checkStartedAt}
-        />
-        {/*
-          * Below the composer, never above it.
-          *
-          * A banner inserted here used to open above the question box, pushing
-          * it down by its own height and pulling it back up again when it was
-          * replaced — so a reader who clicked where the box had just been typed
-          * a whole sentence into the hint strip under it and lost every
-          * character with no error and no counter movement. Nothing that
-          * appears and disappears on its own is allowed above the composer.
-          */}
-        {chat.chatNotice && <Notice severity="info">{chat.chatNotice}</Notice>}
-        {/*
-          * The skills disclosure reports the same `notice` with a link to the
-          * proposal it just created, so showing it here as well would print the
-          * outcome twice on one screen.
-          */}
-        {props.notice && !props.showSkills && <Notice severity={props.noticeSeverity}>{props.notice}</Notice>}
-        <AssistantCapabilityStrip
-          memory={props.memoryCount === null ? undefined : { count: props.memoryCount, href: "#/memory" }}
-          model={props.agentStatus?.model || props.agentStatus?.provider || "No model selected"}
-          scope={{ label: "This machine", detail: "Live readings only" }}
-          skills={props.skillCount === null ? undefined : {
-            count: props.skillCount,
-            expanded: props.showSkills,
-            onToggle: props.onToggleSkills,
-          }}
-        />
-      </section>
-
-      {props.showSkills && props.skillsPanel}
-
-      <TextPromptDialog open={chat.renameTitle !== null} title="Rename chat" description="Give this saved conversation a short, recognizable name." label="Chat name" value={chat.renameTitle ?? ""} busy={chat.chatBusy} onChange={chat.setRenameTitle} onCancel={() => chat.setRenameTitle(null)} onSubmit={() => void chat.saveConversationTitle()} />
+      <TextPromptDialog open={chat.renameTitle !== null} title="Rename chat" description="Give this saved conversation a short, recognizable name." label="Chat name" value={chat.renameTitle ?? ""} busy={chat.chatBusy} error={chat.dialogError} onChange={chat.setRenameTitle} onCancel={() => chat.setRenameTitle(null)} onSubmit={() => void chat.saveConversationTitle()} />
       {/*
         * "Permanently removes ... every message" alone stopped being true in
         * Alpha 46: a recent conversation may also have a fast-wake snapshot
@@ -668,9 +556,10 @@ export function AgentAssistantPanel(props: AgentAssistantPanelProps) {
         * restore it again) without erasing its bytes until a later save
         * reuses that slot. The sentence says so rather than overclaiming.
         */}
-      <ConfirmDialog open={chat.confirmChatDelete} title="Delete saved chat?" description="This permanently deletes the conversation and every message in it. This cannot be undone. If it had a saved fast-wake snapshot, that snapshot is retired too, though its data may remain on this appliance's disk until a later save reuses that space." confirmLabel="Delete chat" busy={chat.chatBusy} onCancel={() => chat.setConfirmChatDelete(false)} onConfirm={() => void chat.deleteConversation()} />
+      <ConfirmDialog irreversible open={chat.confirmChatDelete} title="Delete saved chat?" description="This permanently deletes the conversation and every message in it. This cannot be undone. If it had a saved fast-wake snapshot, that snapshot is retired too, though its data may remain on this appliance's disk until a later save reuses that space." confirmLabel="Delete chat" busy={chat.chatBusy} error={chat.dialogError} onCancel={() => chat.setConfirmChatDelete(false)} onConfirm={() => void chat.deleteConversation()} />
       <ActionReviewDialog
         busy={props.busy}
+        error={props.proposalError}
         evidence={props.proposalReview?.evidence}
         job={props.proposalReview?.job ?? null}
         onApprove={props.onApproveProposal}

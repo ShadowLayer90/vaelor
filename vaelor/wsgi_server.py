@@ -128,6 +128,59 @@ def _shutdown_write(sock):
         pass
 
 
+class _PeerTable:
+    """Which real client each terminator-to-waitress connection carries.
+
+    W4d-D6: every request reached waitress from the terminator over loopback,
+    so ``request.remote_addr`` was ``127.0.0.1`` for every browser - the
+    Sessions list showed it for a LAN laptop, the login limiter keyed every
+    client together, and a "loopback-only" route was loopback-only to nobody.
+    The terminator knows the client it accepted and the loopback port it
+    connected from; waitress reports that port as ``REMOTE_PORT``. Keying on it
+    trusts no header a client could send (an ``X-Forwarded-For`` would be one).
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._peers = {}
+
+    def register(self, backend_port, client_address):
+        with self._lock:
+            self._peers[int(backend_port)] = str(client_address)
+
+    def forget(self, backend_port):
+        with self._lock:
+            self._peers.pop(int(backend_port), None)
+
+    def lookup(self, backend_port):
+        with self._lock:
+            return self._peers.get(int(backend_port))
+
+
+class _RealPeerMiddleware:
+    """Put the terminator's client address into ``REMOTE_ADDR``.
+
+    Only a request that arrived on the loopback backend from a port the
+    terminator registered is rewritten; anything else keeps what waitress saw.
+    The terminator's own address is kept as ``vaelor.tls_terminator_addr``.
+    """
+
+    def __init__(self, app, peers):
+        self._app = app
+        self._peers = peers
+
+    def __call__(self, environ, start_response):
+        if environ.get("REMOTE_ADDR") == BACKEND_HOST:
+            try:
+                client = self._peers.lookup(environ.get("REMOTE_PORT", ""))
+            except (TypeError, ValueError):
+                client = None
+            if client:
+                environ["vaelor.tls_terminator_addr"] = environ["REMOTE_ADDR"]
+                environ["REMOTE_ADDR"] = client
+        return self._app(environ, start_response)
+
+
 class _TlsTerminator:
     """Blocking TLS listener that relays decrypted bytes to a loopback backend.
 
@@ -136,7 +189,8 @@ class _TlsTerminator:
     sees a TLS socket.
     """
 
-    def __init__(self, host, port, ssl_context, backend_port, log):
+    def __init__(self, host, port, ssl_context, backend_port, log, peers=None):
+        self._peers = peers if peers is not None else _PeerTable()
         self._host = host
         self._port = port
         self._ssl_context = ssl_context
@@ -155,7 +209,7 @@ class _TlsTerminator:
         try:
             while not self._stopping.is_set():
                 try:
-                    client, _addr = listener.accept()
+                    client, address = listener.accept()
                 except OSError:
                     if self._stopping.is_set():
                         break
@@ -167,7 +221,7 @@ class _TlsTerminator:
                     continue
                 threading.Thread(
                     target=self._service,
-                    args=(client,),
+                    args=(client, address),
                     name="vaelor-tls-conn",
                     daemon=True,
                 ).start()
@@ -180,7 +234,7 @@ class _TlsTerminator:
             # Closing the listening socket unblocks the accept() above.
             _close(self._listener)
 
-    def _service(self, client):
+    def _service(self, client, address=None):
         try:
             client.settimeout(TLS_HANDSHAKE_TIMEOUT)
             try:
@@ -220,9 +274,15 @@ class _TlsTerminator:
             # owned by this same process (not a hostile remote), the pump threads
             # are daemon, and MAX_TLS_CONNECTIONS already bounds the slot count.
             backend.settimeout(None)
+            # Registered before a byte is relayed, so waitress cannot read a
+            # request from this port before its client is known (W4d-D6).
+            backend_port = backend.getsockname()[1]
+            if address:
+                self._peers.register(backend_port, address[0])
             try:
                 self._pipe(tls, backend)
             finally:
+                self._peers.forget(backend_port)
                 _close(tls)
                 _close(backend)
         finally:
@@ -272,6 +332,9 @@ class ControlPlaneServer:
         self._log = log or _LOGGER
         context = self._build_ssl_context(ssl_context)
         self._secure = context is not None
+        self._peers = _PeerTable()
+        if self._secure:
+            app = _RealPeerMiddleware(app, self._peers)
         # With TLS terminated in front, waitress binds loopback on an ephemeral
         # port; with no certificate configured it binds the public host directly
         # (unchanged from the dev server's no-TLS behaviour - not a downgrade).
@@ -291,7 +354,8 @@ class ControlPlaneServer:
         self._terminator = None
         if self._secure:
             self._terminator = _TlsTerminator(
-                host, port, context, self._backend_port, self._log
+                host, port, context, self._backend_port, self._log,
+                peers=self._peers,
             )
 
     @property

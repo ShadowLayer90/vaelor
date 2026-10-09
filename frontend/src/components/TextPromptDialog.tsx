@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { Button, Input } from "./ui";
+import { ModalError } from "./ui/ModalError";
 
 export function TextPromptDialog({
   open,
@@ -9,6 +10,7 @@ export function TextPromptDialog({
   label,
   value,
   busy,
+  error = "",
   onChange,
   onCancel,
   onSubmit,
@@ -19,6 +21,8 @@ export function TextPromptDialog({
   label: string;
   value: string;
   busy: boolean;
+  /** Why the save was refused (VD-189): shown inside this dialog, never on the inert page beneath. */
+  error?: string;
   onChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
@@ -50,7 +54,7 @@ export function TextPromptDialog({
         aria-describedby="text-prompt-description"
         aria-labelledby="text-prompt-title"
         aria-modal="true"
-        className="dialog"
+        className="dialog dialog-sectioned"
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
@@ -60,18 +64,23 @@ export function TextPromptDialog({
         role="dialog"
         tabIndex={-1}
       >
-        <h2 id="text-prompt-title">{title}</h2>
-        <p id="text-prompt-description">{description}</p>
-        <Input
-          disabled={busy}
-          label={label}
-          maxLength={120}
-          onChange={(event) => onChange(event.target.value)}
-          ref={inputRef}
-          required
-          value={value}
-        />
-        <div className="dialog__actions">
+        <header className="dialog-sectioned__header">
+          <h2 id="text-prompt-title">{title}</h2>
+          <p id="text-prompt-description">{description}</p>
+        </header>
+        <div className="dialog-sectioned__body">
+          <Input
+            disabled={busy}
+            label={label}
+            maxLength={120}
+            onChange={(event) => onChange(event.target.value)}
+            ref={inputRef}
+            required
+            value={value}
+          />
+          <ModalError error={error} />
+        </div>
+        <div className="dialog__actions dialog-sectioned__footer">
           <Button disabled={busy} onClick={onCancel} variant="quiet">
             Cancel
           </Button>

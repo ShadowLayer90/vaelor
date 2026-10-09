@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { Role } from "../types";
+import { AssistantBarProvider } from "./assistantBar";
 import { AssistantNavigationTabs, type AssistantTab } from "./AssistantNavigationTabs";
 
 interface AgentCenterTabsProps {
@@ -26,16 +27,19 @@ export function AgentCenterTabs({
    */
   const resolved: AssistantTab = active === "routines" && role !== "administrator" ? "ask" : active;
   return (
-    <section className="agent-center">
-      <AssistantNavigationTabs
-        active={resolved}
-        onChange={onChange}
-        role={role}
-      />
-
-      {resolved === "routines" && routinesPanel}
-      {resolved === "history" && historyPanel}
-      {resolved === "ask" && askPanel}
+    <section className="agent-center as-page" data-tab={resolved}>
+      <div className="as-tabsbar">
+        <AssistantNavigationTabs
+          active={resolved}
+          onChange={onChange}
+          role={role}
+        />
+      </div>
+      <AssistantBarProvider>
+        {resolved === "routines" && routinesPanel}
+        {resolved === "history" && historyPanel}
+        {resolved === "ask" && askPanel}
+      </AssistantBarProvider>
     </section>
   );
 }

@@ -1,9 +1,20 @@
 import type { Health } from "../../types";
 
-export const statusTones = ["neutral", "info", "success", "warning", "danger"] as const;
+export const statusTones = ["neutral", "info", "success", "warning", "danger"] as const; // vocabulary: status-tone
 export type StatusTone = (typeof statusTones)[number];
 export type LegacyStatus = Health["status"] | "neutral" | "ready" | "active" | "available" | "completed" | "success" | "queued" | "running" | "pending" | "waiting" | "paused" | "failed" | "rejected" | "error" | "cancelled" | "superseded" | "unavailable";
 export type OperationState = "idle" | "pending" | "success" | "warning" | "error";
+
+/**
+ * A model server that was asked and did not answer: read, and broken - the
+ * States board's "Failed" - so it is red on every surface that says it. One
+ * value, because four surfaces once painted the same two words grey, amber
+ * and red.
+ */
+export const NOT_ANSWERING: { readonly label: string; readonly tone: StatusTone } = {
+  label: "Not answering",
+  tone: "danger",
+};
 
 const toneLabels: Record<StatusTone, string> = {
   neutral: "Not reported",
@@ -28,7 +39,7 @@ const legacyStatusTones: Record<string, StatusTone> = {
   running: "info",
   pending: "info",
   waiting: "info",
-  paused: "warning",
+  paused: "neutral",
   failed: "danger",
   rejected: "danger",
   error: "danger",

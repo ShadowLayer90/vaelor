@@ -1,81 +1,36 @@
-import math
 import time
 import logging
 import threading
 
 from influxdb import InfluxDBClient
 
+from .cluster_placement import CONTROLLER_PLACEMENT_ID
+from .telemetry_store import HISTORY_MEASUREMENT
+# The flatten lives in a dependency-free module so the E2b worker telemetry
+# emitter can reuse this exact behaviour without dragging in `influxdb` above.
+# One copy, imported here under the names this module and its tests have always
+# used, so the controller's stored row and a worker's cannot drift.
+from .telemetry_flatten import _flatten_storable, _storable  # noqa: F401
 from .utils import log_error
-
-
-def _storable(value):
-    """One scalar InfluxDB can hold as a field, or None to drop it.
-
-    `bool` is checked before `int` because it is a subclass of it, and is
-    written as 0/1 so a field that reads as a number on one platform and a flag
-    on another keeps a single stored type. Numbers and strings pass through;
-    everything else (a list, a `None`, a nested object already handled by the
-    caller) returns None so the writer drops it rather than handing InfluxDB a
-    value it cannot store.
-    """
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        # One stored type per numeric field. A telemetry field can read `int 0`
-        # at exact idle (`round(max(0, 0.0), 1)` collapses to int) and `float`
-        # otherwise; InfluxDB rejects a write whose field type differs from the
-        # stored one and drops that interval's whole row, so numbers are stored
-        # as float uniformly.
-        return float(value)
-    if isinstance(value, float):
-        # NaN and inf are not valid InfluxDB line-protocol field values; the
-        # server rejects the write. A non-finite value in the FIRST sample would
-        # fail retention startup for the whole box (VD-095 residual), so drop it
-        # here rather than hand it to the store.
-        return value if math.isfinite(value) else None
-    if isinstance(value, str):
-        return value
-    return None
-
-
-def _flatten_storable(data, prefix=""):
-    """Flatten a machine reading into the flat scalar row InfluxDB stores.
-
-    The writer used to keep only top-level scalars and drop every `list` and
-    `dict`. On a Raspberry Pi the HAT reads back flat scalars, so that kept
-    everything that mattered; on an x86 workstation the same reading arrives
-    either empty or with its numbers nested one level down - a HAT-less host's
-    telemetry is assembled from `/proc` and `/sys`, and a provider can group it
-    as ``{"cpu": {"percent": 3, "temperature": 33}}``. Dropping every dict threw
-    those numbers away, so `get_data` came back empty and the store recorded
-    nothing every interval (the "nothing to record yet" warning on the x86 box).
-
-    Flattening is platform-agnostic and is why this is not an ``if workstation``
-    branch: a flat Pi reading passes through unchanged - there are no nested
-    dicts to descend into - and a nested reading yields ``cpu_percent``,
-    ``cpu_temperature`` and the like. Lists and any value that is not a number,
-    bool or string are dropped rather than crashing the writer: InfluxDB cannot
-    store them as a field, and a first sample that raised would read to the
-    caller as "cannot record" rather than the empty reading it actually is.
-    """
-    flat = {}
-    for key, value in data.items():
-        name = "{}{}".format(prefix, key)
-        if isinstance(value, dict):
-            flat.update(_flatten_storable(value, "{}_".format(name)))
-            continue
-        stored = _storable(value)
-        if stored is not None:
-            flat[name] = stored
-    return flat
 
 
 class DataLogger:
 
     @log_error
-    def __init__(self, database=None, interval=1, log=None):
-        self.log = log or logging.getLogger(app_name)
+    def __init__(self, database=None, interval=1, log=None, node=None):
+        self.log = log or logging.getLogger(__name__)
         self._is_ready = False
+        # Which node's series this writer's rows belong to. On the controller
+        # (the only caller today) it is the controller placement id, so its own
+        # rows carry `node=controller` and the read path can filter to them the
+        # same way it filters an enrolled worker's E2b rows.
+        self.node = node or CONTROLLER_PLACEMENT_ID
+        # How many readings the bounds table has discarded from this writer's
+        # rows, and which fields the last time (VD-147): the controller's
+        # counterpart of the per-worker count `telemetry_ingest_status` keeps.
+        # Set before anything can return early (review nit).
+        self.implausible_dropped = 0
+        self.implausible_fields = []
 
         try:
             self.client = InfluxDBClient(host='localhost', port=8086)
@@ -108,7 +63,18 @@ class DataLogger:
         data = self.__read_data__()
         if not isinstance(data, dict) or not data:
             return {}
-        return _flatten_storable(data)
+        dropped = []
+        row = _flatten_storable(data, dropped=dropped)
+        if dropped:
+            if not self.implausible_dropped:
+                # Said once, loudly; counted every time after that.
+                self.log.warning(
+                    "Discarded an implausible reading (%s); it is not stored.",
+                    ", ".join(sorted(dropped)),
+                )
+            self.implausible_dropped += len(dropped)
+            self.implausible_fields = sorted(dropped)
+        return row
 
     @log_error
     def loop(self):
@@ -117,7 +83,9 @@ class DataLogger:
             data = self.get_data()
             if data != {}:
                 if self.db is not None:
-                    status, msg = self.db.set('history', data)
+                    status, msg = self.db.set_tagged(
+                        HISTORY_MEASUREMENT, {"node": self.node}, data
+                    )
                     if not status:
                         self.log.error(f"Failed to set data: {msg}")
 

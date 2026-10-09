@@ -68,9 +68,14 @@ export function AssistantNextStep({ action }: { action: string }) {
  * anyway because the answer it travels with *is* partly model-authored, and
  * the cost of an off-site link appearing as "where to go next" inside the
  * appliance's own Assistant is not worth the two lines it saves.
+ *
+ * A plain query may come first (`?cluster=deployments&deployments=models#/fleet`,
+ * the server's ENDPOINTS_ROUTE): it stays on this page and only picks a tab and
+ * a filter. Its characters are limited to words, `=`, `&`, `.` and `-`, so no
+ * scheme, `//` or encoded escape can ride in front of the hash (VD-200 N1).
  */
 export function isInAppRoute(route: string): boolean {
-  return /^#\/[\w./-]*$/.test(String(route ?? "")) || route === "#/";
+  return /^(\?[\w=&.-]+)?#\/[\w./-]*$/.test(String(route ?? ""));
 }
 
 /**

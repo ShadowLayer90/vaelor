@@ -138,3 +138,19 @@ export function UpdateJobStatus({
     </section>
   );
 }
+
+/**
+ * What an install dialog says when its status poll gave up (LESSONS 8 /
+ * VD-189): the progress above it may be stale, the install itself did not
+ * stop, and the owner can read it again or follow it in Activity.
+ */
+export function JobReadLost({ onRetry }: { onRetry: () => void }) {
+  return (
+    <span className="job-read-lost">
+      Vaelor could not read this install's state for about a minute, so the progress shown may be out of date.
+      The install keeps running on the appliance.{" "}
+      <Button variant="quiet" onClick={onRetry}>Retry reading</Button>{" "}
+      <a href="#/activity">Open Activity</a>
+    </span>
+  );
+}

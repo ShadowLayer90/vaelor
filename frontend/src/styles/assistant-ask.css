@@ -1,0 +1,715 @@
+/*
+ * Assistant › Ask (VD-200: the Assistant board and AssistFirstRun,
+ * AssistChats, AssistAnswer, AssistSkills, AssistIntelligence): the
+ * conversation, its question box and the extras an answer carries, the first
+ * run, the skills view and the Change-intelligence drawer. The shared frame is
+ * assistant-page.css.
+ */
+
+.as-chat,
+.as-stream {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* The model's sleep and wake (VD-073), one quiet line under the question box. */
+.as-sleep-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+/* The conversation's row: its title, then New chat, Past chats and More. */
+.as-convo-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.as-convo-bar__title {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.as-convo-bar__title strong {
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.as-convo-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.as-convo-bar__count {
+  margin-left: 6px;
+  color: var(--text-muted);
+}
+
+.as-btn-on .as-convo-bar__count {
+  color: var(--accent-text);
+}
+
+/* Past chats: the saved list under its button. */
+.as-chats {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: var(--layer-raised);
+  width: min(442px, calc(100vw - 32px));
+  overflow: hidden;
+  background: var(--surface-card);
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+}
+
+.as-chats__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.as-chats__head > div {
+  display: grid;
+  gap: 2px;
+}
+
+.as-chats__head strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.as-chat .ui-button.as-chats__row {
+  width: 100%;
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: center;
+  min-height: 60px;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  color: var(--text-primary);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--border-list);
+  border-radius: 0;
+}
+
+.as-chats .ui-button-wrap:first-of-type .as-chats__row {
+  border-top: 0;
+}
+
+.as-chat .ui-button.as-chats__row:hover:not(:disabled) {
+  background: var(--bg-row-hover);
+  border-color: var(--border-list);
+}
+
+.as-chat .ui-button.as-chats__row[aria-current="true"] {
+  background: var(--accent-soft);
+}
+
+.as-chats__row > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.as-chats__row strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.as-chats__row small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+.as-chats__row svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.as-chats .ui-button-wrap {
+  display: block;
+}
+
+/* Messages */
+.as-msg {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.as-msg--user {
+  align-items: flex-end;
+}
+
+.as-msg__byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.as-msg__byline strong {
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+}
+
+.as-msg__mark {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bg-canvas);
+  background: var(--accent);
+  border-radius: 7px;
+  font-size: var(--font-size-ui-xs);
+  font-weight: 700;
+}
+
+.as-stopped-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-row-active);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-xs);
+}
+
+.as-bubble {
+  max-width: 680px;
+  padding: 14px 16px;
+  font-size: var(--font-size-ui);
+  line-height: 1.6;
+  border-radius: var(--radius-lg);
+  overflow-wrap: anywhere;
+}
+
+.as-bubble p {
+  margin: 0;
+}
+
+.as-bubble p + p {
+  margin-top: 8px;
+}
+
+.as-bubble--me {
+  background: var(--border-kv);
+  border: 1px solid var(--border-row-active);
+}
+
+.as-bubble--ai {
+  background: transparent;
+  border: 1px solid var(--border-card);
+}
+
+.as-msg--stopped .as-bubble--ai {
+  color: var(--text-secondary);
+  border-style: dashed;
+}
+
+/* Evidence used: a card that opens to its sources, each with its reading. */
+.as-evidence {
+  padding: 12px 14px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge);
+}
+
+.as-evidence summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+.as-evidence summary svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transform: rotate(90deg);
+}
+
+.as-evidence:not([open]) summary svg {
+  transform: none;
+}
+
+.as-evidence ul {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.as-evidence li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.as-evidence li > span:last-child {
+  text-align: right;
+}
+
+.as-next-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.as-next-steps ul,
+.as-disclosure ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+/* An answer's extra: an action to review, a deployment, an app, an agent run. */
+.as-extra {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge);
+}
+
+.as-extra--review {
+  border-color: var(--accent-deep);
+}
+
+.as-extra--column {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.as-extra--column p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.as-extra strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.as-extra__text {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.as-extra--column .ui-button-wrap {
+  margin-top: 4px;
+}
+
+/* "Go to": the answer's own destinations as outline buttons. */
+.as-ask .assistant-destinations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.as-ask .assistant-destinations > strong {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.as-ask .assistant-destinations ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.as-ask .assistant-destinations a {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-sm);
+  text-decoration: none;
+}
+
+.as-ask .assistant-destinations a:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+/* Working: an info dot, what is happening and for how long, and Stop. */
+.as-working {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--info-line);
+  border-radius: 10px;
+}
+
+.as-working__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  background: var(--info);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--info-halo);
+  animation: as-working-pulse 1.4s ease-in-out infinite;
+}
+
+.as-working__copy {
+  flex: 1 1 160px;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.as-working__copy strong {
+  font-size: var(--font-size-ui);
+  font-weight: 400;
+}
+
+.as-working__copy small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+@keyframes as-working-pulse {
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .as-working__dot {
+    animation: none;
+  }
+}
+
+.as-wait {
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-icon);
+  border-radius: 10px;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+/* The anchor is a point, not a row: it takes no gap of its own. */
+.as-stream__anchor {
+  height: 0;
+  margin-top: -20px;
+}
+
+.as-jump {
+  display: flex;
+  justify-content: center;
+}
+
+.as-jump svg {
+  transform: rotate(90deg);
+}
+
+/* The question box: a card with the accent's border, everything inside it. */
+.as-composer.ui-card {
+  gap: 10px;
+  padding: 14px;
+  border-color: var(--accent-deep);
+}
+
+.as-composer__input {
+  width: 100%;
+  /* The responsive acceptance's field-size floor (scripts/responsive-surfaces.mjs) is 88 px. */
+  min-height: 92px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  background: var(--bg-control);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-ui);
+  resize: vertical;
+}
+
+.as-composer__input::placeholder {
+  color: var(--text-muted);
+}
+
+.as-composer__input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.as-composer__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.as-composer__foot .ui-button-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.as-composer__foot .ui-button__disabled-reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* The armed check, said inside the box. */
+.as-armed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  color: var(--info-text);
+  background: var(--info-soft);
+  border: 1px solid var(--info-line);
+  border-radius: 10px;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.as-armed > span {
+  flex: 1 1 260px;
+}
+
+.as-armed .ui-button.as-btn-ghost {
+  color: var(--info-text);
+}
+
+.as-refinement {
+  padding: 14px;
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+.as-refinement summary,
+.as-disclosure summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 24px;
+  font-size: var(--font-size-ui);
+  cursor: pointer;
+  list-style: none;
+}
+
+.as-refinement summary::-webkit-details-marker,
+.as-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+/* These summaries carry the board's chevron at their right end, which is their
+   expandable marker; the global triangle would be a second one. */
+details.as-refinement > summary:not(.nav-item)::before,
+details.as-disclosure > summary:not(.nav-item)::before,
+details.as-evidence > summary:not(.nav-item)::before {
+  display: none;
+}
+
+.as-next-steps a,
+.as-bubble a {
+  color: var(--accent-hover);
+}
+
+.as-refinement summary svg,
+.as-disclosure summary svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transform: rotate(90deg);
+}
+
+.as-refinement[open] summary svg,
+.as-disclosure[open] summary svg {
+  transform: rotate(-90deg);
+}
+
+.as-refinement[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.as-refinement > p {
+  margin: 0;
+}
+
+.as-refinement__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  align-items: start;
+  gap: 14px;
+}
+
+.as-refinement__grid .ui-checkbox,
+.as-refinement__grid > :last-child {
+  padding: 10px 12px;
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+/* What this assistant can see: three outline pills. */
+.as-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.as-strip .as-chip strong {
+  color: var(--text-primary);
+  font-weight: 400;
+}
+
+.as-strip .as-chip small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.as-strip .as-chip--static {
+  cursor: default;
+}
+
+.as-strip .as-chip--static:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-row-active);
+}
+
+.as-page .as-strip .ui-button.as-chip {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+.as-strip .ui-button.as-chip[aria-expanded="true"] {
+  color: var(--accent-text);
+  background: none;
+  border-color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .as-convo-bar__actions {
+    width: 100%;
+  }
+
+  .as-chats {
+    position: fixed;
+    top: auto;
+    right: 16px;
+    left: 16px;
+    width: auto;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+
+  .as-composer__foot .ui-button-wrap {
+    width: 100%;
+    align-items: stretch;
+    margin-left: 0;
+  }
+
+  .as-composer__foot .ui-button {
+    width: 100%;
+  }
+
+  .as-page .as-strip .ui-button.as-chip,
+  .as-strip .as-chip {
+    min-height: 44px;
+  }
+
+  .as-evidence li > span:last-child {
+    text-align: left;
+  }
+}
+
+@media (forced-colors: active) {
+  .as-working__dot,
+  .as-msg__mark {
+    background: Highlight;
+  }
+
+  .as-bubble,
+  .as-extra,
+  .as-evidence,
+  .as-choice {
+    border: 1px solid CanvasText;
+  }
+}
+
+/*
+ * Phone and touch tap targets (VD-200 assist review): every disclosure and the
+ * capability chips reach 44px. The chip's 32px desktop rule above outranks the
+ * shared coarse-pointer rule in assistant-page.css, so it is restated here.
+ */
+@media (max-width: 720px), (pointer: coarse) {
+  .as-page .as-strip .ui-button.as-chip,
+  .as-evidence summary,
+  .as-refinement summary,
+  .as-disclosure summary,
+  details.as-skill__instructions > summary,
+  .ar-output > summary {
+    min-height: 44px;
+  }
+
+  .ar-output > summary {
+    display: flex;
+    align-items: center;
+  }
+}

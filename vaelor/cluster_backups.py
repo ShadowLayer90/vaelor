@@ -17,6 +17,36 @@ from .runtime_paths import data_path
 
 BACKUP_ID = re.compile(r"cluster-[a-f0-9]{16}")
 
+#: The backup directory's mode: setgid, group vaelor-jobs rwx, nobody else
+#: (W4c-D3). The executor (vaelor-workloads) writes backups; the control plane
+#: (vaelor, in vaelor-jobs) lists and deletes them, and deleting needs write on
+#: the directory. Files stay 0640, so the control plane can read and remove an
+#: archive but not change one. The installer's ``install -d`` for
+#: backups/cluster states the same mode; this writer used to re-chmod 0750 on
+#: every record and list, undoing it (`tests/test_cluster_backup_privilege.py`).
+BACKUP_DIRECTORY_MODE = 0o2770
+
+
+def restore_in_progress(job_store: Any, service_name: str) -> str:
+    """The id of a queued or running restore of ``service_name``, or ``""``.
+
+    Review follow-up 8 (LESSONS 22): a restore reads the backup it was given
+    and the safety backup it makes, both this service's; deleting either while
+    it runs removes the only way back. Every unfinished restore counts, however
+    old (`JobStore.unfinished_of_type`).
+    """
+    for job in job_store.unfinished_of_type("cluster.service.restore"):
+        if str((job.get("payload") or {}).get("service_name", "")) == str(service_name):
+            return str(job.get("id", ""))
+    return ""
+
+
+#: The refusal while a restore of the backup's service is queued or running.
+BACKUP_IN_USE = (
+    "A restore of {} is queued or running (job {}), and it may need this backup "
+    "or the safety backup it makes. Delete it after that restore finishes."
+)
+
 
 class ClusterBackupStore:
     def __init__(self, root: Optional[str] = None):
@@ -28,7 +58,7 @@ class ClusterBackupStore:
     def _ensure_root(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         try:
-            os.chmod(self.root, 0o750)
+            os.chmod(self.root, BACKUP_DIRECTORY_MODE)
         except PermissionError:
             pass
 

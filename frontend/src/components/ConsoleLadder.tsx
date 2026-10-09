@@ -1,5 +1,6 @@
 import { Icon, type IconName } from "./Icon";
 import { StatusPill } from "./StatusPill";
+import { LoadingLines } from "./ui";
 
 /**
  * The five-rung remote-console ladder, rendered (task #54).
@@ -66,46 +67,43 @@ export function consoleSessionAvailable(rows: ConsoleLadderRow[] | undefined): b
   return console_.length > 0 && console_.every((row) => row.actionable);
 }
 
+/**
+ * Remote console's "Remote access on this machine" (VD-200, the Console
+ * board): a row per rung-bearing capability - what discovery established, in
+ * words, and a pill naming who can move it up. Nothing here renders a control.
+ */
 export function ConsoleLadder({ rows }: { rows?: ConsoleLadderRow[] }) {
   return (
-    <section className="data-panel" aria-labelledby="console-ladder-heading">
-      <div className="panel-heading">
-        <div>
+    <section aria-labelledby="console-ladder-heading" className="card ui-card sys-card">
+      <header className="ui-card__header">
+        <div className="ui-card__titles">
           <h2 id="console-ladder-heading">Remote access on this machine</h2>
-          <p>What discovery established, and who can change it</p>
         </div>
-        <Icon name="shield" />
-      </div>
-      <div className="readiness-list">
+        <div className="ui-card__actions"><span>What discovery found, and who can change it</span></div>
+      </header>
+      <div className="ui-card__body ui-card__body--flush">
         {rows?.length
           ? rows.map((row) => (
-            <div className="kvm-health" key={row.id}>
-              <span>
-                <Icon name={ROW_ICONS[row.id] ?? "shield"} />
-                <small>{row.title}</small>
-              </span>
-              <strong>{ladderStateLabel(row.state)}</strong>
-              {/*
-                * Classed, because the rule that places this grid targets
-                * `> span` and there are two of them: the detail landed in the
-                * title's cell and printed on top of it. A positional selector
-                * would work and would break again the moment a third element
-                * is added, so each cell names itself.
-                */}
-              <span className="kvm-health__detail">{row.detail}</span>
-              <StatusPill
-                label={row.actor_label}
-                status={row.actionable ? "healthy" : "neutral"}
-              />
+            <div className="ui-row ladder-row" key={row.id}>
+              <span aria-hidden="true" className="ui-row__icon"><Icon name={ROW_ICONS[row.id] ?? "shield"} size={18} /></span>
+              <div className="ui-row__text">
+                <div className="ui-row__title">{row.title}</div>
+                {/*
+                  * The state and the detail each have their own element: a
+                  * positional rule once printed the detail on top of the title.
+                  */}
+                <div className="ui-row__detail">
+                  <span className="ladder-row__state">{ladderStateLabel(row.state)}</span>
+                  {" · "}
+                  <span className="kvm-health__detail">{row.detail}</span>
+                </div>
+              </div>
+              <div className="ui-row__trailing">
+                <StatusPill label={row.actor_label} tone={row.actionable ? "success" : "neutral"} />
+              </div>
             </div>
           ))
-          : (
-            <div className="readiness-row">
-              <Icon name="shield" size={17} />
-              <span>Remote access</span>
-              <strong>Checking…</strong>
-            </div>
-          )}
+          : <LoadingLines label="Checking remote access" />}
       </div>
     </section>
   );

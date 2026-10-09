@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from .agent_research_relevance import rank_candidates, shaped_query
 from .assistant_tools import AssistantToolError
-from .inference_client import chat_completion, inference_timeout
+from .inference_client import allowed_inference_endpoint, chat_completion, inference_timeout
 from .model_profiles import reasoning_headroom_tokens
 from .provider_runtime import (
     generation_parameters,
@@ -89,6 +89,10 @@ SEARCH_PLANNER_PROMPT = (
 
 def _resolve_model(connection: Mapping[str, str], headers: Dict[str, str], timeout: int) -> str:
     """The configured model id, or the endpoint's first advertised model."""
+    if not allowed_inference_endpoint(dict(connection)):
+        # VD-207 / LESSONS 18: never list models, with a key, at an endpoint
+        # the inference gate refuses (a hosted lease reached by escalation).
+        raise ValueError("The model endpoint is not one appliance work may use.")
     model = str(connection.get("model", ""))
     if model:
         return model
@@ -147,6 +151,10 @@ def plan_search_query(
     task = " ".join(str(task_text or "").split())[:2000]
     if not task:
         return "", "empty-task: no text to plan a search query from"
+    if not allowed_inference_endpoint(dict(connection)):
+        # VD-207 / LESSONS 18: the task text and the key go nowhere the
+        # inference gate refuses; the deterministic query is used instead.
+        return "", "refused-endpoint: the model endpoint is not one appliance work may use"
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if connection.get("api_key"):
         headers["Authorization"] = "Bearer {}".format(connection["api_key"])

@@ -1,6 +1,9 @@
 import type { ApiEnvelope } from "../types";
 
 export const SESSION_EXPIRED_EVENT = "vaelor:session-expired";
+/** Dispatched with the re-read `Session` as `detail` when the signed-in
+ *  account's own access changed (CR2); the App adopts it and re-routes. */
+export const SESSION_CHANGED_EVENT = "vaelor:session-changed";
 
 const AUTH_ENTRY_PATHS = new Set([
   "/auth/bootstrap",
@@ -33,6 +36,69 @@ interface ApiRequestOptions extends RequestInit {
   timeoutMs?: number;
 }
 
+/**
+ * The caller withdrew the request before it completed — the surface that asked
+ * unmounted, or the reader pressed Stop. It is not `request_timeout`: nothing
+ * took too long, nobody is waiting, and no retry is owed.
+ */
+function cancelledRequest(): ApiError {
+  return new ApiError("The request was cancelled before it completed.", 499, "request_cancelled");
+}
+
+/** Why an attempt stopped: the caller's own withdrawal, or the client's budget. */
+function interrupted(callerSignal: RequestInit["signal"]): ApiError {
+  return callerSignal?.aborted
+    ? cancelledRequest()
+    : new ApiError("The appliance took too long to respond. Try again.", 408, "request_timeout");
+}
+
+/** Resolves after `ms`, or as soon as `signal` aborts — whichever comes first. */
+function delayUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) { resolve(); return; }
+    let timer = 0;
+    const abandon = () => { window.clearTimeout(timer); resolve(); };
+    timer = window.setTimeout(() => { signal.removeEventListener("abort", abandon); resolve(); }, ms);
+    signal.addEventListener("abort", abandon, { once: true });
+  });
+}
+
+/**
+ * Who is still waiting on one shared GET.
+ *
+ * Concurrent GETs of the same path share one wire request, so a caller's
+ * AbortSignal cannot abort that request outright — another surface may be
+ * waiting on the same answer. Each signal is a *withdrawal*: the request is
+ * abandoned, its retry wait and re-send included, only once every caller has
+ * gone. A caller with no signal keeps it alive until it settles.
+ */
+class SharedInterest {
+  private readonly controller = new AbortController();
+  private waiting = 0;
+  private unconditional = false;
+
+  get signal(): AbortSignal { return this.controller.signal; }
+
+  join(signal: RequestInit["signal"]): void {
+    if (!signal) { this.unconditional = true; return; }
+    this.waiting += 1;
+    signal.addEventListener("abort", () => {
+      this.waiting -= 1;
+      if (this.waiting === 0 && !this.unconditional) this.controller.abort();
+    }, { once: true });
+  }
+}
+
+/** The shared answer — unless this caller withdraws first, which settles it now. */
+function untilWithdrawn<T>(shared: Promise<T>, signal: RequestInit["signal"]): Promise<T> {
+  if (!signal) return shared;
+  return new Promise<T>((resolve, reject) => {
+    const withdraw = () => reject(cancelledRequest());
+    signal.addEventListener("abort", withdraw, { once: true });
+    shared.then(resolve, reject).finally(() => signal.removeEventListener("abort", withdraw));
+  });
+}
+
 // A dead pooled keep-alive socket on same-origin (loopback or LAN) rejects in
 // single-digit milliseconds (one round-trip: the RST arrives before the request
 // is processed),
@@ -44,7 +110,7 @@ interface ApiRequestOptions extends RequestInit {
 const SOCKET_RESET_RETRY_WINDOW_MS = 1000;
 const GET_CACHE_TTL_MS = 1500;
 const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
-const inFlightGets = new Map<string, Promise<unknown>>();
+const inFlightGets = new Map<string, { promise: Promise<unknown>; interest: SharedInterest }>();
 let cacheFetchIdentity: typeof fetch | null = null;
 let cacheGeneration = 0;
 
@@ -104,7 +170,9 @@ async function apiRequestUncached<T>(
     // network failure but the turn was already accepted and is being answered.
     // Re-sending it would write a second user turn and start a second
     // inference, so it is surfaced as unavailable and left to the caller's
-    // live-drop recovery. Aborts (timeout or caller cancel) are never retried.
+    // live-drop recovery. Aborts (timeout or caller cancel) are never retried,
+    // and a cancel that lands during the retry wait ends the wait: a re-send
+    // then would put a request on the wire whose answer nobody will read.
     let retriedFreshConnection = false;
     for (;;) {
       const attemptStartedAt = Date.now();
@@ -118,13 +186,12 @@ async function apiRequestUncached<T>(
         });
         break;
       } catch {
-        if (controller.signal.aborted) {
-          throw new ApiError("The appliance took too long to respond. Try again.", 408, "request_timeout");
-        }
+        if (controller.signal.aborted) throw interrupted(options.signal);
         const neverReachedServer = idempotent || Date.now() - attemptStartedAt < SOCKET_RESET_RETRY_WINDOW_MS;
         if (!retriedFreshConnection && neverReachedServer) {
           retriedFreshConnection = true;
-          await new Promise((resolve) => window.setTimeout(resolve, 200));
+          await delayUnlessAborted(200, controller.signal);
+          if (controller.signal.aborted) throw interrupted(options.signal);
           continue;
         }
         // The same code is minted for a genuinely unreachable node and for a
@@ -171,28 +238,41 @@ export function apiRequest<T>(
   csrfToken?: string,
 ): Promise<T> {
   const method = (options.method ?? "GET").toUpperCase();
-  const cacheable = method === "GET" && !options.signal && options.cache !== "no-store";
+  // Withdrawn before it started: nothing goes on the wire and no cache is warmed.
+  if (options.signal?.aborted) return Promise.reject(cancelledRequest());
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) clearApiRequestCache();
-  if (cacheable) {
-    const cached = responseCache.get(path);
-    if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value as T);
-    if (cached) responseCache.delete(path);
-    const active = inFlightGets.get(path);
-    if (active) return active as Promise<T>;
+  // A caller's signal used to opt a GET out of the cache, because one shared
+  // request could not honour two callers' aborts. SharedInterest can, so the
+  // cache is keyed on the path alone: a surface that can cancel its discovery
+  // still shares the answer with every other surface asking the same question.
+  if (method !== "GET" || options.cache === "no-store") return apiRequestUncached<T>(path, options, csrfToken);
+  const cached = responseCache.get(path);
+  if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value as T);
+  if (cached) responseCache.delete(path);
+  const active = inFlightGets.get(path);
+  if (active && !active.interest.signal.aborted) {
+    active.interest.join(options.signal);
+    return untilWithdrawn(active.promise as Promise<T>, options.signal);
   }
-  const request = apiRequestUncached<T>(path, options, csrfToken);
-  if (!cacheable) return request;
+  const interest = new SharedInterest();
+  interest.join(options.signal);
+  const request = apiRequestUncached<T>(path, { ...options, signal: interest.signal }, csrfToken);
+  // Read after the request starts: a fetch identity change clears the cache
+  // (and bumps the generation) on the way in, and this answer belongs to the
+  // generation that survives that.
   const generation = cacheGeneration;
-  const tracked = request.then((value) => {
-    if (generation === cacheGeneration) {
-      responseCache.set(path, { expiresAt: Date.now() + GET_CACHE_TTL_MS, value });
-    }
-    return value;
-  }).finally(() => {
-    if (inFlightGets.get(path) === tracked) inFlightGets.delete(path);
-  });
-  inFlightGets.set(path, tracked);
-  return tracked;
+  const tracked = request
+    .then((value) => {
+      if (generation === cacheGeneration) {
+        responseCache.set(path, { expiresAt: Date.now() + GET_CACHE_TTL_MS, value });
+      }
+      return value;
+    })
+    .finally(() => {
+      if (inFlightGets.get(path)?.promise === tracked) inFlightGets.delete(path);
+    });
+  inFlightGets.set(path, { promise: tracked, interest });
+  return untilWithdrawn(tracked, options.signal);
 }
 
 export async function downloadApiRequest(

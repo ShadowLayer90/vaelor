@@ -1,15 +1,17 @@
-import { Icon } from "./Icon";
-import { UnavailableValue } from "./ui";
+import { StatusPill } from "./StatusPill";
+import { SectionCard } from "./systemUi";
+import { ListRow, UnavailableValue } from "./ui";
 import type { MachineProfile } from "../lib/machine";
 
 /**
  * The absent enclosure, stated once and in one place.
  *
- * Silently hiding the enclosure panels would leave the Cooling tab looking
+ * Silently hiding the enclosure cards would leave the Cooling tab looking
  * half-built — a reader who knows Vaelor has case-fan controls would go
  * looking for the setting that vanished. Naming each absent piece, with the
  * reason discovery gave, makes the absence legible instead: there is nothing
- * missing, there is nothing there.
+ * missing, there is nothing there. Drawn as the boards draw an absent
+ * controller (the SystemLighting board's "No lighting controller").
  */
 export function CoolingCapabilityNotice({ machine }: { machine: MachineProfile }) {
   const rows = ([
@@ -23,29 +25,21 @@ export function CoolingCapabilityNotice({ machine }: { machine: MachineProfile }
   if (!rows.length) return null;
 
   return (
-    <section className="data-panel cooling-absent" aria-labelledby="cooling-absent-title">
-      <div className="panel-heading">
-        <div>
-          <h2 id="cooling-absent-title">Enclosure controls</h2>
-          <p>
-            Vaelor found no enclosure controller here, so there is nothing on this
-            machine for these controls to command. They are shown, and disabled,
-            rather than hidden so that nothing looks missing.
-          </p>
-        </div>
-        <Icon name="alert" />
-      </div>
-      <dl className="cooling-absent__list">
-        {rows.map((row) => (
-          <div key={row.key}>
-            <dt>
-              <UnavailableValue label={`${row.label} unavailable`} reason={row.reason ?? "Not reported by this device"} />
-              <span>{row.label}</span>
-            </dt>
-            <dd>{row.reason}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
+    <SectionCard
+      className="cooling-absent"
+      description="Vaelor found no enclosure controller here, so there is nothing on this machine for these controls to command."
+      flush
+      title="Enclosure controls"
+      titleId="cooling-absent-title"
+    >
+      {rows.map((row) => (
+        <ListRow
+          detail={row.reason ?? "Not reported by this device"}
+          key={row.key}
+          title={<>{row.label} <UnavailableValue label={`${row.label} unavailable`} mark="—" reason={row.reason ?? "Not reported by this device"} /></>}
+          trailing={<StatusPill label="Not detected" tone="neutral" />}
+        />
+      ))}
+    </SectionCard>
   );
 }

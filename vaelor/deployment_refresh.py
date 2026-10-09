@@ -27,6 +27,17 @@ release's compose *while reporting success* - which is exactly how the alpha-29
 rendering came back on a box where alpha 35 was installed. Order is the whole
 correctness argument here, so `install-vaelor.sh` calls this after its health
 gate rather than beside the pip install.
+
+**Cluster GPU deployments are refreshed too (W4-D1).** A pooled vLLM deployment
+is not a compose and no ``model.deploy`` reaches it, so an upgrade used to leave
+its units at the previous release's text - VD-165's environment line installed
+and inert on both machines of a replicated deployment. Each such row records
+what its units were rendered from (`gpu_render_ledger`); this reads the rows
+read-only, asks which ones this release renders differently, says which and
+why, and queues one ``cluster.gpu.refresh`` per serving row that does - the
+same Unload and Load the owner would run (`gpu_pool_refresh`). It renders
+nothing itself here either: the comparison re-renders through the runtime's
+one template, and the job runs in the executor, after the restart.
 """
 from __future__ import annotations
 
@@ -36,7 +47,17 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from .runtime_paths import DATA_ROOT, env_value
+# The cluster store's file under the state root is `ClusterStore`'s own
+# constant, so the installer's read and the store cannot disagree (review A4).
+from .cluster_store import CLUSTER_DATABASE
+from .runtime_paths import DATA_ROOT, env_value, state_path
+# The cluster-agent reconcile lived here beside the model refresh it mirrors;
+# it now has its own module (ACC-070) and is re-exported for its callers.
+from .agent_reconcile import reconcile_cluster_agents  # noqa: F401
+
+#: What every job this command queues says about itself in the ledger, so the
+#: record reads honestly: nobody clicked anything.
+REFRESH_REASON = "post-upgrade refresh"
 
 #: Where a deployed workload's compose lives, one directory per workload.
 WORKLOAD_ROOT = "workloads"
@@ -135,7 +156,7 @@ def refresh_payloads(root: Optional[Path] = None) -> List[Dict[str, Any]]:
             "surface": "assistant",
             # Marks the job as machine-initiated so the ledger reads honestly:
             # nobody clicked anything.
-            "reason": "post-upgrade refresh",
+            "reason": REFRESH_REASON,
         })
     return payloads
 
@@ -208,10 +229,99 @@ def _last_effective_mode(store: Any) -> str:
     return ""
 
 
+#: How long the installer waits on a store another process holds locked. Short
+#: on purpose: a lock says the GPU check could not run, at once, rather than
+#: holding the install (review of W4-D1: a 12 s lock read as "no deployment").
+STORE_BUSY_SECONDS = 2
+
+
+class StoreUnread(RuntimeError):
+    """The cluster store exists but could not be read; the message says why."""
+
+
+def cluster_database(root: Optional[Path] = None) -> Path:
+    """The cluster store's file: ``--root``'s own when one is given, else the
+    store's own setting, honouring its legacy alias exactly as the store does."""
+    if root is not None:
+        return root / CLUSTER_DATABASE
+    return Path(env_value("VAELOR_CLUSTER_DB", "PM_CLUSTER_DB", state_path(CLUSTER_DATABASE)))
+
+
+def read_only_store(database: Path):
+    """A connection to the store that cannot write: an SQLite read-only URI.
+
+    The installer runs as root, and a store file (or a journal) root created
+    beside the services' own would lock them out. The path is percent-encoded
+    so a ``?`` or ``#`` in it cannot become a URI parameter.
+    """
+    import sqlite3
+    from urllib.parse import quote
+
+    connection = sqlite3.connect(
+        "file:{}?mode=ro".format(quote(database.as_posix(), safe="/:")),
+        uri=True, timeout=STORE_BUSY_SECONDS,
+    )
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def gpu_refresh_plan(database: Path) -> List[Dict[str, Any]]:
+    """Every vLLM deployment with whether this release must re-render it, and why.
+
+    Read only, and only when the store exists (:func:`read_only_store`); a
+    store that exists and cannot be read raises :class:`StoreUnread` with the
+    reason, never "nothing to refresh". Each row is judged on its own: one
+    that cannot be read is reported as such (``error``) and the rest are still
+    planned. Nothing in a row is changed here - the job does that.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    from .cluster_store import POOLED_ROWS_QUERY, ClusterStore
+    from .gpu_render_ledger import render_drift
+
+    if not database.is_file():
+        return []
+    try:
+        with closing(read_only_store(database)) as connection:
+            rows = connection.execute(POOLED_ROWS_QUERY).fetchall()
+    except sqlite3.Error as error:
+        raise StoreUnread("the cluster store could not be read ({})".format(error)) from error
+    plan = []
+    for row in rows:
+        try:
+            record = ClusterStore._pooled(row)
+            if (record.get("units") or {}).get("engine") != "vllm":
+                continue
+            plan.append({"name": record["name"], **render_drift(record)})
+        except Exception as error:  # noqa: BLE001 - one bad row reports itself
+            name = row["name"] if "name" in row.keys() else "a row"
+            plan.append({"name": str(name), "refresh": False, "changed": [],
+                         "reason": "", "error": "{}: {}".format(type(error).__name__, error)[:200]})
+    return plan
+
+
+def _queue_gpu_refreshes(plan: List[Dict[str, Any]], store: Any) -> None:
+    from .cluster_job_confirmations import confirmation_for
+    from .job_vocabulary import CLUSTER_GPU_REFRESH_JOB
+
+    for entry in plan:
+        if not entry["refresh"]:
+            continue
+        job = store.create(CLUSTER_GPU_REFRESH_JOB, "system", {
+            "name": entry["name"],
+            "confirm": confirmation_for(CLUSTER_GPU_REFRESH_JOB),
+            "reason": REFRESH_REASON,
+        })
+        print("queued {} for GPU deployment {}; it stops and loads again, so it "
+              "does not answer until that Load is healthy".format(job["id"], entry["name"]))
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Queue a redeploy for every deployed model, so an upgrade's "
-                    "measured settings reach what is actually running.")
+        description="Queue a redeploy for every deployed model, and a refresh for "
+                    "every serving cluster GPU deployment this release renders "
+                    "differently, so an upgrade's settings reach what is running.")
     parser.add_argument("--root", type=Path, default=None)
     parser.add_argument(
         "--apply", action="store_true",
@@ -225,11 +335,27 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print("skipped {}: compose states no {}".format(
             entry["workload"],
             "model directory" if not entry["path"] else "published port"))
-    if not payloads:
-        print("no deployed model to refresh")
-        return 0
     for payload in payloads:
         print("refresh {} on port {}".format(payload["path"], payload["port"]))
+    try:
+        plan = gpu_refresh_plan(cluster_database(args.root))
+    except Exception as error:  # noqa: BLE001 - never at the Assistant's expense
+        # The Assistant's refresh never depended on the cluster store; a store
+        # this cannot read must not cost it that (VD-081), and is said - never
+        # passed off as "nothing to refresh".
+        print("GPU deployments were not checked: {}".format(
+            str(error) if isinstance(error, StoreUnread) else type(error).__name__))
+        plan = []
+    for entry in plan:
+        if entry.get("error"):
+            print("GPU deployment {} was not checked: {}".format(entry["name"], entry["error"]))
+            continue
+        print("{} GPU deployment {}: {}".format(
+            "refresh" if entry["refresh"] else "skipped", entry["name"], entry["reason"]))
+    if not payloads:
+        print("Assistant model: none deployed here, so none to refresh")
+    if not payloads and not any(entry["refresh"] for entry in plan):
+        return 0
     if not args.apply:
         print("(dry run; pass --apply to queue)")
         return 0
@@ -239,7 +365,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     store = JobStore(env_value(
         "VAELOR_JOBS_DB", "PM_JOBS_DB",
         str(data_root() / "jobs" / "jobs.sqlite3")))
-    mode = _last_effective_mode(store)
+    mode = _last_effective_mode(store) if payloads else ""
     for payload in payloads:
         if mode:
             payload["mode"] = mode
@@ -247,6 +373,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print("queued {} for {}{}".format(
             job["id"], payload["path"],
             " in {} mode".format(mode) if mode else ""))
+    _queue_gpu_refreshes(plan, store)
     return 0
 
 

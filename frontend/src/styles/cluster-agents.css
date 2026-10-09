@@ -1,0 +1,427 @@
+/*
+ * Cluster > Agents & tools (VD-200, the ClusterAgents, ClusterAgentsMcp,
+ * ClusterAgentsSkills, ClusterDialogsTools and ClusterDialogsImport boards).
+ * Tokens only; 12 px is the floor for every text (VD-191).
+ */
+
+/* The section heading on the left, the sub-tab strip (a real tablist, drawn
+   as a segmented control) on its right, the registry below both. The TabSet's
+   own box steps aside (display: contents) so its strip and panel join this grid. */
+.cl-agents {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px 24px;
+  min-width: 0;
+}
+
+.cl-agents__intro {
+  min-width: 0;
+}
+
+.cl-agents__intro h2 {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.cl-agents__intro p {
+  margin: 0;
+  max-width: 680px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.55;
+}
+
+.ui-tab-set.cl-agents__tabs {
+  display: contents;
+}
+
+.cl-agents .ui-tab-set__list.cl-agents__seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 4px;
+  overflow: visible;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  mask-image: none;
+}
+
+.cl-agents .cl-agents__seg .ui-tab {
+  min-height: 36px;
+  padding: 0 14px;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-agents .cl-agents__seg .ui-tab--selected {
+  color: var(--text-primary);
+  background: var(--bg-row-active);
+  border-color: var(--border-icon);
+}
+
+.cl-agents .ui-tab-set__panel.cl-agents__panel {
+  grid-column: 1 / -1;
+  padding: 0;
+  overflow: visible;
+}
+
+@media (max-width: 720px) {
+  .cl-agents {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .cl-agents .ui-tab-set__list.cl-agents__seg {
+    justify-self: start;
+    max-width: 100%;
+  }
+
+  .cl-agents .cl-agents__seg .ui-tab {
+    min-height: 44px;
+  }
+}
+
+/* A registry's heading row: title and line on the left, its actions right. */
+.cl-tools__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 20px;
+}
+
+.cl-tools__head-text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* A px size (polish audit, cause 13): the rem one drew 20 px on a tablet and
+   16.25 px on a desktop, above the tab's own 15 px h2. */
+.cl-tools__head-text h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.cl-tools__head-text p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.cl-tools__head .ui-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* One MCP server or skill. */
+.cl-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+}
+
+.cl-tool__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cl-tool__name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cl-tool__name strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.cl-tool__name small,
+.cl-tool__muted {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-tool__pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cl-tool__description {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.55;
+}
+
+.cl-tool__facts {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-tool__facts > div {
+  display: grid;
+  grid-template-columns: minmax(84px, 106px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.cl-tool__facts dt {
+  color: var(--text-muted);
+}
+
+.cl-tool__facts dd {
+  margin: 0;
+  color: var(--text-primary);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.cl-tool__facts code {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-tool__section {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-list);
+}
+
+.cl-tool__section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cl-tool__section-head h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+}
+
+.cl-tool__section-head span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-tool__tags {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cl-tool__actions {
+  margin-top: auto;
+}
+
+.cl-tool__loading,
+.cl-tool__empty {
+  padding: 18px;
+}
+
+.cl-tool__loading p {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+/* The register and edit forms inside a Cluster dialog. */
+.cl-tool-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cl-tool-form__kind .ui-control {
+  width: auto;
+  min-width: 120px;
+}
+
+.cl-tool-form__pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .cl-tool-form__pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Import skills from GitHub. */
+.cl-import__form {
+  display: grid;
+  gap: 12px;
+}
+
+.cl-import__fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .cl-import__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.cl-import__results {
+  display: grid;
+  gap: 12px;
+}
+
+.cl-import__summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-import__list,
+.cl-import__inline-list,
+.cl-import__warnings,
+.cl-import__refusals {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cl-import__item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-control);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-import__item p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.cl-import__pick {
+  padding: 10px 12px;
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+}
+
+.cl-import__pick.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.cl-import__pick.is-disabled {
+  opacity: 0.8;
+}
+
+.cl-import__pick .ui-checkbox__label {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cl-import__path {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.cl-import__preview {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.cl-import__full {
+  display: inline;
+}
+
+/* inline-flex, not inline: min-height does nothing on an inline box, and the
+   summary measured 16 px (polish review R12). */
+.cl-import__full summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.cl-import__full pre {
+  max-height: 240px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-import__warnings,
+.cl-import__refusal {
+  color: var(--warning-text);
+}
+
+.cl-import__refusals {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-tool__facts dd.cl-bad-text {
+  color: var(--danger-text);
+}
+
+.cl-tool__facts dd.cl-warn-text {
+  color: var(--warning-text);
+}
+
+.cl-tools__head .ui-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cl-tool-form__kind {
+  max-width: 200px;
+}
+
+.cl-import__item p.cl-import__refusal {
+  color: var(--warning-text);
+}
+
+.cl-import__full {
+  margin-left: 6px;
+}

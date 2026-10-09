@@ -1,0 +1,232 @@
+/*
+ * System › Case lighting (VD-200, the SystemLighting board): the preview
+ * tile, the switch, presets, effects and sliders. Imported before system.css,
+ * whose responsive rules come last. Component: LightingControl.tsx.
+ */
+
+/* Case lighting: the preview tile, the switch, presets, effects and sliders. */
+.sys-lights {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 122px;
+  height: 88px;
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--lighting-color, var(--accent)) 22%, transparent), transparent 70%), var(--bg-card);
+  border: 1px solid var(--border-icon);
+  border-radius: 12px;
+}
+
+.sys-lights__case {
+  display: flex;
+  gap: 10px;
+}
+
+.sys-lights__case span {
+  width: 12px;
+  height: 12px;
+  background: var(--lighting-color, var(--accent));
+  border-radius: 50%;
+  opacity: var(--lighting-opacity, 1);
+  box-shadow: 0 0 10px var(--lighting-color, var(--accent));
+}
+
+.sys-lights--breathing .sys-lights__case span {
+  animation: sys-breathe var(--lighting-speed, 2.5s) ease-in-out infinite;
+}
+
+@keyframes sys-breathe {
+  50% { opacity: calc(var(--lighting-opacity, 1) * 0.35); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sys-lights--breathing .sys-lights__case span {
+    animation: none;
+  }
+}
+
+.sys-switch.ui-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 4px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+}
+
+.sys-switch__track {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  background: var(--border-strong);
+  border-radius: 999px;
+  transition: background var(--motion-fast) ease;
+}
+
+.sys-switch__track i {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: var(--text-primary);
+  border-radius: 50%;
+  transition: transform var(--motion-fast) ease;
+}
+
+.sys-switch[aria-checked="true"] .sys-switch__track {
+  background: var(--accent);
+}
+
+.sys-switch[aria-checked="true"] .sys-switch__track i {
+  background: var(--bg-canvas);
+  transform: translateX(18px);
+}
+
+.sys-presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr));
+  gap: 8px;
+}
+
+.sys-preset.ui-button,
+.sys-effect.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+}
+
+.sys-effect.ui-button {
+  justify-content: center;
+}
+
+.sys-preset[aria-pressed="true"],
+.sys-effect[aria-pressed="true"] {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.sys-preset__dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.sys-presets .ui-button-wrap,
+.sys-effects .ui-button-wrap {
+  display: grid;
+}
+
+.sys-effects {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sys-slider {
+  display: grid;
+  gap: 10px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.sys-slider > span {
+  display: flex;
+  justify-content: space-between;
+}
+
+.sys-slider output {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.sys-slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* The shared colour field is sized for a row of controls; here it is one
+   field in a column. */
+.sys-lighting .color-field {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.sys-lighting .color-field__entry {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) repeat(3, minmax(56px, 72px));
+  align-items: end;
+  gap: 8px;
+}
+
+.sys-absent {
+  display: grid;
+  gap: 8px;
+}
+
+.sys-absent p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.sys-absent__dash {
+  color: var(--text-muted);
+}
+
+
+/* The preview's other effects: the lights flow in turn, or cycle their hue. */
+.sys-lights--flow .sys-lights__case span,
+.sys-lights--flow_reverse .sys-lights__case span {
+  animation: sys-breathe var(--lighting-speed, 2.5s) ease-in-out infinite;
+}
+
+.sys-lights--flow .sys-lights__case span:nth-child(2),
+.sys-lights--flow_reverse .sys-lights__case span:nth-child(3) {
+  animation-delay: calc(var(--lighting-speed, 2.5s) / 4);
+}
+
+.sys-lights--flow .sys-lights__case span:nth-child(3),
+.sys-lights--flow_reverse .sys-lights__case span:nth-child(2) {
+  animation-delay: calc(var(--lighting-speed, 2.5s) / 2);
+}
+
+.sys-lights--flow .sys-lights__case span:nth-child(4),
+.sys-lights--flow_reverse .sys-lights__case span:nth-child(1) {
+  animation-delay: calc(var(--lighting-speed, 2.5s) * 3 / 4);
+}
+
+.sys-lights--rainbow .sys-lights__case,
+.sys-lights--rainbow_reverse .sys-lights__case,
+.sys-lights--hue_cycle .sys-lights__case {
+  animation: sys-hue var(--lighting-speed, 2.5s) linear infinite;
+}
+
+.sys-lights--rainbow_reverse .sys-lights__case {
+  animation-direction: reverse;
+}
+
+@keyframes sys-hue {
+  to { filter: hue-rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sys-lights__case,
+  .sys-lights__case span {
+    animation: none !important;
+  }
+}
+
+/* A phone's thumb needs 44px: the sliders' hit area grows, the drawn track does not. */
+@media (max-width: 720px), (pointer: coarse) {
+  .sys-slider input[type="range"] {
+    height: 44px;
+    margin: 0;
+  }
+}

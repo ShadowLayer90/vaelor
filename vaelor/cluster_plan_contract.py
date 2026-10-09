@@ -28,6 +28,11 @@ class ClusterPlanContext:
     manager: Any
     summary: Dict[str, Any] = field(default_factory=dict)
     callbacks: Dict[str, Any] = field(default_factory=dict)
+    #: The authenticated operator building the plan. The researched-app preview
+    #: resolves its approved draft through the draft store, which scopes drafts by
+    #: their owning actor, so the plan must carry who is asking — exactly the
+    #: actor the deploy job later resolves the same draft under (preview==deploy).
+    actor: str = ""
 
     def live_service_names(self) -> Set[str]:
         return {
@@ -37,7 +42,12 @@ class ClusterPlanContext:
 
     def enrolled_node(self, node_id: Any, message: str) -> Dict[str, Any]:
         """Resolve an enrolled node record, or refuse with `message`."""
-        node = self.manager.store.get_node(str(node_id))
+        try:
+            node = self.manager.store.get_node(str(node_id))
+        except ValueError:
+            # A record that will not decode (review round 2, LESSONS 22): the
+            # plans read it as far as it reads, so it still has an exit.
+            node = self.manager.store.node_core(str(node_id))
         if node is None:
             raise ClusterPlanError("cluster_node_not_found", message, status=404)
         return node

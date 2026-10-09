@@ -38,11 +38,13 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import secrets
 import socket
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 try:
     import pwd
@@ -50,6 +52,8 @@ except ImportError:  # pragma: no cover - deployment target is Linux
     pwd = None
 
 
+#: The daemon account's home, created by its own package and owned by it.
+RDP_HOME = Path("/var/lib/gnome-remote-desktop")
 RDP_TLS_DIRECTORY = Path(
     "/var/lib/gnome-remote-desktop/.local/share/gnome-remote-desktop/certificates"
 )
@@ -124,7 +128,7 @@ def certificate_identities() -> Tuple[List[str], List[str]]:
     **A certificate with no `subjectAltName` cannot match anything.** Measured
     on the appliance 2026-08-11: `subject=CN=Vaelor Remote Desktop`, issuer
     identical, and no SAN extension present at all — on a machine answering to
-    `myhost`, `myhost.lan` and `192.168.0.50`. Every client reported a name
+    `myhost`, `myhost.lan` and `192.0.2.50`. Every client reported a name
     mismatch whatever the owner typed, because a bare Common Name is not
     consulted for identity: there was nothing to compare against, so the
     warning was guaranteed rather than incidental.
@@ -197,6 +201,311 @@ def _subject_alt_name(names: List[str], addresses: List[str]) -> str:
     )
 
 
+def rdp_state_directory_chain() -> List[Path]:
+    """Every directory from the daemon's home (exclusive) down to the TLS one.
+
+    ``.local``, ``.local/share``, ``.local/share/gnome-remote-desktop`` and
+    ``certificates``: the daemon writes its own credential store beside the
+    certificates, so every one of them is the daemon's, not only the last.
+    """
+    try:
+        relative = RDP_TLS_DIRECTORY.relative_to(RDP_HOME)
+    except ValueError:
+        return [RDP_TLS_DIRECTORY]
+    return [
+        RDP_HOME.joinpath(*relative.parts[: index + 1])
+        for index in range(len(relative.parts))
+    ]
+
+
+#: Largest PEM file the previous pair is read back from; a certificate and a
+#: 3072-bit key are a few KiB, so anything near this is not one of ours.
+_PREVIOUS_FILE_LIMIT = 1 << 20
+_LINUX_ONLY = "GNOME Remote Desktop setup requires Linux."
+
+
+def _directory_flags() -> int:
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+def open_rdp_state_directory(account) -> int:
+    """Create, or repair, the daemon's state directories as its own, 0700, and
+    return an open descriptor on ``certificates/``. The caller closes it.
+
+    **W4d-D22: remote login could never be set up on a box this module had
+    touched.** ``RDP_TLS_DIRECTORY.mkdir(parents=True)`` created the missing
+    parents as root, under the broker's ``Group=vaelor-jobs`` and
+    ``UMask=0007``, and only the last directory was handed to the daemon. So
+    ``/var/lib/gnome-remote-desktop/.local`` was ``root:vaelor-jobs 0770``
+    inside a home the daemon owns, the daemon could not reach
+    ``.local/share/gnome-remote-desktop`` to create its credential store, and
+    it aborted on start ("Init file credentials failed ... Permission
+    denied"). Every directory on the way is now created and owned here, and a
+    box that already carries the root-owned ones is repaired on the next setup
+    (the upgrade-path half of LESSONS 13). It tightens rather than loosens:
+    each directory ends ``0700`` and owned by the daemon account.
+
+    **What is protected, exactly (F1, VD-185).** This runs as root over a tree
+    the daemon account can rename at will, so no path string below the home is
+    ever handed to the kernel. The home itself is opened by its absolute path
+    with ``O_NOFOLLOW | O_DIRECTORY``: every component above it (``/var``,
+    ``/var/lib``) is root's, and ``O_NOFOLLOW`` covers the last one, the only
+    one the daemon could replace. Each directory below is then created with
+    ``mkdir(name, dir_fd=parent)`` and opened with
+    ``open(name, O_NOFOLLOW | O_DIRECTORY, dir_fd=parent)`` - one component,
+    relative to a descriptor already held - and changed with ``fchown`` /
+    ``fchmod`` on its own descriptor. A link at any level is refused rather
+    than followed, and swapping a directory for a link after it was opened
+    changes nothing, because the walk holds the directory, not its name.
+
+    The first version of this opened each directory by its full absolute path
+    with ``O_NOFOLLOW``, and its docstring said a planted link could not
+    redirect root's chown. That was true of the last component only: the
+    daemon could swap ``.local`` for a link to ``/usr`` between two iterations
+    and have root ``fchown`` ``/usr/share`` to itself (LESSONS 10, a guarantee
+    written wider than the code; LESSONS 18, the daemon's boundary is not
+    root's).
+    """
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise RuntimeError(_LINUX_ONLY)
+    parts = RDP_TLS_DIRECTORY.relative_to(RDP_HOME).parts
+    flags = _directory_flags()
+    parent = os.open(str(RDP_HOME), flags)
+    try:
+        for name in parts:
+            try:
+                os.mkdir(name, 0o700, dir_fd=parent)
+            except FileExistsError:
+                pass
+            try:
+                child = os.open(name, flags, dir_fd=parent)
+            except OSError as error:
+                raise OSError(
+                    error.errno,
+                    "{} in the remote-desktop service's state directory is a "
+                    "link or not a directory, so Vaelor did not change it. "
+                    "Remove it, then set up remote login again.".format(name),
+                ) from error
+            try:
+                os.fchown(child, account.pw_uid, account.pw_gid)
+                os.fchmod(child, 0o700)
+            except BaseException:
+                os.close(child)
+                raise
+            os.close(parent)
+            parent = child
+    except BaseException:
+        os.close(parent)
+        raise
+    return parent
+
+
+def _read_owned_file(directory: int, name: str, uid: int):
+    """The bytes of ``name`` in ``directory``, or None if it is not plainly ``uid``'s.
+
+    Read only when it is a regular file ``uid`` owns, opened ``O_NOFOLLOW``:
+    root reads the daemon's previous pair to put it back later, so a link - or
+    a hard link, which ``O_NOFOLLOW`` cannot see - to ``/etc/shadow`` planted
+    under the name must never become a copy the daemon can read. The owner
+    check is what refuses the hard link: the daemon cannot make a file of
+    root's its own (R2-1, LESSONS 18).
+    """
+    flags = (os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+             | getattr(os, "O_CLOEXEC", 0))
+    try:
+        descriptor = os.open(name, flags, dir_fd=directory)
+    except OSError:
+        return None
+    try:
+        status = os.fstat(descriptor)
+        if (not stat.S_ISREG(status.st_mode) or status.st_uid != uid
+                or status.st_size > _PREVIOUS_FILE_LIMIT):
+            return None
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(descriptor)
+
+
+def _stage_daemon_file(directory: int, name: str, content: bytes, account) -> str:
+    """Write ``content`` beside ``name`` under a fresh name; return that name.
+
+    ``O_CREAT | O_EXCL | O_NOFOLLOW`` relative to the held directory, so the
+    file is new and is the one written; ownership and mode are set on the
+    descriptor, never by path.
+    """
+    staged = ".{}.{}".format(name, secrets.token_hex(8))
+    flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+    descriptor = os.open(staged, flags, 0o600, dir_fd=directory)
+    try:
+        os.fchown(descriptor, account.pw_uid, account.pw_gid)
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(content)
+        while view:
+            view = view[os.write(descriptor, view):]
+        os.fsync(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        _unlink_quietly(directory, staged)
+        raise
+    os.close(descriptor)
+    return staged
+
+
+def remove_rdp_tls_pair() -> Dict[str, Any]:
+    """Remove the published pair as root, without following anything the daemon owns.
+
+    R2-9: ``disable_rdp`` unlinked ``RDP_TLS_CERT`` and ``RDP_TLS_KEY`` by full
+    path, so VD-185's "root never takes a path below the daemon's home" was not
+    true there: a ``.local`` swapped for a link would have had root unlink
+    ``vaelor-rdp.crt`` in whatever directory the link named. The walk here is
+    the setup's - the home by absolute path with ``O_NOFOLLOW``, every level
+    below it one component relative to the held descriptor - except that it
+    creates and changes nothing; the pair is removed with
+    ``unlink(name, dir_fd=certificates)``, which removes a planted link itself,
+    never its target. A missing directory is nothing to remove; a link on the
+    way is reported, not followed (LESSONS 18, 10).
+    """
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise RuntimeError(_LINUX_ONLY)
+    flags = _directory_flags()
+    try:
+        parent = os.open(str(RDP_HOME), flags)
+    except FileNotFoundError:
+        return {"removed": False, "detail": ""}
+    try:
+        for name in RDP_TLS_DIRECTORY.relative_to(RDP_HOME).parts:
+            try:
+                child = os.open(name, flags, dir_fd=parent)
+            except FileNotFoundError:
+                return {"removed": False, "detail": ""}
+            except OSError:
+                return {
+                    "removed": False,
+                    "detail": "{} in the remote-desktop service's state directory is "
+                    "a link or not a directory, so Vaelor did not remove the "
+                    "certificate through it.".format(name),
+                }
+            os.close(parent)
+            parent = child
+        for name in (RDP_TLS_CERT.name, RDP_TLS_KEY.name):
+            _unlink_quietly(parent, name)
+        return {"removed": True, "detail": ""}
+    finally:
+        os.close(parent)
+
+
+def _unlink_quietly(directory: int, name: str) -> None:
+    try:
+        os.unlink(name, dir_fd=directory)
+    except FileNotFoundError:
+        pass
+
+
+def _publish_pair(directory: int, pair: Dict[str, bytes], account) -> None:
+    """Move a generated pair into place by name, restoring on a half-publish.
+
+    Two files cannot be replaced in one atomic step, so the previous pair is
+    held in memory across the only window that remains and put back if the
+    second move fails; a certificate from one generation beside a key from
+    another is a listener that starts and can never complete a handshake. A
+    rename replaces whatever is at the name - a planted link included - and
+    never writes through it.
+    """
+    previous = {
+        name: _read_owned_file(directory, name, account.pw_uid) for name in pair
+    }
+    staged: Dict[str, str] = {}
+    try:
+        for name, content in pair.items():
+            staged[name] = _stage_daemon_file(directory, name, content, account)
+        published: List[str] = []
+        try:
+            for name, temporary in staged.items():
+                os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+                published.append(name)
+        except OSError:
+            for name in published:
+                content = previous.get(name)
+                if content is None:
+                    _unlink_quietly(directory, name)
+                    continue
+                restore = _stage_daemon_file(directory, name, content, account)
+                os.replace(restore, name, src_dir_fd=directory, dst_dir_fd=directory)
+            raise
+    finally:
+        for temporary in staged.values():
+            _unlink_quietly(directory, temporary)
+
+
+def _refuse_daemon_reachable(staging: Path, daemon_uid: int) -> None:
+    """Refuse a staging directory the daemon could rename or replace.
+
+    R2-1: nothing tested that openssl writes into the broker's private
+    ``/tmp``; a staging directory under the daemon's home survived 76 tests,
+    and there the daemon can rename it away, plant ``certificate.pem`` as a
+    link to ``/etc/shadow``, and have root publish the file (F1 again). The
+    rule is checked where it is used: not under the daemon's home, and no
+    directory from it to ``/`` owned by the daemon account.
+    """
+    resolved = Path(staging).resolve()
+    home = Path(RDP_HOME).resolve()
+    if resolved == home or home in resolved.parents:
+        raise RuntimeError(
+            "The certificate was about to be generated inside the remote-desktop "
+            "service's own directory, which that service can rewrite. Remote "
+            "login was left unchanged.")
+    for directory in (resolved, *resolved.parents):
+        try:
+            owner = directory.lstat().st_uid
+        except OSError:
+            continue
+        if owner == daemon_uid:
+            raise RuntimeError(
+                "The certificate's staging directory is reachable by the "
+                "remote-desktop service account. Remote login was left unchanged.")
+
+
+def _generate_pair(run: Callable[..., str], argv: Callable[[Path, Path], List[str]],
+                   daemon_uid: int) -> Dict[str, bytes]:
+    """Run openssl in a root-private directory and read the pair back safely.
+
+    The pair is read through a descriptor on the staging directory with
+    ``O_NOFOLLOW`` and only when each file is a regular file owned by this
+    process's user (root on the appliance), so even a staging directory that
+    someone else reached could not hand root a link or another account's file.
+    """
+    staging = Path(tempfile.mkdtemp(prefix="vaelor-rdp-tls-"))
+    try:
+        _refuse_daemon_reachable(staging, daemon_uid)
+        certificate = staging / "certificate.pem"
+        private_key = staging / "private-key.pem"
+        run(argv(certificate, private_key), timeout=30)
+        directory = os.open(str(staging), _directory_flags())
+        try:
+            me = getattr(os, "geteuid", lambda: 0)()
+            pair = {
+                RDP_TLS_CERT.name: _read_owned_file(directory, certificate.name, me),
+                RDP_TLS_KEY.name: _read_owned_file(directory, private_key.name, me),
+            }
+        finally:
+            os.close(directory)
+    finally:
+        for item in staging.iterdir():
+            item.unlink()
+        staging.rmdir()
+    if any(content is None for content in pair.values()):
+        raise RuntimeError(
+            "openssl's output was not a plain file written by Vaelor, so it was "
+            "not published. Remote login was left unchanged.")
+    return pair  # type: ignore[return-value]
+
+
 def install_rdp_tls(run: Callable[..., str]) -> None:
     """Generate and publish the certificate GNOME Remote Desktop serves.
 
@@ -217,15 +526,16 @@ def install_rdp_tls(run: Callable[..., str]) -> None:
     question (LESSONS pattern 6), and the cheap five-second rebuild does not
     need one.
 
-    **Nothing is published until it exists.** openssl writes into a private
-    temporary directory and the pair is moved into place only after it has
-    been generated, so a failure at any point before that — an openssl build
-    without `-addext`, a full disk — leaves the working certificate exactly
-    where it was, and `_stopped_for_reconfiguration` puts the service back up
-    on it. Two files cannot be replaced in one atomic step, so the previous
-    pair is held in memory across the only window that remains and restored if
-    the second move fails; a certificate from one generation beside a key from
-    another is a listener that starts and can never complete a handshake.
+    **Nothing is published until it exists, and nothing is generated where the
+    daemon can reach it.** openssl writes into a root-private temporary
+    directory (the broker's own ``PrivateTmp``), not into ``certificates/``:
+    that directory is the daemon's, and a staging directory inside it could be
+    renamed away and replaced by a link before openssl or a chown followed it
+    (F1, VD-185). The pair is then published through the descriptor
+    :func:`open_rdp_state_directory` returns (:func:`_publish_pair`), so a
+    failure at any point before that — an openssl build without `-addext`, a
+    full disk — leaves the working certificate exactly where it was, and
+    `_stopped_for_reconfiguration` puts the service back up on it.
 
     **"A host that names itself nothing" used to be listed there and is not a
     case this function has** (#192). :func:`certificate_identities` appends
@@ -235,7 +545,7 @@ def install_rdp_tls(run: Callable[..., str]) -> None:
     Written as current behaviour, it was design intent — LESSONS 10.
     """
     if pwd is None:
-        raise RuntimeError("GNOME Remote Desktop setup requires Linux.")
+        raise RuntimeError(_LINUX_ONLY)
     account = pwd.getpwnam("gnome-remote-desktop")
     names, addresses = certificate_identities()
     # Unreachable while `certificate_identities` guarantees the loopback pair,
@@ -252,45 +562,20 @@ def install_rdp_tls(run: Callable[..., str]) -> None:
             "certificate could name it. Remote login was left unchanged."
         )
     common_name = _common_name(names, addresses)
-    RDP_TLS_DIRECTORY.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chown(RDP_TLS_DIRECTORY, account.pw_uid, account.pw_gid)
-    os.chmod(RDP_TLS_DIRECTORY, 0o700)
-    temporary = Path(tempfile.mkdtemp(prefix=".rdp-tls-", dir=RDP_TLS_DIRECTORY))
-    certificate = temporary / "certificate.pem"
-    private_key = temporary / "private-key.pem"
+    certificates = open_rdp_state_directory(account)
     try:
-        run([
+        pair = _generate_pair(run, lambda certificate, private_key: [
             "/usr/bin/openssl", "req", "-x509", "-nodes", "-newkey", "rsa:3072",
             "-days", str(RDP_TLS_DAYS), "-subj", "/CN={}".format(common_name),
-            "-addext", "subjectAltName={}".format(
-                _subject_alt_name(names, addresses)
-            ),
+            "-addext", "subjectAltName={}".format(_subject_alt_name(names, addresses)),
             "-addext", "basicConstraints=critical,CA:FALSE",
             "-addext", "keyUsage=critical,digitalSignature,keyEncipherment",
             "-addext", "extendedKeyUsage=serverAuth",
             "-keyout", str(private_key), "-out", str(certificate),
-        ], timeout=30)
-        os.chown(certificate, account.pw_uid, account.pw_gid)
-        os.chown(private_key, account.pw_uid, account.pw_gid)
-        os.chmod(certificate, 0o600)
-        os.chmod(private_key, 0o600)
-        previous = {
-            path: path.read_bytes()
-            for path in (RDP_TLS_CERT, RDP_TLS_KEY) if path.exists()
-        }
-        try:
-            os.replace(certificate, RDP_TLS_CERT)
-            os.replace(private_key, RDP_TLS_KEY)
-        except OSError:
-            for path, content in previous.items():
-                path.write_bytes(content)
-                os.chown(path, account.pw_uid, account.pw_gid)
-                os.chmod(path, 0o600)
-            raise
+        ], account.pw_uid)
+        _publish_pair(certificates, pair, account)
     finally:
-        for item in temporary.iterdir():
-            item.unlink(missing_ok=True)
-        temporary.rmdir()
+        os.close(certificates)
 
 
 def rdp_certificate_fingerprint() -> Dict[str, str]:
@@ -357,3 +642,34 @@ def rdp_certificate_fingerprint() -> Dict[str, str]:
 
 def _no_fingerprint(detail: str) -> Dict[str, str]:
     return {"fingerprint": "", "algorithm": "", "detail": detail}
+
+
+def rdp_service_cause() -> str:
+    """One sentence on the daemon's own state, which is usually the cause.
+
+    The W4d-D22 daemon had core-dumped on start, so every setting read back as
+    unset; saying "did not retain" without that left the owner retrying a form
+    that could not succeed. An unreadable state says so rather than guessing
+    (LESSONS 8).
+    """
+    try:
+        result = subprocess.run(
+            ["/usr/bin/systemctl", "show", "gnome-remote-desktop.service",
+             "--property=ActiveState", "--property=Result", "--value"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return "Its service state could not be read ({}).".format(
+            type(error).__name__
+        )
+    fields = (result.stdout or "").split()
+    if result.returncode != 0 or len(fields) < 2:
+        return "Its service state could not be read."
+    active, outcome = fields[0], fields[1]
+    if active == "active":
+        return "Its service is running but reported these settings unset."
+    return (
+        "Its service (gnome-remote-desktop) is {} with result '{}', so it "
+        "could not store them.".format(active, outcome)
+    )
+

@@ -1,4 +1,4 @@
-import { Fragment, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { joinClassNames } from "./field";
 
 export type TabItem = {
@@ -12,7 +12,12 @@ export type TabSetProps = {
   label: string;
   items: readonly TabItem[];
   selectedId: string;
-  onSelect: (id: string) => void;
+  /**
+   * `keyboard` is true for an arrow, Home or End move: a page that keeps its
+   * tab in the address replaces the entry for those and pushes one for a click,
+   * so walking the strip by key does not fill Back with every tab passed.
+   */
+  onSelect: (id: string, how?: { keyboard: boolean }) => void;
   children: ReactNode;
   className?: string;
   /**
@@ -24,6 +29,16 @@ export type TabSetProps = {
   listClassName?: string;
   panelClassName?: string;
 };
+
+/**
+ * How far past a tab's edge the strip scrolls to show it: the width of the
+ * fade that marks hidden tabs (`--tab-strip-cue` in shared-primitives.css), so
+ * the tab brought into sight is not left under the cue.
+ */
+const CUE_WIDTH_PX = 40;
+
+/** Which ends of a scrolling strip hide tabs. */
+type HiddenEnds = { start: boolean; end: boolean };
 
 export function TabSet({
   label,
@@ -40,6 +55,43 @@ export function TabSet({
   const activeItem = enabledItems.find((item) => item.id === selectedId) ?? enabledItems[0];
   const panelId = "ui-tab-panel-" + instanceId;
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // B2: a strip narrower than its tabs scrolls. It says which end hides tabs
+  // (`data-more-start` / `data-more-end`, drawn as a fade), and the selected
+  // tab is scrolled into it - at 375 px the last tab once opened out of sight.
+  const [hidden, setHidden] = useState<HiddenEnds>({ start: false, end: false });
+  const measureHidden = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const start = list.scrollLeft > 1;
+    const end = list.scrollLeft + list.clientWidth < list.scrollWidth - 1;
+    setHidden((current) => (current.start === start && current.end === end ? current : { start, end }));
+  }, []);
+  const activeId = activeItem?.id;
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const tab = activeId ? tabRefs.current[activeId] : null;
+    if (list && tab) {
+      // Only the strip scrolls, never the page (scrollIntoView would move it).
+      const strip = list.getBoundingClientRect();
+      const box = tab.getBoundingClientRect();
+      if (box.left < strip.left) list.scrollLeft -= strip.left - box.left + CUE_WIDTH_PX;
+      else if (box.right > strip.right) list.scrollLeft += box.right - strip.right + CUE_WIDTH_PX;
+    }
+    measureHidden();
+  }, [activeId, measureHidden]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measureHidden);
+      return () => window.removeEventListener("resize", measureHidden);
+    }
+    const observer = new ResizeObserver(measureHidden);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [measureHidden]);
 
   const moveFocus = (itemId: string, direction: "next" | "previous" | "first" | "last") => {
     if (!enabledItems.length) return;
@@ -50,12 +102,15 @@ export function TabSet({
         ? enabledItems.length - 1
         : (currentIndex + (direction === "next" ? 1 : -1) + enabledItems.length) % enabledItems.length;
     const nextItemId = enabledItems[nextIndex].id;
-    onSelect(nextItemId);
+    onSelect(nextItemId, { keyboard: true });
     tabRefs.current[nextItemId]?.focus();
     queueMicrotask(() => tabRefs.current[nextItemId]?.focus());
   };
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, itemId: string) => {
+    // A modified key is not a tab move: Alt+Left is the browser's Back, and
+    // Ctrl or Cmd with an arrow or Home/End belongs to the browser too.
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === "ArrowRight" || event.key === "ArrowDown") {
       event.preventDefault();
       moveFocus(itemId, "next");
@@ -73,7 +128,15 @@ export function TabSet({
 
   return (
     <div className={joinClassNames("tab-set", "ui-tab-set", className)}>
-      <div aria-label={label} className={joinClassNames("ui-tab-set__list", listClassName)} role="tablist">
+      <div
+        aria-label={label}
+        className={joinClassNames("ui-tab-set__list", listClassName)}
+        data-more-end={hidden.end || undefined}
+        data-more-start={hidden.start || undefined}
+        onScroll={measureHidden}
+        ref={listRef}
+        role="tablist"
+      >
         {items.map((item) => {
           const isDisabled = Boolean(item.disabled || item.disabledReason);
           const isSelected = item.id === activeItem?.id;
@@ -93,7 +156,7 @@ export function TabSet({
                   if (button) tabRefs.current[item.id] = button;
                   else delete tabRefs.current[item.id];
                 }}
-                onClick={() => onSelect(item.id)}
+                onClick={() => onSelect(item.id, { keyboard: false })}
                 onKeyDown={(event) => onTabKeyDown(event, item.id)}
                 tabIndex={isSelected ? 0 : -1}
                 type="button"

@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import type { MachineProfile } from "../lib/machine";
-import { Icon } from "./Icon";
+import { Icon, ICON_SIZE } from "./Icon";
 import { StatusPill } from "./StatusPill";
-import { UnavailableValue } from "./ui";
+import { LoadingLines, UnavailableValue } from "./ui";
 
 /**
- * The enclosure, on the landing page, because the enclosure *is* the product.
+ * The enclosure, on System › Compute under This machine (VD-200, the
+ * SystemComputePi board), because on a Pi the enclosure *is* the product.
  *
  * "Is the fan about to get loud", "are the lights on", "is the front screen
  * awake" are the three things an owner of this appliance actually wonders, and
@@ -79,6 +80,8 @@ export interface EnclosureRow {
    * — a permanent, correct answer — sat under a "Reading" pill forever.
    */
   pending?: boolean;
+  /** The controller behind this row was asked and did not answer (said in red, not grey). */
+  unanswered?: boolean;
 }
 
 /**
@@ -130,6 +133,7 @@ export function enclosureRows({
         : caseFan.running ? "Running" : "Idle",
       detail: profile ? `${profile.name} profile` : "Airflow profile not reported",
       pending: fans.state === "pending",
+      unanswered: caseFan?.running == null && fans.state === "failed",
       unavailable: caseFan?.running == null
         ? silence(
           fans,
@@ -152,6 +156,7 @@ export function enclosureRows({
           ? `${cpuFan.mode.charAt(0).toUpperCase()}${cpuFan.mode.slice(1)}`
           : "Cooling mode not reported",
       pending: fans.state === "pending",
+      unanswered: rpm === null && fans.state === "failed",
       unavailable: rpm === null
         ? silence(
           fans,
@@ -170,6 +175,7 @@ export function enclosureRows({
       value: lightingState ? (lightingState.enabled ? style?.name ?? "On" : "Off") : null,
       detail: lightingState?.enabled ? lightingState.color : "Case lighting is switched off",
       pending: lighting.state === "pending",
+      unanswered: lighting.state === "failed",
       unavailable: lightingState
         ? undefined
         : silence(lighting, "", "The lighting controller did not answer"),
@@ -185,6 +191,7 @@ export function enclosureRows({
         ? `${displayState.pages.length || "default"} page${displayState.pages.length === 1 ? "" : "s"}`
         : "The front display is asleep",
       pending: display.state === "pending",
+      unanswered: display.state === "failed",
       unavailable: displayState
         ? undefined
         : silence(display, "", "The front display did not answer"),
@@ -245,36 +252,46 @@ export function EnclosurePanel({ machine }: { machine: MachineProfile }) {
     settled: { tone: "success" as const, label: "All good" },
   }[state];
 
+  /*
+   * The SystemComputePi board's Enclosure card: one cell per part discovery
+   * found. A controller that did not answer is said in red, and the card's
+   * edge turns with it; a part that does not report a reading says so in grey.
+   */
+  const silent = rows.some((row) => row.unanswered);
   return (
     <section
       aria-labelledby="enclosure-heading"
-      className="data-panel enclosure-panel"
+      className={silent ? "card ui-card sys-card enclosure-panel sys-card--refused" : "card ui-card sys-card enclosure-panel"}
       data-enclosure-state={state}
     >
-      <div className="panel-heading">
-        <div>
+      <header className="ui-card__header">
+        <div className="ui-card__titles">
           <h2 id="enclosure-heading">Enclosure</h2>
           <p>Cooling, lighting, and the front screen</p>
         </div>
-        <StatusPill className="enclosure-panel__state" label={pill.label} tone={pill.tone} />
+        <div className="ui-card__actions">
+          <StatusPill className="enclosure-panel__state" label={pill.label} reading={state === "settled" ? undefined : "unread"} tone={pill.tone} />
+        </div>
+      </header>
+      <div className="ui-card__body">
+        {state === "reading" ? <LoadingLines label="Reading the enclosure" /> : (
+          <dl className="sys-kv sys-kv--readings sys-kv--pairs">
+            {rows.map((row) => (
+              <div className="sys-kv__cell" key={row.label}>
+                <dt><Icon name={row.icon} size={ICON_SIZE.inline} />{row.label}</dt>
+                <dd className="sys-kv__reading">
+                  {row.value === null
+                    ? <UnavailableValue label={`${row.label} state unavailable`} mark="—" reason={row.unavailable ?? "Not reported by this enclosure"} />
+                    : row.value}
+                </dd>
+                <dd className={row.value === null && row.unanswered ? "sys-kv__detail sys-kv__detail--refused" : row.label === "Lights" && row.value !== null && row.value !== "Off" ? "sys-kv__detail sys-mono" : "sys-kv__detail"}>
+                  {row.value === null ? row.unavailable ?? "Not reported by this enclosure" : row.detail}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
       </div>
-      <dl className="enclosure-facts">
-        {rows.map((row) => (
-          <div key={row.label}>
-            <dt><Icon name={row.icon} size={15} />{row.label}</dt>
-            <dd>
-              {row.value === null
-                ? <UnavailableValue
-                  label={`${row.label} state unavailable`}
-                  reason={row.unavailable ?? "Not reported by this enclosure"}
-                />
-                : row.value}
-              <small>{row.detail}</small>
-            </dd>
-          </div>
-        ))}
-      </dl>
-      <a className="ui-button ui-button--quiet" href="#/system">Adjust in System</a>
     </section>
   );
 }

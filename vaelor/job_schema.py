@@ -43,6 +43,13 @@ ADDED_JOB_COLUMNS = (
     ("retry_of", "TEXT"),
     ("phase", "TEXT NOT NULL DEFAULT ''"),
     ("blocker_layer", "TEXT NOT NULL DEFAULT ''"),
+    # VD-139: the owner dismissed this attention item (epoch seconds, username).
+    ("dismissed_at", "INTEGER"),
+    ("dismissed_by", "TEXT"),
+    # ... and the episode it was dismissed in: the raw state and updated_at
+    # then. A later transition is a new episode (review B1).
+    ("dismissed_state", "TEXT"),
+    ("dismissed_updated_at", "INTEGER"),
 )
 ADDED_EVENT_COLUMNS = (
     ("phase", "TEXT NOT NULL DEFAULT ''"),

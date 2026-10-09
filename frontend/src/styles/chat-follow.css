@@ -7,15 +7,10 @@
  * Chat alike rather than duplicated per surface.
  */
 
-.assistant-chat__resume,
 .ai-chat-messages__resume {
   display: flex;
   justify-content: center;
   z-index: 1;
-}
-
-.assistant-chat__resume {
-  margin-top: calc(var(--space-2) * -1);
 }
 
 .ai-chat-messages__resume {

@@ -18,12 +18,18 @@ def validate_application_compose(
     compose: Mapping[str, Any],
     workloads_root: str,
     hardware: Mapping[str, Any],
+    *,
+    model_ports: Mapping[int, str],
 ) -> Dict[str, Any]:
-    """Check policy, digest pins, host resources, ports, and storage."""
+    """Check policy, digest pins, host resources, ports, and storage.
+
+    ``model_ports`` are the ports stored Vaelor models come back on (W7-2),
+    handed to `validate_normalized`, which requires them.
+    """
     if not isinstance(compose, dict):
         raise ValueError("The server-owned Compose draft is invalid.")
     root = Path(workloads_root).resolve()
-    validate_normalized(dict(compose), root)
+    validate_normalized(dict(compose), root, model_ports=model_ports)
     services = compose.get("services", {})
     checks = ["Compose policy passed"]
     memory_required = 0

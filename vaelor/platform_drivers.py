@@ -9,6 +9,7 @@ import subprocess
 from typing import Any, Callable, Dict, Optional
 
 from .docker_health import runtime_health
+from .host_power import POWER_ACTION_REFUSAL
 from .linux_storage import LinuxStorageProvider
 from .linux_telemetry import LinuxTelemetryProvider
 from .platforms import read_os_release, select_hardware_platform
@@ -497,7 +498,7 @@ class HostPowerController:
 
     def execute(self, action: str) -> Any:
         if action not in self._actions:
-            raise ValueError("Choose restart_service, reboot, or shutdown.")
+            raise ValueError(POWER_ACTION_REFUSAL)
         callback = self._actions[action]
         if callback is None:
             raise RuntimeError(

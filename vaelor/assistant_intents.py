@@ -48,6 +48,7 @@ from .assistant_answer_presentation import (
     asks_about_host_facts, asks_about_identity, is_appliance_question,
 )
 from .assistant_vocabulary import BASE_TOOLS, REGEX_PREFIX, TOOL_PHRASES
+from .model_credential_roles import ai_chat_may_use
 
 __all__ = [
     "BASE_TOOLS", "matched_intents", "matched_phrases", "named_subjects",
@@ -93,11 +94,20 @@ _INTENT_PHRASES: Dict[str, Tuple[str, ...]] = TOOL_PHRASES
 # sentence somebody wrote in `tests/test_assistant_intents.OPEN_DIAGNOSTIC_
 # QUESTIONS`, and `GENERAL_KNOWLEDGE_AFTER_WIDENING` in the same file re-proves
 # the general set still redirects (measured live on the Z2, before/after).
-_BROAD_PHRASES: Tuple[str, ...] = (
+#: The phrases that ask about the whole machine at once. Public because the
+#: answer path (`assistant_builtin_answer`), the answer-topic table and the
+#: model's fact filter (`provider_runtime._TOPIC_KEYS`) all read them - review
+#: B4 found the third reader missing, so a sweep was gathered and then shown
+#: to the model as identity alone.
+SWEEP_PHRASES: Tuple[str, ...] = (
     "everything", "overall", "diagnose", "full check", "health check",
-    "anything i should", "anything wrong", "how is my", "how's my",
-    "status report", "overview",
-    "should i check", "should i look", "keep an eye", "keeping an eye",
+    "how is my", "how's my", "status report", "overview",
+    "keep an eye", "keeping an eye",
+)
+
+_BROAD_PHRASES: Tuple[str, ...] = SWEEP_PHRASES + (
+    "anything i should", "anything wrong",
+    "should i check", "should i look",
     "look out for", "watch out for", "keep tabs",
 )
 
@@ -242,6 +252,14 @@ def select_tools(message: str, *, base: Sequence[str] = BASE_TOOLS) -> Set[str]:
     # A checkpoint question is meaningless without knowing what it protects.
     if "recovery.checkpoints" in selected:
         selected.add("workloads.inventory")
+    # VD-205 live check L1: "which model does AI Chat use" and "is the LLM
+    # Server running" read the serving fact, and only those questions do -
+    # it probes the LLM Server's gate and the models, which costs seconds
+    # when one hangs (review round 2, S2).
+    from .assistant_serving_answers import SERVING_TOOL, asks_about_serving
+
+    if asks_about_serving(message):
+        selected.update(("inference.status", SERVING_TOOL))
     # VD-100 evidence gate: an acting request ("restart nextcloud") must read
     # live inventory this turn, so the proposal binds to a managed app that
     # reading named - not to a name the model supplied.
@@ -468,6 +486,16 @@ _DEFINITION_REQUEST = re.compile(
 # redirecting them would break every ordinary conversation.
 _MINIMUM_WORDS = 4
 _WORD = re.compile(r"[\w']+")
+
+
+def is_definition_request(message: str) -> bool:
+    """Whether ``message`` asks what *a* thing is - VD-121's definition form.
+
+    Public so an answer that names a console feature ("What is an LLM
+    Server?") can let the definition go where `is_out_of_scope_question`
+    sends it, rather than answer it with a reading (VD-205 live check, B2).
+    """
+    return _DEFINITION_REQUEST.match(str(message or "")) is not None
 
 
 def _control_plane_words_in(message: str) -> frozenset[str]:
@@ -715,13 +743,16 @@ def chat_destination(
     """Summarise AI Chat's readiness from what was actually read.
 
     ``None`` means the list could not be read at all, which is not the same
-    claim as an empty list and is not rendered as one.
+    claim as an empty list and is not rendered as one. A lease left on the
+    Assistant's NPU model is not a ready AI Chat: AI Chat refuses to send to
+    it (VD-210 owner rule; the vault's ``ai_chat_may_use``).
     """
     if connections is None:
         return {"state": CHAT_UNKNOWN, "label": ""}
     active = [
         item for item in connections
         if isinstance(item, Mapping) and "ai-chat" in (item.get("active_for") or ())
+        and ai_chat_may_use(item)
     ]
     if not active:
         return {"state": CHAT_ABSENT, "label": ""}

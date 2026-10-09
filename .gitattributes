@@ -1,4 +1,8 @@
-* text=auto
+# Every text file is LF in the index AND in what `git archive` emits, whatever
+# core.autocrlf says on the checkout that builds a release: a Windows checkout
+# shipped requirements-release.txt with CRLF (wave 6 deploy, LESSONS 18).
+# *.ps1 below keeps CRLF on purpose; binaries are named so no heuristic decides.
+* text=auto eol=lf
 
 *.py text eol=lf
 *.sh text eol=lf
@@ -26,3 +30,8 @@
 *.deb binary
 *.whl binary
 *.gz binary
+*.gpg binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar binary

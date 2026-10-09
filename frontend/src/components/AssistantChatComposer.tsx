@@ -1,5 +1,5 @@
-import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
-import { Button, Textarea } from "./ui";
+import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { Button } from "./ui";
 
 /**
  * Shared "still working" affordance.
@@ -41,13 +41,13 @@ export function AssistantResponseStatus({
   }, [active, startedAt]);
   if (!active) return null;
   return (
-    <div className="assistant-thinking" role="status">
-      <span className="assistant-thinking__dot" /><span className="assistant-thinking__dot" /><span className="assistant-thinking__dot" />
-      <div className="assistant-thinking__copy">
+    <div className="as-working" role="status">
+      <span aria-hidden="true" className="as-working__dot" />
+      <div className="as-working__copy">
         <strong>{label ?? (elapsed < 3 ? "Reading live appliance data" : "Preparing a concise answer")}</strong>
         <small>{elapsed}s elapsed</small>
       </div>
-      {onCancel && <Button className="assistant-thinking__stop" onClick={onCancel} type="button" variant="quiet">Stop response</Button>}
+      {onCancel && <Button className="as-working__stop" onClick={onCancel} type="button">Stop response</Button>}
     </div>
   );
 }
@@ -55,6 +55,7 @@ export function AssistantResponseStatus({
 export function AssistantChatComposer({
   blocked = false,
   busy,
+  children,
   input,
   onChange,
   onSubmit,
@@ -71,6 +72,12 @@ export function AssistantChatComposer({
    */
   blocked?: boolean;
   busy: boolean;
+  /**
+   * What refines the question, inside the question box and above its send
+   * button (VD-200, the AssistAnswer board): the armed-check banner and the
+   * "Save this as a check I can re-run" disclosure.
+   */
+  children?: ReactNode;
   input: string;
   onChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
@@ -99,12 +106,16 @@ export function AssistantChatComposer({
     formRef.current.requestSubmit();
   };
 
+  const hintId = "assistant-question-hint-" + useId().replaceAll(":", "");
   return (
-    <form className="assistant-chat__composer" onSubmit={onSubmit} ref={formRef}>
-      <Textarea
-        hint="Press Enter to send, Shift+Enter for a new line."
+    <form className="as-composer ui-card" onSubmit={onSubmit} ref={formRef}>
+      <label className="as-small as-muted" htmlFor="assistant-question">
+        Ask a question or describe what you want to do
+      </label>
+      <textarea
+        aria-describedby={hintId}
+        className="as-composer__input"
         id="assistant-question"
-        label="Ask a question or describe what you want to do"
         maxLength={4000}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
@@ -112,9 +123,17 @@ export function AssistantChatComposer({
         rows={3}
         value={input}
       />
-      <div>
-        <small>Live facts are read automatically. Changes always require a separate approval.</small>
-        <Button disabled={!canSend} type="submit" variant="primary">
+      {/* The board draws no hint line; the keys are still said, to the reader who needs them. */}
+      <span className="sr-only" id={hintId}>Press Enter to send, Shift+Enter for a new line.</span>
+      {children}
+      <div className="as-composer__foot">
+        <span className="as-small as-muted">Live facts are read automatically. Changes always need a separate approval.</span>
+        <Button
+          disabled={!canSend}
+          disabledReason={!busy && !blocked && !input.trim() ? "Type a question first" : undefined}
+          type="submit"
+          variant="primary"
+        >
           {busy ? "Thinking…" : submitLabel}
         </Button>
       </div>

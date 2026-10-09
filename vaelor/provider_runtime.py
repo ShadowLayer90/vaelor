@@ -6,7 +6,8 @@ import json
 import re
 from typing import Any, Dict, NamedTuple, Tuple
 
-from .assistant_vocabulary import BASE_TOOLS, literal_phrases
+from .assistant_intents import SWEEP_PHRASES
+from .assistant_vocabulary import BASE_TOOLS, UPTIME_PHRASES, literal_phrases
 from .phrase_match import mentions
 from .telemetry_trend import SUBJECT_NOT_RETAINED
 from .token_estimate import context_chars as _context_chars
@@ -50,6 +51,14 @@ def _model_billions(connection: Dict[str, str]) -> float:
     return float(matches[-1]) if matches else 0.0
 
 
+#: The one limitation a capable local tier carries: the model gets more room to
+#: reason, but Vaelor's deterministic approval still gates any plan. Named once
+#: because both the sized capable-local branch and the escalated-capable GPU
+#: branch state it, and LESSONS 6 keeps a sentence written twice in one module
+#: to a single home.
+_CAPABLE_APPROVAL_LIMITATION = "Complex plans still require Vaelor's approval checks."
+
+
 def model_capability(connection: Dict[str, str] | None) -> Dict[str, Any]:
     """Describe the selected engine honestly for the UI and support tooling."""
     if not connection:
@@ -58,6 +67,25 @@ def model_capability(connection: Dict[str, str] | None) -> Dict[str, Any]:
             "label": "Built-in appliance intelligence",
             "description": "Reliable for known Vaelor node facts and guarded actions; not a general-purpose model.",
             "limitations": ["Broader questions require a connected model."],
+        }
+    if connection.get("escalated_capable"):
+        # The user-triggered escalation resolved the capable GPU model that
+        # powers AI Chat. `model_connection.resolve_model_connection` stamped
+        # this marker server-side from the broker lease, because that lease
+        # deliberately carries an EMPTY model name (its identity is the label),
+        # which `_model_billions` would read as size 0 and mis-tier as
+        # `basic-local` - running the DEGRADED compact research flow on the
+        # LARGER model. Honouring the marker here centralizes the correction so
+        # every tier consumer (the compact-flow gate, the candidate limit,
+        # `application_research_capability`) treats the pass as capable. Tier is
+        # `capable-local` rather than a size-specific claim: honest that this is
+        # capable and not the basic compact flow, without asserting an exact
+        # parameter count we cannot read from an empty model field.
+        return {
+            "tier": "capable-local",
+            "label": "Capable graphics model",
+            "description": "The larger GPU model that powers AI Chat, used here for a fuller research pass.",
+            "limitations": [_CAPABLE_APPROVAL_LIMITATION],
         }
     if connection.get("provider") == "openai":
         return {
@@ -89,7 +117,7 @@ def model_capability(connection: Dict[str, str] | None) -> Dict[str, Any]:
             "tier": "capable-local",
             "label": "Capable local intelligence",
             "description": "Better context handling and reasoning, with higher memory use.",
-            "limitations": ["Complex plans still require Vaelor's approval checks."],
+            "limitations": [_CAPABLE_APPROVAL_LIMITATION],
         }
     return {
         "tier": "advanced-local",
@@ -515,6 +543,15 @@ def _topic(extra: Tuple[str, ...], tools: Tuple[str, ...]) -> Topic:
 #: word could ever have carried these.
 _TOPIC_KEYS: Tuple[Topic, ...] = tuple(
     _topic(extra, tools) for extra, tools in (
+        # Review B4: a whole-machine question gathered twelve readings and the
+        # model was shown identity alone, because no row knew the sweep words.
+        # Led by the verdict, then the readings a summary is made of. The
+        # words are `assistant_intents._BROAD_PHRASES`' and are this row's own:
+        # they select a set of tools, so no shared fact-tool word carries them.
+        (SWEEP_PHRASES,
+         ("health.status", "system.telemetry", "services.status",
+          "storage.status", "network.status", "gpu.status", "npu.status",
+          "updates.status")),
         # ``cpu``/``cpus`` are here for the telemetry, not the fan: a bare
         # "what is my cpu doing" gathers no cooling reading, so admitting
         # `cooling.status` for them costs nothing and admitting
@@ -543,10 +580,9 @@ _TOPIC_KEYS: Tuple[Topic, ...] = tuple(
         # wrong" was fetched and then thrown away before the model saw it.
         ((), ("health.status", "services.status", "system.telemetry")),
         # How long this machine has been up - see the note above.
-        (("boot", "boots", "booted", "boot time", "reboot", "reboots",
-          "rebooted", "restart", "restarts", "restarted", "uptime",
-          "up since", "been up", "been running", "powered on", "power on",
-          "how long"),
+        (("boot", "boots", "booted", "reboot", "reboots",
+          "rebooted", "restart", "restarts", "restarted",
+          "been running", "powered on", "power on", "how long") + UPTIME_PHRASES,
          ("system.telemetry", "system.identity", "services.status")),
         # Retained telemetry samples, which `past_time_answer` reads and
         # nothing was gathering. Without this row a trend question reached the
@@ -557,50 +593,133 @@ _TOPIC_KEYS: Tuple[Topic, ...] = tuple(
         # processor at 4% while the accelerator was saturated.
         ((), ("gpu.status", "system.telemetry", "services.status")),
         ((), ("npu.status", "gpu.status")),
+        # Review S2: the model question reads the inference record before the
+        # app inventory, so "which model is loaded and is it on the GPU" keeps
+        # `inference.status` in front of the model.
         ((), ("inference.status", "workloads.inventory")),
+        # VD-205 item 1: the cluster digest.
+        ((), ("cluster.digest",)),
+        # Review S7: the service journal, gathered for log questions.
+        ((), ("logs.service",)),
         ((), ("jobs.recent",)),
         ((), ("recovery.checkpoints", "workloads.inventory")),
     )
 )
 
 
+#: The share of the context budget the facts may take; the rest is left for the
+#: conversation, the memories and any reviewed guidance.
+FACT_BUDGET_SHARE = 0.75
+
+#: Readings that rank ahead of what follows them in `_TOPIC_KEYS` when both
+#: are named: "which model is loaded" names `inference.status` and, through
+#: "model", `workloads.inventory` too, and the inference record is the answer.
+_NAMED_FIRST = ("inference.status",)
+
+
+def _encoded_size(value: Any) -> int:
+    return len(json.dumps(value, separators=(",", ":"), default=str))
+
+
+def ordered_fact_keys(question: str, facts: Dict[str, Any]) -> list:
+    """Every gathered fact, most relevant first.
+
+    1. The readings the question names directly - a fact tool whose own words
+       appear in it - in `_TOPIC_KEYS` order, with `_NAMED_FIRST` ahead.
+    2. The supporting readings of every row the question matched.
+    3. Everything else this turn gathered, except the two base readings: the
+       route gathers for reasons the topic table cannot see (an acting request
+       reads the app inventory), and a reading fetched and then dropped is
+       LESSONS 11 (review S2).
+    4. ``system.identity`` last; the standing brief already names the machine.
+    """
+    lower = str(question).lower()
+    named, supporting = [], []
+    for topic in _TOPIC_KEYS:
+        if not mentions(lower, topic.terms):
+            continue
+        for tool in topic.tools:
+            if tool in BASE_TOOLS:
+                supporting.append(tool)
+            elif mentions(lower, literal_phrases(tool)) or mentions(lower, topic.extra):
+                named.append(tool)
+            else:
+                supporting.append(tool)
+    named.sort(key=lambda tool: 0 if tool in _NAMED_FIRST else 1)
+    # Base readings arrive only through a row that asked for them: they are
+    # gathered for every question, so their presence says nothing about this one.
+    rest = [key for key in sorted(facts) if key not in BASE_TOOLS]
+    ordered = [key for key in dict.fromkeys([*named, *supporting, *rest])
+               if key in facts and key != "system.identity"]
+    if "system.identity" in facts:
+        ordered.append("system.identity")
+    return ordered
+
+
 def assistant_context(question: str, value: Any, connection: Dict[str, str]) -> Any:
-    """Select question-relevant facts before applying the small-model budget."""
+    """Select question-relevant facts, budgeted by size rather than by count.
+
+    **Review S2.** Only the first four facts survived, in table order, so
+    "Which model is loaded and is it running on the GPU?" sent the model the
+    app inventory, identity, telemetry and the GPU and dropped
+    `inference.status`, and "Restart grafana" dropped the very inventory the
+    request was about. A small fact that answers the question now always
+    travels; what is cut is the least relevant reading that would overflow the
+    budget, and the compaction below still trims detail before structure.
+    """
     if not isinstance(value, dict):
         return provider_context(value)
     appliance = value.get("appliance", {})
     facts = appliance.get("facts", {}) if isinstance(appliance, dict) else {}
-    lower = str(question).lower()
-    selected_keys = []
-    for topic in _TOPIC_KEYS:
-        if mentions(lower, topic.terms):
-            selected_keys.extend(topic.tools)
-    selected_keys.extend(("system.identity",))
-    selected_facts = {}
-    for key in selected_keys:
-        if key in facts and key not in selected_facts:
-            selected_facts[key] = facts[key]
-        if len(selected_facts) >= 4:
-            break
+    facts = facts if isinstance(facts, dict) else {}
+    budget = assistant_budget(connection, question)["context_chars"]
+    fact_budget = int(budget * FACT_BUDGET_SHARE)
+    selected_facts: Dict[str, Any] = {}
+    used = 0
+    for key in ordered_fact_keys(question, facts):
+        size = _encoded_size(facts[key])
+        if selected_facts and used + size > fact_budget:
+            continue
+        selected_facts[key] = facts[key]
+        used += size
     compact_value = {
-        # The standing brief is deliberately *not* here. It used to lead this
-        # object, safe from the topic filter but paying for the privilege: as a
-        # JSON string value every newline in it was escaped and the whole thing
-        # quoted, which measured 785 prompt tokens for a 717-token brief. FLM
-        # caches no prefix, so that 68-token envelope was re-prefilled on every
-        # request forever.
-        #
-        # It now rides in the system message (``brief_system_prompt``), where
-        # it costs its own length and nothing more, and where the topic filter
-        # cannot reach it at all - a stronger guarantee than the one this
-        # comment used to claim.
+        # The standing brief rides in the system message
+        # (``brief_system_prompt``), where the topic filter cannot reach it.
         "facts": selected_facts,
         "conversation": value.get("conversation", [])[-4:],
         "memories": value.get("memories", [])[:2],
     }
-    return provider_context(
-        compact_value, max_chars=assistant_budget(connection, question)["context_chars"]
-    )
+    guidance = reviewed_guidance(value)
+    if guidance:
+        compact_value["guidance"] = guidance
+    return provider_context(compact_value, max_chars=budget)
+
+
+#: How much of one matched skill's guidance travels to the model.
+SKILL_GUIDANCE_CHARS = 1500
+
+
+def reviewed_guidance(value: Any) -> list:
+    """The reviewed skill guidance matched for this question, bounded (review B5).
+
+    The route matched skills and then claimed "Applied reviewed ... guidance"
+    on every answer while no path sent the guidance to the model. What is
+    returned here is what is sent, and the slugs are what the evidence may
+    claim.
+    """
+    appliance = value.get("appliance", {}) if isinstance(value, dict) else {}
+    skills = appliance.get("matched_skills") if isinstance(appliance, dict) else None
+    found = []
+    for skill in (skills or [])[:2]:
+        if not isinstance(skill, dict) or not str(skill.get("guidance") or "").strip():
+            continue
+        found.append({
+            "slug": str(skill.get("slug") or ""),
+            "name": str(skill.get("name") or ""),
+            "version": skill.get("version"),
+            "guidance": str(skill["guidance"])[:SKILL_GUIDANCE_CHARS],
+        })
+    return found
 
 
 #: The sentence the built-in path writes when nothing on this machine answered.

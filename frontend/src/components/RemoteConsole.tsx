@@ -2,40 +2,30 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiRequest, downloadApiFile } from "../lib/api";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import type { Session } from "../types";
-import { Icon } from "./Icon";
-import { ConsoleLadder, consoleSessionAvailable } from "./ConsoleLadder";
+import { consoleSessionAvailable, ConsoleLadder } from "./ConsoleLadder";
 import { ConsoleReadinessPanel } from "./ConsoleReadinessPanel";
-import { PhysicalKvmStage, physicalKvmState, type KvmCapabilities } from "./PhysicalKvmStage";
+import {
+  AppDesktopsCard,
+  BrowserDesktopCard,
+  RemoteDesktopCard,
+  type Outcome,
+  type RdpCertificate,
+  type RemoteApp,
+  type RemoteDesktopFacts,
+} from "./ConsoleRemoteDesktop";
+import { ConsoleSessionDialog } from "./ConsoleSessionDialog";
+import { KvmChecklistCard, KvmVideoCard, PhysicalKvmStage, physicalKvmState, type KvmCapabilities } from "./PhysicalKvmStage";
 import { StatusPill } from "./StatusPill";
-import { Button, Input, Notice } from "./ui";
+import { Button, Notice } from "./ui";
 import { destinations } from "../lib/destinations";
-import { sessionStateLabel, type RemoteSessionState } from "./remoteSessionState";
-
-interface RemoteApp {
-  id: string;
-  name: string;
-  image: string;
-  running: boolean;
-  capabilities: { remote_desktop: boolean };
-}
+import { TopbarPageActions, usePagePlace } from "../lib/topbarSlot";
+import type { RemoteSessionState } from "./remoteSessionState";
 
 interface RemoteTransport {
   available: boolean;
   port: number;
   detail?: string;
   setup_supported?: boolean;
-}
-
-/**
- * What the appliance says it is serving, so the owner can check the warning
- * their client shows instead of accepting a certificate they cannot verify.
- * `algorithm` is empty when the appliance could not name the digest, and
- * `detail` carries the reason when there is no fingerprint to show.
- */
-interface RdpCertificate {
-  fingerprint: string;
-  algorithm?: string;
-  detail?: string;
 }
 
 interface HostDesktop {
@@ -59,23 +49,28 @@ interface HostDesktop {
   os?: { id: string; name: string; support_level: string; support_label: string };
 }
 
-const commissioningFallback = [
-  {
-    id: "capture", complete: false,
-    title: "Connect a supported USB HDMI capture adapter",
-    detail: "Vaelor will detect it automatically; no Linux commands are required.",
-  },
-  {
-    id: "hid", complete: false,
-    title: "Commission isolated keyboard and mouse emulation",
-    detail: "Vaelor will verify the USB device controller before enabling input.",
-  },
-  {
-    id: "atx", complete: false,
-    title: "Connect isolated ATX power leads",
-    detail: "Optional; enables audited target power and reset controls.",
-  },
-];
+/**
+ * Remote console's three views (VD-200): the Console board's first view, the
+ * ConsoleRemoteLogin board's Remote Login and the ConsoleKvm board's Physical
+ * KVM. Each is a route of its own under `#/kvm`, so Back returns and a link
+ * can name one; none of them is a fragment, which in this hash-routed console
+ * would replace the route (W4d-D1).
+ */
+export type ConsoleView = "main" | "remote-login" | "hardware";
+
+export function consoleViewFromHash(hash: string): ConsoleView {
+  const view = hash.match(/^#\/[^/?]+\/(remote-login|hardware)(?:[/?].*)?$/)?.[1];
+  return view === "remote-login" || view === "hardware" ? view : "main";
+}
+
+function hashForView(view: ConsoleView) {
+  return view === "main" ? "#/kvm" : `#/kvm/${view}`;
+}
+
+const VIEW_NAMES: Record<Exclude<ConsoleView, "main">, string> = {
+  "remote-login": "Remote Login",
+  hardware: "Physical KVM",
+};
 
 function generateRdpPassword() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%";
@@ -83,7 +78,12 @@ function generateRdpPassword() {
   return Array.from(values, (value) => alphabet[value % alphabet.length]).join("");
 }
 
-export function RemoteConsole({ session, onBack }: { session: Session; onBack?: () => void }) {
+export function RemoteConsole({ session }: {
+  session: Session;
+  /** Accepted for the shell's signature; the boards draw no Back control (the rail is the way back). */
+  onBack?: () => void;
+}) {
+  const [view, setView] = useState<ConsoleView>(() => consoleViewFromHash(window.location.hash));
   const [capability, setCapability] = useState<KvmCapabilities | null>(null);
   /**
    * "The check did not answer" and "the hardware is not fitted" are different
@@ -93,6 +93,8 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
   const [capabilityFailed, setCapabilityFailed] = useState(false);
   const [apps, setApps] = useState<RemoteApp[]>([]);
   const [hostDesktop, setHostDesktop] = useState<HostDesktop | null>(null);
+  /** The last `/host/remote-desktop` read failed: what is shown is the previous answer, or nothing (S-Y3). */
+  const [hostReadFailed, setHostReadFailed] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState("");
   const [remoteSessionId, setRemoteSessionId] = useState("");
   const [remoteName, setRemoteName] = useState("");
@@ -101,15 +103,28 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
   const [credentialsSaved, setCredentialsSaved] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState("");
-  const [message, setMessage] = useState("");
+  /** The page's own outcome: a session that stopped, ended or did not start, or checks that did not answer. */
+  const [message, setMessageText] = useState("");
+  // VD-189: a refusal is an alert, never an info notice.
+  const [messageRefused, setMessageRefused] = useState(false);
+  const setMessage = useCallback((text: string, refused = false) => { setMessageText(text); setMessageRefused(refused); }, []);
+  /** Each card's own outcome, said where its button is. */
+  const [deskOutcome, setDeskOutcome] = useState<Outcome>(null);
+  const [rdpOutcome, setRdpOutcome] = useState<Outcome>(null);
+  const [browserOutcome, setBrowserOutcome] = useState<Outcome>(null);
+  const [kvmOutcome, setKvmOutcome] = useState<Outcome>(null);
   const [setupRequested, setSetupRequested] = useState(false);
   const [remoteSessionState, setRemoteSessionState] = useState<RemoteSessionState>("ended");
   const [sessionTarget, setSessionTarget] = useState<"host" | { app: RemoteApp } | null>(null);
   /* Rendered inside the session overlay — see `endDesktopSession`. */
   const [endError, setEndError] = useState("");
+  /* VD-189: why a retry from inside the overlay failed; the page under the overlay is inert. */
+  const [retryError, setRetryError] = useState("");
   const remoteDialogRef = useRef<HTMLDivElement>(null);
   const remoteCloseRef = useRef<HTMLButtonElement>(null);
   const remoteOpenerRef = useRef<HTMLElement | null>(null);
+  /** Set by a move between views, so the arriving view takes focus once it renders. */
+  const focusOnArrival = useRef(false);
   useDialogFocus({
     active: Boolean(remoteUrl),
     containerRef: remoteDialogRef,
@@ -128,19 +143,15 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
   const kvmState = physicalKvmState(capability, setupRequested);
   /*
    * The header pill is a claim about what this page can do, so it reads the
-   * ladder rather than the older `console_ready` summary. "Hardware KVM ready"
-   * beside three rows that all say "not available" was the same class of
-   * mismatch the ladder exists to remove.
+   * ladder rather than the older `console_ready` summary.
    */
   const kvmReady = consoleSessionAvailable(capability?.ladder);
-  const certificate = hostDesktop?.rdp?.certificate;
   const rdpAddress = `${hostDesktop?.address || window.location.hostname}:${hostDesktop?.rdp?.port || 3389}`;
   const hostOsName = hostDesktop?.os?.name || "Linux host";
   const remoteLoginName = hostDesktop?.name || `${hostOsName} Remote Desktop`;
   const sshCommand = `ssh <linux-user>@${hostDesktop?.address || window.location.hostname}`;
   const rdpUsernameValid = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(rdpUsername);
-  // #149: name only the rule the current value breaks — a compound message
-  // that recites every rule tells the reader nothing about their input.
+  // #149: name only the rule the current value breaks.
   const rdpUsernameError = !rdpUsername
     ? undefined
     : rdpUsername.length < 3
@@ -152,6 +163,35 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
           : !rdpUsernameValid
             ? "Use only letters, numbers, dots, dashes, or underscores."
             : undefined;
+
+  useEffect(() => {
+    const restore = () => setView(consoleViewFromHash(window.location.hash));
+    window.addEventListener("hashchange", restore);
+    window.addEventListener("popstate", restore);
+    return () => {
+      window.removeEventListener("hashchange", restore);
+      window.removeEventListener("popstate", restore);
+    };
+  }, []);
+
+  // "Remote console / Remote Login", "Remote console / Physical KVM" in the top bar.
+  usePagePlace(view === "main" ? null : [VIEW_NAMES[view]]);
+
+  const navigateView = (next: ConsoleView) => {
+    if (window.location.hash !== hashForView(next)) window.history.pushState(null, "", hashForView(next));
+    focusOnArrival.current = true;
+    setView(next);
+  };
+
+  useEffect(() => {
+    if (!focusOnArrival.current) return;
+    focusOnArrival.current = false;
+    const target = view === "remote-login"
+      ? document.getElementById("rdp-settings") ?? document.getElementById("console-view-title")
+      : document.getElementById(view === "hardware" ? "console-view-title" : "console-page-title");
+    target?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    target?.focus({ preventScroll: true });
+  }, [view]);
 
   const refresh = useCallback(async () => {
     setMessage("");
@@ -169,48 +209,53 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
     if (managedResult.status === "fulfilled") {
       setApps(managedResult.value.apps.filter((app) => app.capabilities.remote_desktop));
     }
-    if (hostResult.status === "fulfilled") setHostDesktop(hostResult.value);
+    if (hostResult.status === "fulfilled") {
+      setHostDesktop(hostResult.value);
+      setHostReadFailed(false);
+    } else {
+      setHostReadFailed(true);
+    }
     if (
       capabilityResult.status === "rejected"
       || managedResult.status === "rejected"
       || hostResult.status === "rejected"
     ) {
-      setMessage("Some remote-access checks did not respond. Refresh the status and try again.");
+      setMessage("Some remote-access checks did not respond. Refresh the status and try again.", true);
     }
-  }, []);
+  }, [setMessage]);
 
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
     if (!setupRequested) return;
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, 5000);
+    const timer = window.setInterval(() => { void refresh(); }, 5000);
     if (browserReady) setSetupRequested(false);
     return () => window.clearInterval(timer);
   }, [browserReady, refresh, setupRequested]);
 
   const control = async (action: "acquire" | "release") => {
     setBusy(action);
-    setMessage("");
+    setKvmOutcome(null);
     try {
       await apiRequest("/kvm/control", { method: action === "acquire" ? "POST" : "DELETE", body: "{}" }, session.csrf_token);
-      setMessage(action === "acquire" ? "You now own keyboard and mouse control." : "Keyboard and mouse control released.");
+      setKvmOutcome({ text: action === "acquire" ? "You now own keyboard and mouse control." : "Keyboard and mouse control released.", refused: false });
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Control ownership could not be changed.");
+      setKvmOutcome({ text: error instanceof Error ? error.message : "Control ownership could not be changed.", refused: true });
     } finally {
       setBusy("");
     }
   };
 
+  const rememberOpener = () => {
+    if (!remoteUrl && document.activeElement instanceof HTMLElement) remoteOpenerRef.current = document.activeElement;
+  };
+
   const openDesktop = async (app: RemoteApp) => {
-    if (!remoteUrl && document.activeElement instanceof HTMLElement) {
-      remoteOpenerRef.current = document.activeElement;
-    }
+    rememberOpener();
     setBusy(`app-${app.id}`);
     setSessionTarget({ app });
     setRemoteSessionState("connecting");
-    setMessage("");
+    setMessage(""); setRetryError("");
     try {
       const result = await apiRequest<{ url: string; session_id: string }>(
         `/managed/apps/${app.id}/remote-desktop`,
@@ -223,20 +268,20 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
       setRemoteSessionState("connecting");
     } catch (error) {
       setRemoteSessionState("failed");
-      setMessage(error instanceof Error ? error.message : "Remote Desktop could not start.");
+      const refusal = error instanceof Error ? error.message : "Remote Desktop could not start.";
+      if (remoteUrl) setRetryError(refusal);
+      else setMessage(refusal, true);
     } finally {
       setBusy("");
     }
   };
 
   const openHostBrowserDesktop = async () => {
-    if (!remoteUrl && document.activeElement instanceof HTMLElement) {
-      remoteOpenerRef.current = document.activeElement;
-    }
+    rememberOpener();
     setBusy("host-browser");
     setSessionTarget("host");
     setRemoteSessionState("connecting");
-    setMessage("");
+    setMessage(""); setRetryError("");
     try {
       const result = await apiRequest<{ url: string; session_id: string }>(
         "/host/remote-desktop/browser-session",
@@ -250,7 +295,8 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
     } catch (error) {
       setRemoteSessionState("failed");
       const detail = error instanceof Error ? error.message : "The browser desktop could not start.";
-      setMessage(`${detail} Refresh the status or try opening it again.`);
+      if (remoteUrl) setRetryError(`${detail} Refresh the status or try opening it again.`);
+      else setMessage(`${detail} Refresh the status or try opening it again.`, true);
     } finally {
       setBusy("");
     }
@@ -261,33 +307,30 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
     else if (sessionTarget) void openDesktop(sessionTarget.app);
   };
 
+  const returnFocus = () => window.requestAnimationFrame(() => {
+    if (remoteOpenerRef.current?.isConnected) remoteOpenerRef.current.focus();
+  });
+
   /*
-   * **This stops watching. It does not stop the desktop**, and the label now
-   * says so. It used to read "Close session" while doing only this — clearing
-   * three pieces of React state — so an owner whose desktop had locked itself
-   * pressed it, reopened, and landed straight back in the same broken
-   * session. The only way out was SSH, which is not a way out an owner has.
+   * **This stops watching. It does not stop the desktop**, and the label says
+   * so. It once read "Close session" while only clearing React state, so an
+   * owner whose desktop had locked pressed it, reopened, and landed back in
+   * the same broken session.
    */
   const stopViewingRemoteSession = () => {
     setRemoteUrl("");
     setRemoteSessionId("");
     setRemoteSessionState("ended");
     setMessage("Stopped viewing. The desktop is still running on the appliance.");
-    window.requestAnimationFrame(() => {
-      if (remoteOpenerRef.current?.isConnected) remoteOpenerRef.current.focus();
-    });
+    returnFocus();
   };
 
   /*
    * **An end failure belongs to the session it happened to, and dies with
-   * it.** `endError` was cleared only when "End desktop" was pressed again,
-   * so a failed end, then "Stop viewing", then a fresh open re-mounted the
-   * overlay with the previous session's warning sitting over a session nobody
-   * had tried to end — a reported failure that had stopped being true (#191).
-   * Keyed on the session id rather than cleared in each handler, so a future
-   * path that changes the viewed session cannot forget to do it.
+   * it** (#191). Keyed on the session id rather than cleared in each handler,
+   * so a future path that changes the viewed session cannot forget to.
    */
-  useEffect(() => { setEndError(""); }, [remoteSessionId]);
+  useEffect(() => { setEndError(""); setRetryError(""); }, [remoteSessionId]);
 
   /* Ends the desktop on the appliance, so the next one starts clean. */
   const endDesktopSession = async () => {
@@ -297,33 +340,16 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
       const result = await apiRequest<{
         ended?: boolean; detail?: string; screen_lock_disabled?: boolean;
         desktop_listening?: boolean;
-      }>("/remote-desktop/browser-sessions/end", {
-        method: "POST",
-      }, session.csrf_token);
+      }>("/remote-desktop/browser-sessions/end", { method: "POST" }, session.csrf_token);
       setRemoteUrl("");
       setRemoteSessionId("");
       setRemoteSessionState("ended");
       /*
        * **Report what the appliance said, not what the button hoped.** The
-       * broker used to answer `ended: true` for a machine with no browser
-       * desktop at all — creating a system account on the way — and this
-       * message repeated the claim. Both halves are fixed: the appliance
-       * tells the truth, and the screen stops overwriting it.
-       *
-       * **"Opening it again starts a fresh one" is a claim about the
-       * appliance, and it used to be printed unconditionally** — including
-       * when the restart had failed and nothing was listening on 5901, which
-       * the reply said in `service_restarted` and this screen ignored.
-       *
-       * The appliance's readings decide, and `detail` only supplies the
-       * words. Written the other way round — `detail` first, the readings as
-       * a fallback — the two disagree about which is in charge, and a reply
-       * carrying a reason makes the readings unreachable, so the branch that
-       * withholds the promise stops being exercised while still looking like
-       * it guards something.
+       * appliance's readings decide whether "a fresh one" is promised, and
+       * `detail` only supplies the words.
        */
-      const confirmed = result?.desktop_listening !== false
-        && result?.screen_lock_disabled !== false;
+      const confirmed = result?.desktop_listening !== false && result?.screen_lock_disabled !== false;
       setMessage(
         result?.ended === false
           ? result.detail || "There was no desktop session on the appliance to end."
@@ -333,23 +359,11 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
               || "The desktop session on the appliance was ended, but the appliance did not confirm it is ready to open again.",
       );
     } catch (error) {
-      /*
-       * **Into the overlay, not behind it.** `setMessage` renders on the page
-       * underneath this modal, so the first version of this reported its
-       * failure somewhere the owner could not see while the session sat
-       * unchanged in front of them — indistinguishable from a button that
-       * does nothing, which is exactly how it was reported.
-       */
-      setEndError(
-        error instanceof Error
-          ? error.message
-          : "The desktop session could not be ended.",
-      );
+      // **Into the overlay, not behind it**: the page under the modal is inert.
+      setEndError(error instanceof Error ? error.message : "The desktop session could not be ended.");
     } finally {
       setBusy("");
-      window.requestAnimationFrame(() => {
-        if (remoteOpenerRef.current?.isConnected) remoteOpenerRef.current.focus();
-      });
+      returnFocus();
     }
   };
 
@@ -376,21 +390,18 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
 
   const configureRdp = async () => {
     setBusy("rdp-setup");
-    setMessage("");
+    setRdpOutcome(null);
     try {
       await apiRequest(
         "/host/remote-desktop/rdp",
-        {
-          method: "POST",
-          body: JSON.stringify({ username: rdpUsername, password: rdpPassword }),
-        },
+        { method: "POST", body: JSON.stringify({ username: rdpUsername, password: rdpPassword }) },
         session.csrf_token,
       );
       setCredentialsSaved(true);
-      setMessage(`${remoteLoginName} is ready. Copy the saved credentials below, then download the connection profile.`);
+      setRdpOutcome({ text: `${remoteLoginName} is ready. Copy the saved credentials below, then download the connection profile.`, refused: false });
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : `${remoteLoginName} could not be configured.`);
+      setRdpOutcome({ text: error instanceof Error ? error.message : `${remoteLoginName} could not be configured.`, refused: true });
     } finally {
       setBusy("");
     }
@@ -398,15 +409,12 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
 
   const downloadRdpProfile = async () => {
     setBusy("rdp-download");
-    setMessage("");
+    setDeskOutcome(null);
     try {
-      await downloadApiFile(
-        "/host/remote-desktop/profile?mode=responsive",
-        "vaelor-responsive-remote-login.rdp",
-      );
-      setMessage("Optimized RDP profile downloaded at 1600 × 900 with audio disabled for a smoother remote session.");
+      await downloadApiFile("/host/remote-desktop/profile?mode=responsive", "vaelor-responsive-remote-login.rdp");
+      setDeskOutcome({ text: "Optimized RDP profile downloaded at 1600 × 900 with audio disabled for a smoother remote session.", refused: false });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The RDP profile could not be downloaded.");
+      setDeskOutcome({ text: error instanceof Error ? error.message : "The RDP profile could not be downloaded.", refused: true });
     } finally {
       setBusy("");
     }
@@ -415,25 +423,21 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
   const copyRdpCredentials = async () => {
     try {
       await navigator.clipboard.writeText(`Username: ${rdpUsername}\nPassword: ${rdpPassword}`);
-      setMessage("Saved RDP username and password copied.");
+      setRdpOutcome({ text: "Saved RDP username and password copied.", refused: false });
     } catch {
-      setMessage("Clipboard access was blocked. Use the visible username and password fields.");
+      setRdpOutcome({ text: "Clipboard access was blocked. Use the visible username and password fields.", refused: false });
     }
   };
 
   const disableRdp = async () => {
     setBusy("rdp-disable");
-    setMessage("");
+    setRdpOutcome(null);
     try {
-      await apiRequest(
-        "/host/remote-desktop/rdp",
-        { method: "DELETE", body: "{}" },
-        session.csrf_token,
-      );
-      setMessage(`${remoteLoginName} is disabled.`);
+      await apiRequest("/host/remote-desktop/rdp", { method: "DELETE", body: "{}" }, session.csrf_token);
+      setRdpOutcome({ text: `${remoteLoginName} is disabled.`, refused: false });
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : `${remoteLoginName} could not be disabled.`);
+      setRdpOutcome({ text: error instanceof Error ? error.message : `${remoteLoginName} could not be disabled.`, refused: true });
     } finally {
       setBusy("");
     }
@@ -441,448 +445,224 @@ export function RemoteConsole({ session, onBack }: { session: Session; onBack?: 
 
   const enableBrowserDesktop = async () => {
     setBusy("browser-setup");
-    setMessage("");
+    setBrowserOutcome(null);
     try {
       await apiRequest(
         "/jobs",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            type: "host.vnc.enable",
-            payload: { confirm: "enable-host-vnc" },
-          }),
-        },
+        { method: "POST", body: JSON.stringify({ type: "host.vnc.enable", payload: { confirm: "enable-host-vnc" } }) },
         session.csrf_token,
       );
       setSetupRequested(true);
-      setMessage("Optional browser desktop setup is running. This page will detect it automatically.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The browser desktop setup could not start.");
+      setBrowserOutcome({ text: error instanceof Error ? error.message : "The browser desktop setup could not start.", refused: true });
     } finally {
       setBusy("");
     }
   };
 
-  return (
-    <div className="console-page">
-      <div className="page-heading">
-        <div>
-          <h1>{destinations.kvm.name}</h1>
-          <p>Connect to {hostOsName} using the remote-access services available on this OS, open app desktops, or commission the optional physical KVM path.</p>
-        </div>
-        <div className="workspace-route-actions">
-          {onBack && <Button onClick={onBack} type="button" variant="quiet">Back to overview</Button>}
-          <Button disabled={Boolean(busy)} onClick={() => void refresh()} type="button" variant="quiet">Reload</Button>
-          <StatusPill
-            label={
-              consoleFallback
-                ? (consoleReady ? "Console ready" : "Console unavailable")
-                : rdpReady
-                  ? "RDP ready"
-                  : browserReady
-                    ? "Remote access available"
-                    : kvmState === "ready"
-                      ? "Hardware KVM ready"
-                      : hostDesktop?.rdp.setup_supported
-                        ? "RDP setup available"
-                        : "Remote access setup available"
-            }
-            status={rdpReady || browserReady || kvmReady || (consoleFallback && consoleReady) ? "healthy" : "neutral"}
-          />
-        </div>
-      </div>
+  const copyText = (text: string, done: string, fallback: string) => {
+    void navigator.clipboard.writeText(text).then(
+      () => setDeskOutcome({ text: done, refused: false }),
+      () => setDeskOutcome({ text: fallback, refused: false }),
+    );
+  };
 
+  const hostReading = hostDesktop === null ? "unread" as const : hostReadFailed ? "stale" as const : undefined;
+  const facts: RemoteDesktopFacts = {
+    rdpReady,
+    rdpSetupSupported: hostDesktop?.rdp?.setup_supported !== false,
+    browserReady,
+    browserSetupSupported,
+    consoleFallback,
+    consoleReady,
+    hostOsName,
+    remoteLoginName,
+    rdpAddress,
+    sshCommand,
+    certificate: hostDesktop?.rdp?.certificate,
+    desktopDetail: hostDesktop?.desktop?.detail,
+    reading: hostReading,
+  };
+
+  /*
+   * LESSONS 1 / S-Y3: before the first answer, and after a failed re-read,
+   * the page pill says so in grey rather than repeating a default or the last
+   * good answer as if it were current.
+   */
+  const pageLabel = hostReading === "unread"
+    ? (hostReadFailed ? "Not read" : "Checking remote access")
+    : hostReading === "stale"
+      ? "Old reading"
+      : consoleFallback
+        ? (consoleReady ? "Console ready" : "Console unavailable")
+        : rdpReady
+          ? "RDP ready"
+          : browserReady
+            ? "Remote access available"
+            : kvmState === "ready"
+              ? "Hardware KVM ready"
+              : hostDesktop?.rdp.setup_supported
+                ? "RDP setup available"
+                : "Remote access setup available";
+  const pageHealthy = rdpReady || browserReady || kvmReady || (consoleFallback && consoleReady);
+
+  const desktopCard = (variant: "summary" | "settings") => (
+    <RemoteDesktopCard
+      busy={busy}
+      canControl={canControl}
+      facts={facts}
+      form={variant === "settings" ? {
+        canAdminister,
+        busy,
+        username: rdpUsername,
+        usernameError: rdpUsernameError,
+        usernameValid: rdpUsernameValid,
+        password: rdpPassword,
+        showPassword,
+        credentialsSaved,
+        outcome: rdpOutcome,
+        onUsername: (value) => { setRdpUsername(value); setCredentialsSaved(false); },
+        onPassword: (value) => { setRdpPassword(value); setCredentialsSaved(false); },
+        onToggleShow: () => setShowPassword((value) => !value),
+        onGenerate: () => {
+          setRdpPassword(generateRdpPassword());
+          setShowPassword(true);
+          setCredentialsSaved(false);
+          setRdpOutcome({ text: "A new password was generated but is not saved yet. Select “Save RDP credentials” next.", refused: false });
+        },
+        onSubmit: () => void configureRdp(),
+        onCopySaved: () => void copyRdpCredentials(),
+        onDisable: () => void disableRdp(),
+      } : undefined}
+      onCopyAddress={() => copyText(rdpAddress, "RDP address copied.", `RDP address: ${rdpAddress}`)}
+      onCopyConsole={() => copyText(sshCommand, "Console command copied. Replace <linux-user> with your Ubuntu account name.", `Console command: ${sshCommand}`)}
+      onDownloadProfile={() => void downloadRdpProfile()}
+      onOpenBrowser={() => void openHostBrowserDesktop()}
+      onOpenSettings={() => navigateView("remote-login")}
+      outcome={deskOutcome}
+      variant={variant}
+    />
+  );
+
+  const header = (
+    <div className="page-heading system-page-heading console-heading">
+      <div>
+        <h1 id="console-page-title" tabIndex={-1}>{destinations.kvm.name}</h1>
+        <p>Connect with Remote Desktop, open an app's desktop, or use a hardware KVM.</p>
+      </div>
+    </div>
+  );
+
+  const crumb = view !== "main" && (
+    <nav aria-label="Remote console views" className="console-crumb">
+      <Button onClick={() => navigateView("main")} type="button" variant="quiet">{destinations.kvm.name}</Button>
+      <span aria-hidden="true">/</span>
+      {/* The Physical KVM view has no page header, so its name is the page's heading. */}
+      {view === "hardware"
+        ? <h1 id="console-view-title" tabIndex={-1}>{VIEW_NAMES[view]}</h1>
+        : <h2 id="console-view-title" tabIndex={-1}>{VIEW_NAMES[view]}</h2>}
+    </nav>
+  );
+
+  // The page's own outcome, with the way forward beside it (the ConsoleSession board's third row).
+  const pageNotice = (
+    <>
       {message && (
-        <Notice severity="info">
-          <Icon name="shield" />
-          <span>{message}</span>
-          <Button onClick={() => void refresh()} variant="quiet">Reload</Button>
+        <Notice className="console-notice" severity={messageRefused ? "danger" : "info"}>
+          {message}
+          <Button onClick={() => void refresh()} variant="secondary">Reload</Button>
         </Notice>
       )}
-
-      <section className={`host-access ${rdpReady ? "host-access--ready" : ""}`} aria-labelledby="host-access-title">
-        <div className="host-access__identity">
-          <span className="host-access__icon"><Icon name={consoleFallback ? "terminal" : "display"} size={30} /></span>
-          <div>
-            <small>THIS VAELOR NODE · {hostOsName.toUpperCase()}</small>
-            <h2 id="host-access-title">{consoleFallback ? `${hostOsName} console fallback` : remoteLoginName}</h2>
-            <p>{consoleFallback ? hostDesktop?.desktop?.detail : hostDesktop?.detail || "Checking GNOME Remote Desktop…"}</p>
-          </div>
-          <StatusPill
-            label={consoleFallback ? (consoleReady ? "SSH console online" : "Console offline") : rdpReady ? "RDP online" : browserReady ? "Browser desktop ready" : "Not configured"}
-            status={consoleFallback && consoleReady || rdpReady || browserReady ? "healthy" : "neutral"}
-          />
-        </div>
-
-        <div className="host-access__connection">
-          <div>
-            <small>{consoleFallback ? "CONSOLE COMMAND" : "RDP ADDRESS"}</small>
-            <strong>{consoleFallback ? sshCommand : rdpAddress}</strong>
-            {/*
-              * "Configure dedicated credentials to enable it" — with no
-              * subject. It sits under RDP ADDRESS and is about RDP, but a
-              * tester read it beside a `Browser desktop ready` pill and an
-              * enabled "Open browser desktop" and reported the screen as
-              * contradicting itself. Two paths are described here and only one
-              * of them needs setting up, so the sentence names which.
-              */}
-            <span>{consoleFallback ? "The graphical desktop is unavailable, so console access is the safe default." : rdpReady ? `Encrypted native ${hostOsName} remote login` : hostDesktop?.rdp.setup_supported ? "Native RDP login is not set up. Configure dedicated RDP credentials to enable it." : "Native RDP setup is unavailable on this OS"}</span>
-          </div>
-          <div className="host-access__actions">
-            {browserReady && (
-              <Button variant="primary"
-
-                disabled={!canControl || Boolean(busy)}
-                onClick={() => void openHostBrowserDesktop()}
-                type="button"
-              >
-                {busy === "host-browser" ? "Opening…" : "Open browser desktop"}
-              </Button>
-            )}
-            {consoleFallback ? (
-              <Button variant="primary"
-
-                disabled={!consoleReady}
-                onClick={() => void navigator.clipboard.writeText(sshCommand).then(
-                  () => setMessage("Console command copied. Replace <linux-user> with your Ubuntu account name."),
-                  () => setMessage(`Console command: ${sshCommand}`),
-                )}
-                type="button"
-              >
-                Copy console command
-              </Button>
-            ) : rdpReady ? (
-              <Button variant="primary"
-
-                disabled={Boolean(busy)}
-                onClick={() => void downloadRdpProfile()}
-                type="button"
-              >
-                {busy === "rdp-download" ? "Downloading…" : "Download optimized RDP profile"}
-              </Button>
-            ) : hostDesktop?.rdp.setup_supported ? (
-              <a className="ui-button ui-button--quiet" href="#rdp-settings">Set up Remote Login</a>
-            ) : (
-              <span className="host-access__unavailable">Use browser desktop or physical KVM</span>
-            )}
-            {!consoleFallback && <Button variant="quiet"
-
-              onClick={() => void navigator.clipboard.writeText(rdpAddress).then(
-                () => setMessage("RDP address copied."),
-                () => setMessage(`RDP address: ${rdpAddress}`),
-              )}
-              type="button"
-            >
-              Copy address
-            </Button>}
-          </div>
-          {/*
-            * **The owner is asked to trust something they cannot check.** The
-            * appliance signs its own RDP certificate, so every client shows a
-            * warning; without this the only available answer is to click Yes
-            * and hope. The appliance knows what it is serving, so it says so,
-            * and the accept becomes a comparison. Shown only beside the
-            * profile download, which is the moment it is needed.
-            *
-            * When the fingerprint could not be read, that reason is printed
-            * rather than nothing — "no fingerprint" and "we could not ask"
-            * must not look the same.
-            */}
-          {rdpReady && !consoleFallback && (certificate?.fingerprint || certificate?.detail) && (
-            <div className="host-access__certificate">
-              <small>
-                TLS FINGERPRINT ON THIS APPLIANCE
-                {certificate.algorithm ? ` · ${certificate.algorithm}` : ""}
-              </small>
-              {certificate.fingerprint
-                ? <code>{certificate.fingerprint}</code>
-                : <strong>Not available</strong>}
-              <span>
-                {certificate.fingerprint
-                  ? "Vaelor signs this certificate itself, so your client will warn you. Check this value against the one the warning shows before you accept it."
-                  : certificate.detail}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {!consoleFallback && hostDesktop?.rdp.setup_supported !== false && <details className="host-access__settings" id="rdp-settings" open={!rdpReady}>
-          <summary>{rdpReady ? "Remote Login settings" : "Set up Remote Login"}</summary>
-          <div className="host-access__settings-body">
-            <div>
-              <h3>{rdpReady ? "Rotate dedicated RDP credentials" : "Create dedicated RDP credentials"}</h3>
-              <p>These credentials are only for Remote Login. They do not change your {hostOsName} or Vaelor password.</p>
-            </div>
-            <form
-              className="rdp-credential-form"
-              onSubmit={(event) => {
-                // A real form so Enter submits from either field and password
-                // managers recognise a credential-change flow.
-                event.preventDefault();
-                if (!canAdminister || !rdpUsernameValid || rdpPassword.length < 12 || busy) return;
-                void configureRdp();
-              }}
-            >
-              <Input
-                aria-invalid={Boolean(rdpUsername) && !rdpUsernameValid}
-                autoComplete="username"
-                disabled={!canAdminister || Boolean(busy)}
-                error={rdpUsernameError}
-                label="RDP user name"
-                maxLength={64}
-                minLength={3}
-                onChange={(event) => {
-                  setRdpUsername(event.target.value);
-                  setCredentialsSaved(false);
-                }}
-                value={rdpUsername}
-              />
-              <div className="rdp-form-field">
-                <div className="rdp-password-field">
-                  <Input
-                    autoComplete="new-password"
-                    disabled={!canAdminister || Boolean(busy)}
-                    id="rdp-password"
-                    label="Dedicated RDP password"
-                    maxLength={128}
-                    minLength={12}
-                    onChange={(event) => {
-                      setRdpPassword(event.target.value);
-                      setCredentialsSaved(false);
-                    }}
-                    type={showPassword ? "text" : "password"}
-                    value={rdpPassword}
-                  />
-                  <Button
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                    aria-pressed={showPassword}
-                    onClick={() => setShowPassword((value) => !value)}
-                    variant="quiet"
-                  >
-                    {showPassword ? "Hide password" : "Show password"}
-                  </Button>
-                </div>
-              </div>
-              <div className="rdp-credential-form__actions">
-                <Button variant="quiet"
-
-                  disabled={!canAdminister || Boolean(busy)}
-                  onClick={() => {
-                    setRdpPassword(generateRdpPassword());
-                    setShowPassword(true);
-                    setCredentialsSaved(false);
-                    setMessage("A new password was generated but is not saved yet. Select “Save RDP credentials” next.");
-                  }}
-                  type="button"
-                >
-                  Generate new password
-                </Button>
-                <Button variant="primary"
-
-                  disabled={!canAdminister || !rdpUsernameValid || rdpPassword.length < 12 || Boolean(busy)}
-                  /* #149: an empty user name disabled this button with no
-                     message anywhere on the form. A disabled primary action
-                     states what is missing. */
-                  disabledReason={!canAdminister
-                    ? "Administrator access is required to change RDP credentials."
-                    : !rdpUsername
-                      ? "Enter an RDP user name to continue."
-                      : !rdpUsernameValid
-                        ? "Fix the RDP user name to continue."
-                        : rdpPassword.length < 12
-                          ? "Enter a dedicated password of at least 12 characters to continue."
-                          : undefined}
-                  type="submit"
-                >
-                  {busy === "rdp-setup" ? "Saving and verifying…" : rdpReady ? "Save RDP credentials" : "Enable and save credentials"}
-                </Button>
-                {credentialsSaved && (
-                  <Button variant="quiet"
-
-                    disabled={Boolean(busy)}
-                    onClick={() => void copyRdpCredentials()}
-                    type="button"
-                  >
-                    Copy saved credentials
-                  </Button>
-                )}
-                {rdpReady && (
-                  <Button variant="danger"
-
-                    disabled={!canAdminister || Boolean(busy)}
-                    onClick={() => void disableRdp()}
-                    type="button"
-                  >
-                    {busy === "rdp-disable" ? "Disabling…" : "Disable RDP"}
-                  </Button>
-                )}
-              </div>
-              <small className={credentialsSaved ? "rdp-credential-state rdp-credential-state--saved" : "rdp-credential-state"}>
-                {credentialsSaved
-                  ? "✓ These exact credentials were saved and verified by GNOME Remote Login."
-                  : "Changes in these fields are not active until you save them."}
-              </small>
-              {!canAdminister && <small>Administrator access is required to change Remote Login.</small>}
-            </form>
-          </div>
-        </details>}
-
-        {/*
-          * `open={!browserReady}` because "Install browser desktop" is the
-          * only control that commissions the desktop, and a plain <details>
-          * kept it collapsed by default - so the owner reached this page,
-          * never opened the disclosure, and the one button that would install
-          * the desktop stayed hidden. A live tester read that as a dead
-          * control: hidden, it queues no job because it is never clickable.
-          * The RDP settings disclosure above already does this with
-          * `open={!rdpReady}`; this is the same rule for the same reason -
-          * expand while there is an action to take, collapse to "details" once
-          * the desktop is ready.
-          */}
-        <details className="host-access__browser" open={!browserReady}>
-          <summary>{browserReady ? "Browser desktop details" : `Optional: open ${hostOsName} inside this browser`}</summary>
-          <div>
-            <p>This installs an isolated TigerVNC session on loopback. Vaelor protects each browser connection with a short-lived, one-use ticket.</p>
-            {browserReady ? (
-              <p role="status">Ready now. Use “Open browser desktop” above to create a protected one-use session.</p>
-            ) : browserSetupSupported ? (
-              <Button
-
-                disabled={!canAdminister || Boolean(busy) || setupRequested}
-                onClick={() => void enableBrowserDesktop()}
-                type="button"
-              >
-                {setupRequested ? "Setup in progress…" : busy === "browser-setup" ? "Starting…" : "Install browser desktop"}
-              </Button>
-            ) : (
-              <div>
-                <p>{hostDesktop?.browser_vnc?.detail || "Browser desktop setup is unavailable on this operating system. Use RDP or the SSH console above."}</p>
-                <Button onClick={() => void refresh()} variant="quiet">
-                  Recheck browser desktop
-                </Button>
-              </div>
-            )}
-          </div>
-        </details>
-      </section>
-
-      <PhysicalKvmStage
-        busy={busy}
-        canControl={canControl}
-        capability={capability}
-        onControl={(action) => void control(action)}
-        state={kvmState}
-        username={session.user.username}
-      />
-
-      <div className="console-grid">
-        {/*
-          * Three siblings, discovered independently and never inheriting each
-          * other's rung: seeing the screen, driving the keyboard, and powering
-          * the machine out of band fail for different reasons and are fixed by
-          * different people. Each row names its own remediation owner, which is
-          * what stops out-of-band power reading as a promise of a screen.
-          */}
-        <ConsoleLadder rows={capability?.ladder} />
-
-        {/*
-          * Moved here from Home, whole and on both machine classes. Its three
-          * rows are a commissioning checklist, and this is where commissioning
-          * is the subject.
-          */}
-        <ConsoleReadinessPanel capability={capability} failed={capabilityFailed} />
-
-        <section className="data-panel" id="physical-kvm-setup">
-          <div className="panel-heading">
-            <div><h2>Physical KVM setup</h2><p>Hardware discovery checks each requirement automatically.</p></div>
-            <Icon name="usb" />
-          </div>
-          <ol className="commission-list">
-            {(capability?.commissioning?.length ? capability.commissioning : commissioningFallback).map((step, index) => (
-              <li className={step.complete ? "commission-list__complete" : ""} key={step.id}>
-                <span>{step.complete ? "✓" : index + 1}</span>
-                <div><strong>{step.title}</strong><small>{step.detail}</small></div>
-              </li>
-            ))}
-          </ol>
-          <div className="tool-explainer">
-            <Icon name="shield" />
-            <span><strong>Protected by discovery</strong><small>Streaming and input stay disabled until real capture and isolated HID hardware pass verification.</small></span>
-          </div>
-        </section>
-
-        <section className="data-panel">
-          <div className="panel-heading">
-            <div><h2>App remote desktops</h2><p>One-use browser sessions for installed apps that expose VNC.</p></div>
-            <Icon name="display" />
-          </div>
-          {apps.length ? (
-            <div className="remote-app-list">
-              {apps.map((app) => (
-                <article key={app.id}>
-                  <span><Icon name="display" /></span>
-                  <div><strong>{app.name}</strong><small>{app.image} · {app.running ? "Running" : "Stopped"}</small></div>
-                  <Button
-
-                    disabled={!canControl || !app.running || Boolean(busy)}
-                    onClick={() => void openDesktop(app)}
-                    type="button"
-                  >
-                    {busy === `app-${app.id}` ? "Opening…" : "Open desktop"}
-                  </Button>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-state">
-              <Icon name="display" />
-              <strong>No app desktops available</strong>
-              <span>Compatible installed apps appear here automatically.</span>
-            </div>
-          )}
-        </section>
-      </div>
-
       {remoteSessionState === "failed" && !remoteUrl && (
-        <Notice severity="danger">
-          <Icon name="shield" />
-          <span>The remote desktop session did not start. The page is still available; retry the session or choose another access path.</span>
+        <Notice className="console-notice" severity="danger">
+          The remote desktop session did not start. The page is still available; retry the session or choose another access path.
           <Button disabled={Boolean(busy)} onClick={retrySession} type="button" variant="primary">Retry session</Button>
         </Notice>
       )}
+    </>
+  );
+
+  return (
+    <div className="console-page sys-page">
+      {/* The page's pill and Reload, in the top bar on every view (the Console boards). */}
+      <TopbarPageActions>
+        <StatusPill label={pageLabel} reading={hostReading} tone={pageHealthy ? "success" : "neutral"} />
+        <Button disabled={Boolean(busy)} onClick={() => void refresh()} type="button" variant="secondary">Reload</Button>
+      </TopbarPageActions>
+      {crumb}
+      {view !== "hardware" && header}
+      {pageNotice}
+
+      {view === "main" && (
+        <div className="sys-section">
+          <div className="sys-grid-2 console-pair">
+            {desktopCard("summary")}
+            <KvmVideoCard capability={capability} onOpenChecklist={() => navigateView("hardware")} state={kvmState} />
+          </div>
+          <AppDesktopsCard apps={apps} busy={busy} canControl={canControl} onOpen={(app) => void openDesktop(app)} />
+          {/*
+            * Three siblings, discovered independently and never inheriting each
+            * other's rung: seeing the screen, driving the keyboard, and powering
+            * the machine out of band fail for different reasons and are fixed
+            * by different people.
+            */}
+          <ConsoleLadder rows={capability?.ladder} />
+        </div>
+      )}
+
+      {view === "remote-login" && (
+        <div className="sys-section">
+          {desktopCard("settings")}
+          <BrowserDesktopCard
+            busy={busy}
+            canAdminister={canAdminister}
+            detail={hostDesktop?.browser_vnc?.detail}
+            hostOsName={hostOsName}
+            onInstall={() => void enableBrowserDesktop()}
+            onRecheck={() => void refresh()}
+            outcome={browserOutcome}
+            ready={browserReady}
+            setupRequested={setupRequested}
+            setupSupported={browserSetupSupported}
+          />
+        </div>
+      )}
+
+      {view === "hardware" && (
+        <div className="sys-section">
+          <PhysicalKvmStage
+            busy={busy}
+            canControl={canControl}
+            capability={capability}
+            onControl={(action) => void control(action)}
+            outcome={kvmOutcome}
+            state={kvmState}
+            username={session.user.username}
+          />
+          <div className="sys-grid-2">
+            {/* Moved here whole: its three rows are a commissioning checklist. */}
+            <ConsoleReadinessPanel capability={capability} failed={capabilityFailed} />
+            <KvmChecklistCard capability={capability} failed={capabilityFailed} />
+          </div>
+        </div>
+      )}
 
       {remoteUrl && (
-        <div className="remote-console-modal" ref={remoteDialogRef} role="dialog" aria-modal="true" aria-labelledby="remote-console-title">
-          <section>
-            <header>
-              <div><span className="page-eyebrow">Protected one-use session</span><h2 id="remote-console-title">{remoteName}</h2></div>
-              <div className="workspace-route-actions">
-                <StatusPill label={sessionStateLabel(remoteSessionState)} status={remoteSessionState === "connected" ? "healthy" : remoteSessionState === "failed" ? "degraded" : "neutral"} />
-                {/*
-                  * Two controls, because they do different things and one
-                  * label covering both is what stranded the owner. "Stop
-                  * viewing" leaves the desktop running; "End desktop" is the
-                  * recovery route when the session itself is wrong.
-                  */}
-                <Button ref={remoteCloseRef} onClick={stopViewingRemoteSession} type="button" variant="quiet">Stop viewing</Button>
-                {canControl && sessionTarget === "host" && (
-                  <Button disabled={busy === "end-desktop"} onClick={() => void endDesktopSession()} type="button" variant="quiet">
-                    {busy === "end-desktop" ? "Ending…" : "End desktop"}
-                  </Button>
-                )}
-              </div>
-            </header>
-            {endError && <Notice severity="warning" heading="The desktop session was not ended."><span>{endError}</span></Notice>}
-            {remoteSessionState === "failed" && <Notice severity="info"><span>The visible desktop session could not be reached.</span><Button disabled={Boolean(busy)} onClick={retrySession} type="button" variant="primary">Retry session</Button></Notice>}
-            <iframe
-              allow="clipboard-read; clipboard-write; fullscreen"
-              sandbox="allow-forms allow-same-origin allow-scripts"
-              src={remoteUrl}
-              title={`${remoteName} remote desktop`}
-              onError={() => setRemoteSessionState("failed")}
-            />
-          </section>
-        </div>
+        <ConsoleSessionDialog
+          busy={busy}
+          canEnd={canControl && sessionTarget === "host"}
+          closeRef={remoteCloseRef}
+          dialogRef={remoteDialogRef}
+          endError={endError}
+          name={remoteName}
+          onEnd={() => void endDesktopSession()}
+          onFrameError={() => setRemoteSessionState("failed")}
+          onRetry={retrySession}
+          onStop={stopViewingRemoteSession}
+          retryError={retryError}
+          state={remoteSessionState}
+          url={remoteUrl}
+        />
       )}
     </div>
   );

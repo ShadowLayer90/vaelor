@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import type { Device, Metrics, TelemetrySample } from "../types";
 import { formatQuantity, formatTemperature } from "../lib/format";
+import { gpuTemperature } from "../lib/gpuTemperature";
 import { metricNumber } from "../lib/metrics";
 import type { MachineProfile } from "../lib/machine";
-import type { AccelerationReading } from "../lib/acceleration";
 import { cpuTemperatureProvenance } from "../lib/sensorSource";
 import { parseBoardSensors, type BoardSensors } from "../lib/wmiSensors";
 import { AcceleratorCard, type EngineFact } from "./AcceleratorCard";
-import { AccelerationVerdict } from "./AccelerationVerdict";
+import { Card } from "./ui";
 
 /**
  * `System → Compute` — what this machine is made of.
@@ -122,7 +122,8 @@ export function graphicsFacts(
   const vramUsed = metricNumber(metrics, "gpu_vram_used_bytes");
   const vramTotal = metricNumber(metrics, "gpu_vram_total_bytes");
   const busy = metricNumber(metrics, "gpu_busy_percent");
-  const temperature = metricNumber(metrics, "gpu_temperature_c");
+  // The backend's chosen reading, with the sensor it came from (VD-147).
+  const temperature = gpuTemperature(metrics);
   const watts = metricNumber(metrics, "gpu_power_watts");
   const clock = metricNumber(metrics, "gpu_clock_mhz");
   return [
@@ -150,7 +151,7 @@ export function graphicsFacts(
       label: "Busy",
       value: [
         busy !== null ? `${Math.round(busy)}%` : null,
-        temperature !== null ? formatTemperature(temperature) : null,
+        temperature.value !== null ? `${formatTemperature(temperature.value)} (${temperature.sensor})` : null,
         watts !== null ? `${watts.toFixed(0)} W` : null,
         clock !== null ? `${(clock / 1000).toFixed(2)} GHz` : null,
       ].filter(Boolean).join(" · ") || null,
@@ -176,8 +177,10 @@ export function graphicsFacts(
       reason: vramTotal !== null
         ? `This adapter publishes ${formatQuantity(vramTotal, "capacity")} of reserved video memory but not how much of it is in use`
         : "This adapter reports no reserved video memory",
-      note: adapter?.unifiedMemory
-        ? "This adapter takes memory from the shared pool rather than from the reserved block, so the reserved block sits nearly unused. Vaelor cannot change that; it is a firmware setting."
+      // The board's short note; the reason behind it opens under "Why".
+      note: adapter?.unifiedMemory ? "a firmware setting Vaelor cannot change" : undefined,
+      why: adapter?.unifiedMemory
+        ? "This adapter takes memory from the shared pool rather than from the reserved block, so the reserved block sits nearly unused."
         : undefined,
     },
   ];
@@ -237,14 +240,22 @@ export function neuralFacts(
       // Assistant runs on it, so serving wins over it and drops that note — the
       // panel used to read "nothing uses the NPU" with the Assistant live on it.
       label: "Used by",
+      //
+      // Deployed is not serving (ACC-100): the Assistant's model server has to
+      // answer the same probe the Assistant's own status takes, or this says
+      // it is down and why, instead of "Serving" beside an unreachable model.
       value: npu?.servingAssistant
         ? `Serving the Assistant${npu.servingModel ? ` (${npu.servingModel})` : ""}`
-        : npu?.runtimeDetected
-          ? "A userspace runtime is present"
-          : "Not in use",
+        : npu?.assistantDown
+          ? `The Assistant's model is not answering${npu.assistantDown.model ? ` (${npu.assistantDown.model})` : ""}`
+          : npu?.runtimeDetected
+            ? "A userspace runtime is present"
+            : "Not in use",
       // No action is rendered on an engine Vaelor cannot act on; a served device
       // needs no such note, so it is dropped in favour of what is serving it.
-      note: npu?.servingAssistant ? undefined : (npu?.reason ?? undefined),
+      note: npu?.servingAssistant
+        ? undefined
+        : npu?.assistantDown?.reason ?? npu?.reason ?? undefined,
     },
   ];
 }
@@ -345,48 +356,9 @@ export function memoryFacts(metrics: Metrics): EngineFact[] {
   ];
 }
 
-/** One engine as `/inference/status` reports it. Only the GPU tier can fall
- * back to the CPU without saying so, so only that tier carries a reading. */
-export interface InferenceEngine {
-  kind: string;
-  acceleration?: AccelerationReading | null;
-}
-
-/**
- * The GPU engine's acceleration reading, if this machine has one to report.
- *
- * Written as a function so the choice is testable: an engine list with no GPU
- * tier, and a GPU tier that reported nothing, are both "no reading" and
- * neither is a fault.
- */
-export function gpuAcceleration(
-  engines: InferenceEngine[] | null,
-): AccelerationReading | null {
-  return engines?.find((engine) => engine.kind === "gpu")?.acceleration ?? null;
-}
-
 export function ComputePanel({ machine }: { machine: MachineProfile }) {
   const [device, setDevice] = useState<Device | null>(null);
   const [metrics, setMetrics] = useState<Metrics>({});
-  /*
-   * Whether the accelerator is actually serving, which is a different question
-   * from whether the adapter is present — and the one the rest of this panel
-   * could not answer. A llama.cpp that cannot resolve its accelerator library
-   * loads the CPU backend and serves normally, nine times slower, with no
-   * error anywhere.
-   */
-  const [engines, setEngines] = useState<InferenceEngine[] | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void apiRequest<{ engines: InferenceEngine[] }>("/inference/status")
-      .then((status) => { if (!cancelled) setEngines(status.engines ?? []); })
-      // A reading that could not be taken says nothing. It is not a fault, and
-      // it must not render as one, so nothing is put in its place.
-      .catch(() => { if (!cancelled) setEngines(null); });
-    return () => { cancelled = true; };
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     const read = () => {
@@ -402,49 +374,46 @@ export function ComputePanel({ machine }: { machine: MachineProfile }) {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, []);
 
-  const adapter = machine.hardware.accelerators[0];
-  const npu = machine.hardware.neuralAccelerators[0];
   const sensors = parseBoardSensors(metrics);
+  const processor = processorFacts(device, metrics);
+  const cooling = coolingFacts(sensors, machine);
+  const memory = memoryFacts(metrics);
+  const board = boardTemperatureFacts(sensors);
+  const warmest = sensors.temperatures
+    .filter((channel) => !channel.fault && channel.celsius !== null)
+    .sort((a, b) => (b.celsius ?? 0) - (a.celsius ?? 0))[0];
+  const fans = sensors.fans.filter((fan) => !fan.fault && fan.rpm !== null).length;
 
+  /*
+   * System › Compute › Hardware (VD-200, the SystemCompute board): one card, a
+   * row per part, each with a one-line summary and its full facts one click
+   * deeper. Graphics and the neural processor are the Accelerators cards above.
+   */
   return (
-    <div className="engine-grid">
+    <Card
+      actions={<span>Open a part for its full details · graphics and NPU are above</span>}
+      as="section"
+      className="hardware-card"
+      flush
+      heading="Hardware"
+    >
       <AcceleratorCard
         icon="cpu"
         title="Processor"
         subtitle={device?.platform?.board.cpu_model ?? null}
-        facts={processorFacts(device, metrics)}
+        summary={summaryLine([device?.platform?.board.cpu_model, factValue(processor, "Cores"), factValue(processor, "Temperature")])}
+        facts={processor}
       />
-      {(adapter || machine.capabilities.gpu.available) && (
-        <AcceleratorCard
-          icon="gpu"
-          title="Graphics"
-          subtitle={adapter?.name ?? "Graphics processor"}
-          facts={graphicsFacts(machine, metrics)}
-        >
-          {/*
-            * On the engine it is a fact about. Every row above says what the
-            * adapter *is*; this says whether the model server is using it, and
-            * it is the one reading on this panel that a silent 9x degradation
-            * would show up in.
-            */}
-          <AccelerationVerdict
-            acceleration={gpuAcceleration(engines)}
-            headingLevel="h4"
-            title="Local AI on this adapter"
-          />
-        </AcceleratorCard>
-      )}
-      {(npu || machine.capabilities.npu.available) && (
-        <AcceleratorCard
-          icon="npu"
-          title="Neural processor"
-          subtitle={npu?.name ?? "Neural accelerator"}
-          facts={neuralFacts(machine, metrics)}
-        />
-      )}
+      <AcceleratorCard
+        icon="memory"
+        title="Memory"
+        summary={summaryLine([withWord(factValue(memory, "Fitted"), "fitted"), withWord(factValue(memory, "In use"), "in use"),
+          factValue(memory, "ECC") === null ? "ECC not read" : `ECC ${factValue(memory, "ECC")}`])}
+        facts={memory}
+      />
       {/*
-        * Cooling gets a card of its own on a machine with no cooling *controls*
-        * — because it has cooling *readings*, and the product previously had
+        * Cooling gets a row of its own on a machine with no cooling *controls*
+        * - because it has cooling *readings*, and the product previously had
         * nowhere to say so.
         */}
       <AcceleratorCard
@@ -453,17 +422,38 @@ export function ComputePanel({ machine }: { machine: MachineProfile }) {
         subtitle={machine.capabilities.fan_readings.available
           ? "Reported by the board; not adjustable from here"
           : null}
-        facts={coolingFacts(sensors, machine)}
+        summary={summaryLine([
+          fans ? `${fans} fan${fans === 1 ? "" : "s"} reported` : "No fan reading",
+          machine.capabilities.cpu_fan.available ? "adjustable on Cooling" : "not adjustable from here",
+        ])}
+        facts={cooling}
       />
-      <AcceleratorCard icon="memory" title="Memory" facts={memoryFacts(metrics)} />
-      {sensors.temperatures.length > 0 && (
+      {board.length > 0 && (
         <AcceleratorCard
-          icon="activity"
+          icon="temperature"
           title="Board temperatures"
           subtitle="Labelled channels this board publishes"
-          facts={boardTemperatureFacts(sensors)}
+          summary={summaryLine([
+            `${board.length} labelled channel${board.length === 1 ? "" : "s"}`,
+            warmest ? `warmest ${formatTemperature(warmest.celsius)} (${warmest.label})` : "none read on this sample",
+          ])}
+          facts={board}
         />
       )}
-    </div>
+    </Card>
   );
+}
+
+/** A fact's value by its label, or null when it was not read. */
+function factValue(facts: EngineFact[], label: string): string | null {
+  return facts.find((fact) => fact.label === label)?.value ?? null;
+}
+
+function withWord(value: string | null, word: string): string | null {
+  return value === null ? null : `${value} ${word}`;
+}
+
+/** The summary line: the parts that were read, joined; a part not read is left out, never shown as zero. */
+function summaryLine(parts: Array<string | null | undefined>): string {
+  return parts.filter((part): part is string => Boolean(part)).join(" · ");
 }

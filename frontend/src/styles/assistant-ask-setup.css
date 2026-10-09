@@ -1,0 +1,393 @@
+/*
+ * Assistant › Ask, its setup and skills (VD-200: AssistFirstRun, AssistSkills,
+ * AssistIntelligence): the first-run choices, "What do you want to know?", the
+ * Change-intelligence drawer's Active intelligence card, and the skills view.
+ * Split from assistant-ask.css to keep each stylesheet under the module ceiling.
+ */
+
+/* First run */
+.as-first-run.ui-card {
+  gap: 18px;
+  padding: 28px;
+}
+
+.as-first-run__intro {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.as-first-run__intro .as-first-run__icon {
+  width: 46px;
+  height: 46px;
+}
+
+.as-first-run__intro h2 {
+  margin: 4px 0 0;
+  font-size: var(--font-size-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.as-first-run__intro p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui);
+}
+
+.as-first-run__choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 14px;
+}
+
+.as-choice {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+}
+
+.as-choice--recommended {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.as-choice__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.as-choice__flag {
+  padding: 3px 9px;
+  color: var(--accent-text);
+  border: 1px solid var(--accent-deep);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-xs);
+}
+
+.as-choice__flag--plain {
+  color: var(--text-secondary);
+  border-color: var(--border-row-active);
+}
+
+.as-choice h3 {
+  margin: 6px 0 0;
+  font-size: 21px;
+  font-weight: 400;
+}
+
+.as-choice > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.as-choice__action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.as-first-run-loading .ui-card__body {
+  display: grid;
+  gap: 10px;
+}
+
+.as-first-run-loading .ui-loading {
+  padding: 0;
+}
+
+/* What do you want to know? */
+.as-welcome.ui-card {
+  flex-direction: row;
+  gap: 16px;
+  padding: 28px;
+}
+
+.as-welcome__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.as-welcome__body h2 {
+  margin: 4px 0 0;
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.as-welcome__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The Change-intelligence drawer's Active intelligence card. */
+.as-engine.ui-card {
+  gap: 12px;
+  padding: 16px;
+}
+
+.as-engine__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.as-engine__titles {
+  flex: 1 1 160px;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.as-engine__titles strong {
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.as-engine__capability strong {
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+}
+
+.as-engine__capability {
+  gap: 4px;
+}
+
+.as-model-state {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.as-note {
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-icon);
+  border-radius: 10px;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.as-disclosure {
+  padding: 12px 14px;
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+.as-disclosure[open] > ul {
+  margin-top: 10px;
+}
+
+/* The drawer stacks: the Active intelligence card over the setup choices.
+   CopilotSetup lays its choices out in two columns of its own, which need the
+   drawer's whole width (the AppsAssistantSetup board draws it at that width). */
+.as-intel .as-drawer__body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Skills, a view inside Ask (the AssistSkills board). */
+.as-skills.ui-card {
+  gap: 0;
+}
+
+.as-skills__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.as-skills__head > div {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.as-skills__head h2 {
+  margin: 0;
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.as-skills__head p {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.as-skills__warn {
+  padding: 18px 18px 0;
+}
+
+.as-skills__body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+}
+
+.as-skills__propose {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+}
+
+.as-skills__form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.as-skills__form h3 {
+  margin: 0;
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.as-skills__submit,
+.as-skills__notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.as-skills__submit .ui-button__disabled-reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.as-skills__list {
+  min-width: 0;
+  border-left: 1px solid var(--border-row);
+}
+
+.as-skill {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.as-skill:first-child {
+  border-top: 0;
+}
+
+.as-skill--proposed {
+  background: linear-gradient(90deg, var(--accent-soft), transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.as-skill:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.as-skill__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.as-skill__top > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.as-skill h3 {
+  margin: 0;
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.as-skill > p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.as-skill__instructions summary {
+  /* 32 px on a desktop, the touch target on a phone (the token says which). */
+  min-height: var(--control-height-compact);
+  display: flex;
+  align-items: center;
+  font-size: var(--font-size-ui-sm);
+  cursor: pointer;
+}
+
+.as-skill__instructions p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  white-space: pre-wrap;
+}
+
+.as-skill__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.as-skill__actions:empty {
+  display: none;
+}
+
+.as-skill__actions .ui-button-wrap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.as-skill__actions .ui-button__disabled-reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+@media (max-width: 720px) {
+  .as-skills__list {
+    border-top: 1px solid var(--border-row);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .as-first-run.ui-card,
+  .as-welcome.ui-card {
+    padding: 18px 16px;
+  }
+
+  .as-first-run__intro h2 {
+    font-size: 24px;
+  }
+
+  .as-welcome.ui-card {
+    flex-direction: column;
+  }
+}

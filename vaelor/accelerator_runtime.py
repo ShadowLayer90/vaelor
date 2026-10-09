@@ -224,6 +224,31 @@ def reported_gpu_memory_bytes(
 BASIS_DIFFERENTIAL = "differential"
 BASIS_ABSOLUTE = "absolute"
 
+#: The words an acceleration reading's ``state`` takes, and their one owner
+#: (review A13, LESSONS 6). Every producer - this module, the GPU deploy's
+#: residency verdict (`executor_gpu_deploy`) and the inference panel
+#: (`inference_status`) - writes a reading's state from these names, and
+#: `frontend/src/lib/acceleration.ts`'s verdict table is checked against the
+#: tuple in both directions (`tests/test_acceleration_states.py`).
+#: ``cpu`` is the CPU by configuration and ``cpu-planned`` by the GPU plan;
+#: ``cpu-fallback`` and ``not-offloaded`` are the two real degradations;
+#: ``unattributed`` is in use but not this engine's; ``idle`` is nothing
+#: configured to serve; ``unknown`` is a question not answered.
+#: No name starts ``CPU_``/``GPU_``: `tools/constant_index.py` reads that
+#: prefix as a machine tier, and these are words, not one tier's figures.
+ACCELERATED = "accelerated"
+ON_CPU_BY_CONFIGURATION = "cpu"
+ON_CPU_BY_PLAN = "cpu-planned"
+FELL_BACK_TO_CPU = "cpu-fallback"
+NOT_OFFLOADED = "not-offloaded"
+UNATTRIBUTED = "unattributed"
+NOTHING_SERVED = "idle"
+NOT_ESTABLISHED = "unknown"
+ACCELERATION_STATES = (
+    ACCELERATED, ON_CPU_BY_CONFIGURATION, ON_CPU_BY_PLAN, FELL_BACK_TO_CPU, NOT_OFFLOADED,
+    UNATTRIBUTED, NOTHING_SERVED, NOT_ESTABLISHED,
+)
+
 
 def _accelerator_was_requested(backend: str, gpu_layers: Any) -> bool:
     """Whether an accelerator was *asked for*, whatever was then launched.
@@ -305,7 +330,7 @@ def verify_accelerator_in_use(
         "baseline_bytes": baseline_bytes,
         "basis": basis,
         "in_use": None,
-        "state": "unknown",
+        "state": NOT_ESTABLISHED,
         "detail": "",
     }
     if not accelerated:
@@ -316,7 +341,7 @@ def verify_accelerator_in_use(
             # the accelerated arm. Say which one happened.
             result.update({
                 "in_use": False,
-                "state": "not-offloaded",
+                "state": NOT_OFFLOADED,
                 REFERENCE_MEASUREMENT_KEY: SILENT_CPU_FALLBACK_MEASUREMENT,
                 "detail": (
                     "An accelerator was requested — the {} backend with {} GPU "
@@ -343,7 +368,7 @@ def verify_accelerator_in_use(
             return result
         result.update({
             "in_use": False,
-            "state": "cpu",
+            "state": ON_CPU_BY_CONFIGURATION,
             "detail": (
                 "This model runs on the CPU by configuration, so no accelerator "
                 "was expected."
@@ -362,7 +387,7 @@ def verify_accelerator_in_use(
     if held >= threshold:
         result.update({
             "in_use": True,
-            "state": "accelerated",
+            "state": ACCELERATED,
             "held_bytes": held,
             "detail": (
                 "The {} backend is holding {:.0f} MiB of accelerator memory, so "
@@ -378,7 +403,7 @@ def verify_accelerator_in_use(
         return result
     if observed >= threshold:
         result.update({
-            "state": "unattributed",
+            "state": UNATTRIBUTED,
             "held_bytes": held,
             "detail": (
                 "The accelerator is holding {:.0f} MiB, but it was already "
@@ -397,7 +422,7 @@ def verify_accelerator_in_use(
         return result
     result.update({
         "in_use": False,
-        "state": "cpu-fallback",
+        "state": FELL_BACK_TO_CPU,
         "held_bytes": held,
         REFERENCE_MEASUREMENT_KEY: SILENT_CPU_FALLBACK_MEASUREMENT,
         "detail": (

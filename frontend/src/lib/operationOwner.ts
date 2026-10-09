@@ -172,6 +172,10 @@ export interface OperationProjection {
   owner_route: string;
   owner_resource: string | null;
   type: string;
+  /** An agent task's own title; empty for a job, which is named by its type. */
+  title?: string;
+  /** Who started an agent task: "alert_rule", "schedule" or "person"; empty for a job. */
+  origin?: string;
   state: OperationState;
   canonical_state: OperationState;
   source_state: string;
@@ -194,6 +198,20 @@ export interface OperationProjection {
   revision: OperationRevision;
   action_endpoints: OperationEndpointMap;
   endpoints: OperationEndpointMap;
+  /**
+   * The server's one verdict on "does this need the owner?" (VD-139,
+   * `operation_projection.needs_attention`): failed, waiting for approval or
+   * paused, and not since resolved by a successful retry or a dismissal. The
+   * console renders it; it never decides it again.
+   */
+  needs_attention?: boolean;
+  /** Who dismissed this attention item and when (epoch seconds), or null. */
+  dismissal?: OperationDismissal | null;
+}
+
+export interface OperationDismissal {
+  dismissed_at: number;
+  dismissed_by: string;
 }
 
 export interface OperationResumeKey {

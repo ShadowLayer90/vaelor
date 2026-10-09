@@ -7,7 +7,8 @@
     "dev": "vite",
     "design:check": "node scripts/design-system-check.mjs",
     "build": "npm run design:check && tsc --noEmit -p tsconfig.app.json && vite build --config vite.config.ts",
-    "check": "npm run acceptance:self-test && npm run design:check && tsc --noEmit -p tsconfig.app.json --pretty false",
+    "check": "npm run acceptance:self-test && npm run design:check && tsc --noEmit -p tsconfig.app.json --pretty false && npm run dashboard:contract",
+    "dashboard:contract": "node scripts/dashboard-layout-contract.mjs",
     "test": "vitest run",
     "acceptance:responsive": "node scripts/responsive-acceptance.mjs",
     "acceptance:self-test": "node scripts/responsive-acceptance.mjs --self-test"

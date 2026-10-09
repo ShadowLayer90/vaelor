@@ -22,6 +22,8 @@ from .base import (
     board_info,
     capability,
     dmi_identity,
+    identity_from_dmi,
+    names_raspberry_pi,
     read_os_release,
     thermal_policy,
 )
@@ -65,6 +67,7 @@ __all__ = [
     "power_snapshot",
     "read_os_release",
     "register_driver",
+    "remote_machine_class",
     "select_hardware_platform",
     "thermal_policy",
 ]
@@ -109,6 +112,28 @@ def _factory_for(name: str) -> Optional[Factory]:
         if registered == name:
             return factory
     return None
+
+
+def remote_machine_class(model: str, dmi_vendor: str, dmi_product: str) -> str:
+    """The machine class of a host described only by its identity strings.
+
+    For a cluster worker, read over SSH: its device-tree model (empty on an
+    x86 host) and its SMBIOS vendor and product. The same registry and the
+    same probes that choose this controller's own driver decide, so a worker
+    and the controller are classed by one rule (VD-147: a worker's GPU
+    temperature is judged against its own class's bands).
+    """
+    dmi = identity_from_dmi(dmi_vendor, dmi_product)
+    facts = {
+        "is_raspberry_pi": names_raspberry_pi(model),
+        "firmware_identity": (
+            "device-tree" if str(model or "").strip() else "smbios" if dmi else "none"
+        ),
+    }
+    for _name, probe, factory in _REGISTRY:
+        if probe(facts):
+            return str(factory.machine_class)
+    return GENERIC
 
 
 def select_hardware_platform(

@@ -1,0 +1,5962 @@
+{
+ "cluster_loading@15m": {
+  "baseline_gateway": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_requests": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": null,
+   "cluster_cause": "",
+   "cluster_state": "loading",
+   "collected": false,
+   "coverage_note": "",
+   "machines": 2,
+   "metrics": {},
+   "models": [],
+   "placement": "replicated",
+   "reason": "Loading the model; live gauges appear once it answers.",
+   "sampled_at": null,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": false,
+   "next_step": "Collected from the vLLM cluster's Prometheus /metrics scrape once GPU clustering serves the model there. Still uncollected in this sample: Per-model / per-deployment RED, Time to first token (TTFT), Time per output token (TPOT), KV-cache utilisation, Preemptions, Prefix-cache hit rate, Goodput (requests within the latency budget).",
+   "signals": [
+    {
+     "id": "per_model_red",
+     "label": "Per-model / per-deployment RED",
+     "reason": "Per-model RED reads the vLLM engine's per-model_name series; the gateway request log has no model column of its own."
+    },
+    {
+     "id": "ttft",
+     "label": "Time to first token (TTFT)",
+     "reason": "TTFT is the vLLM time-to-first-token histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "tpot",
+     "label": "Time per output token (TPOT)",
+     "reason": "TPOT is the vLLM inter-token-latency histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "kv_cache",
+     "label": "KV-cache utilisation",
+     "reason": "KV-cache occupancy is the vLLM kv_cache_usage gauge, read from the cluster's /metrics."
+    },
+    {
+     "id": "preemptions",
+     "label": "Preemptions",
+     "reason": "Preemption counts are the vLLM num_preemptions counter, read from the cluster's /metrics."
+    },
+    {
+     "id": "prefix_cache",
+     "label": "Prefix-cache hit rate",
+     "reason": "Prefix-cache reuse is the vLLM prefix-cache hit and query counters, read from the cluster's /metrics."
+    },
+    {
+     "id": "goodput",
+     "label": "Goodput (requests within the latency budget)",
+     "reason": "Goodput is the share of requests finishing within the 30 s budget, from the vLLM end-to-end latency histogram."
+    }
+   ]
+  },
+  "why": {
+   "detail": "The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Within budget: the model started 2 answers; 95% began within 500 ms, and answers were written at 12.8 tokens a second on average while writing; no recorded way in carried these requests - they reached the model some other way, such as straight to its balancer.",
+   "signal": "within_budget"
+  },
+  "window_seconds": 900
+ },
+ "cluster_record_unreadable@15m": {
+  "baseline_gateway": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_requests": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "decode"
+    ],
+    "ttft": {
+     "answers": null,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "The serving engine's readings in this window carry no time-to-first-word figure, so time to first word is not known.",
+     "p95_band_ms": null,
+     "share_within_budget": null,
+     "state": "not-known",
+     "within_budget": null
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "decode"
+    ],
+    "ttft": {
+     "answers": null,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "The serving engine's readings in this window carry no time-to-first-word figure, so time to first word is not known.",
+     "p95_band_ms": null,
+     "share_within_budget": null,
+     "state": "not-known",
+     "within_budget": null
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": null,
+   "cluster_state": "unknown",
+   "collected": false,
+   "coverage_note": "",
+   "machines": null,
+   "metrics": {},
+   "models": [],
+   "placement": "",
+   "reason": "Vaelor could not read the cluster's deployment record, so whether a model is being served is not known, and there are no live serving gauges to show.",
+   "sampled_at": null,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": false,
+   "next_step": "Collected from the vLLM cluster's Prometheus /metrics scrape once GPU clustering serves the model there. Still uncollected in this sample: Per-model / per-deployment RED, Time to first token (TTFT), Time per output token (TPOT), KV-cache utilisation, Preemptions, Prefix-cache hit rate, Goodput (requests within the latency budget).",
+   "signals": [
+    {
+     "id": "per_model_red",
+     "label": "Per-model / per-deployment RED",
+     "reason": "Per-model RED reads the vLLM engine's per-model_name series; the gateway request log has no model column of its own."
+    },
+    {
+     "id": "ttft",
+     "label": "Time to first token (TTFT)",
+     "reason": "TTFT is the vLLM time-to-first-token histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "tpot",
+     "label": "Time per output token (TPOT)",
+     "reason": "TPOT is the vLLM inter-token-latency histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "kv_cache",
+     "label": "KV-cache utilisation",
+     "reason": "KV-cache occupancy is the vLLM kv_cache_usage gauge, read from the cluster's /metrics."
+    },
+    {
+     "id": "preemptions",
+     "label": "Preemptions",
+     "reason": "Preemption counts are the vLLM num_preemptions counter, read from the cluster's /metrics."
+    },
+    {
+     "id": "prefix_cache",
+     "label": "Prefix-cache hit rate",
+     "reason": "Prefix-cache reuse is the vLLM prefix-cache hit and query counters, read from the cluster's /metrics."
+    },
+    {
+     "id": "goodput",
+     "label": "Goodput (requests within the latency budget)",
+     "reason": "Goodput is the share of requests finishing within the 30 s budget, from the vLLM end-to-end latency histogram."
+    }
+   ]
+  },
+  "why": {
+   "detail": "The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known, so there is no latency to diagnose.",
+   "signal": "no_traffic"
+  },
+  "window_seconds": 900
+ },
+ "cluster_replicated_one_of_two_read@15m": {
+  "baseline_gateway": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_requests": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": 4,
+   "cluster_state": "serving",
+   "collected": true,
+   "coverage_note": "These figures cover 1 of 2 replicas; the others could not be read at the last scrape, so totals and queue depths are partial.",
+   "machines": 2,
+   "metrics": {
+    "busy_slots_per_decode": null,
+    "decode_tokens_per_second": 12.8,
+    "generation_throughput_tokens_per_second": 25.1,
+    "goodput_budget_seconds": 30.0,
+    "goodput_ratio": 1.0,
+    "kv_cache_fraction": 0.0054,
+    "preemptions_total": 0.0,
+    "prefix_cache_hit_rate": 0.667,
+    "prompt_throughput_tokens_per_second": 96.0,
+    "prompt_tokens_per_second": null,
+    "replicas_read": 1.0,
+    "replicas_total": 2.0,
+    "request_success_total": 9.0,
+    "requests_deferred": 0.0,
+    "requests_processing": 2.0,
+    "tpot_seconds": 0.078,
+    "ttft_seconds": 0.41
+   },
+   "models": [
+    {
+     "avg_e2e_seconds": 23.4,
+     "error_rate": 0.0,
+     "errors_total": 0.0,
+     "model": "Qwen/Qwen3-8B",
+     "requests_total": 9.0
+    }
+   ],
+   "placement": "replicated",
+   "reason": "",
+   "sampled_at": 1789999996.0,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": true,
+   "next_step": "The vLLM cluster's Prometheus /metrics scrape now feeds every deep serving signal - TTFT, TPOT, KV-cache, prefix-cache hit rate, preemptions, goodput and per-model RED - so none remain uncollected.",
+   "signals": []
+  },
+  "why": {
+   "detail": "1 of 4 requests failed with a server error (the inference gateway: 1 of 3; AI Chat: 0 of 1). The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Failures rising: 25.0% of requests through the inference gateway and AI Chat are failing, up from 0.0%.",
+   "signal": "errors"
+  },
+  "window_seconds": 900
+ },
+ "cluster_replicated_serving@15m": {
+  "baseline_gateway": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_requests": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": 4,
+   "cluster_state": "serving",
+   "collected": true,
+   "coverage_note": "",
+   "machines": 2,
+   "metrics": {
+    "busy_slots_per_decode": null,
+    "decode_tokens_per_second": 12.8,
+    "generation_throughput_tokens_per_second": 25.1,
+    "goodput_budget_seconds": 30.0,
+    "goodput_ratio": 1.0,
+    "kv_cache_fraction": 0.0054,
+    "preemptions_total": 0.0,
+    "prefix_cache_hit_rate": 0.667,
+    "prompt_throughput_tokens_per_second": 96.0,
+    "prompt_tokens_per_second": null,
+    "replicas_read": 2.0,
+    "replicas_total": 2.0,
+    "request_success_total": 9.0,
+    "requests_deferred": 0.0,
+    "requests_processing": 2.0,
+    "tpot_seconds": 0.078,
+    "ttft_seconds": 0.41
+   },
+   "models": [
+    {
+     "avg_e2e_seconds": 23.4,
+     "error_rate": 0.0,
+     "errors_total": 0.0,
+     "model": "Qwen/Qwen3-8B",
+     "requests_total": 9.0
+    }
+   ],
+   "placement": "replicated",
+   "reason": "",
+   "sampled_at": 1789999996.0,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": true,
+   "next_step": "The vLLM cluster's Prometheus /metrics scrape now feeds every deep serving signal - TTFT, TPOT, KV-cache, prefix-cache hit rate, preemptions, goodput and per-model RED - so none remain uncollected.",
+   "signals": []
+  },
+  "why": {
+   "detail": "1 of 4 requests failed with a server error (the inference gateway: 1 of 3; AI Chat: 0 of 1). The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Failures rising: 25.0% of requests through the inference gateway and AI Chat are failing, up from 0.0%.",
+   "signal": "errors"
+  },
+  "window_seconds": 900
+ },
+ "cluster_replicated_serving@1h": {
+  "baseline_gateway": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_requests": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_window_seconds": 3600,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 720,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.25,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 900.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 4,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.02,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.2,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 136,
+   "requests": 5,
+   "requests_per_min": 0.08,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": 0.24,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "1h",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 720,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.25,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 900.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 4,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.02,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.2,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 136,
+   "requests": 5,
+   "requests_per_min": 0.08,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": 0.24,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": 4,
+   "cluster_state": "serving",
+   "collected": true,
+   "coverage_note": "",
+   "machines": 2,
+   "metrics": {
+    "busy_slots_per_decode": null,
+    "decode_tokens_per_second": 12.8,
+    "generation_throughput_tokens_per_second": 25.1,
+    "goodput_budget_seconds": 30.0,
+    "goodput_ratio": 1.0,
+    "kv_cache_fraction": 0.0054,
+    "preemptions_total": 0.0,
+    "prefix_cache_hit_rate": 0.667,
+    "prompt_throughput_tokens_per_second": 96.0,
+    "prompt_tokens_per_second": null,
+    "replicas_read": 2.0,
+    "replicas_total": 2.0,
+    "request_success_total": 9.0,
+    "requests_deferred": 0.0,
+    "requests_processing": 2.0,
+    "tpot_seconds": 0.078,
+    "ttft_seconds": 0.41
+   },
+   "models": [
+    {
+     "avg_e2e_seconds": 23.4,
+     "error_rate": 0.0,
+     "errors_total": 0.0,
+     "model": "Qwen/Qwen3-8B",
+     "requests_total": 9.0
+    }
+   ],
+   "placement": "replicated",
+   "reason": "",
+   "sampled_at": 1789999996.0,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": true,
+   "next_step": "The vLLM cluster's Prometheus /metrics scrape now feeds every deep serving signal - TTFT, TPOT, KV-cache, prefix-cache hit rate, preemptions, goodput and per-model RED - so none remain uncollected.",
+   "signals": []
+  },
+  "why": {
+   "detail": "1 of 5 requests failed with a server error (the inference gateway: 1 of 4; AI Chat: 0 of 1). The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Failures rising: 20.0% of requests through the inference gateway and AI Chat are failing, up from 0.0%.",
+   "signal": "errors"
+  },
+  "window_seconds": 3600
+ },
+ "cluster_split_serving@15m": {
+  "baseline_gateway": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_requests": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": 4,
+   "cluster_state": "serving",
+   "collected": true,
+   "coverage_note": "",
+   "machines": 2,
+   "metrics": {
+    "busy_slots_per_decode": null,
+    "decode_tokens_per_second": 12.8,
+    "generation_throughput_tokens_per_second": 25.1,
+    "goodput_budget_seconds": 30.0,
+    "goodput_ratio": 1.0,
+    "kv_cache_fraction": 0.0054,
+    "preemptions_total": 0.0,
+    "prefix_cache_hit_rate": 0.667,
+    "prompt_throughput_tokens_per_second": 96.0,
+    "prompt_tokens_per_second": null,
+    "replicas_read": 1.0,
+    "replicas_total": 1.0,
+    "request_success_total": 9.0,
+    "requests_deferred": 0.0,
+    "requests_processing": 2.0,
+    "tpot_seconds": 0.078,
+    "ttft_seconds": 0.41
+   },
+   "models": [
+    {
+     "avg_e2e_seconds": 23.4,
+     "error_rate": 0.0,
+     "errors_total": 0.0,
+     "model": "Qwen/Qwen3-8B",
+     "requests_total": 9.0
+    }
+   ],
+   "placement": "distributed",
+   "reason": "",
+   "sampled_at": 1789999996.0,
+   "scope_note": "One model is split across 2 machines, so these figures are the whole model's, read on This Vaelor controller. There is no per-machine breakdown for a split model.",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": true,
+   "next_step": "The vLLM cluster's Prometheus /metrics scrape now feeds every deep serving signal - TTFT, TPOT, KV-cache, prefix-cache hit rate, preemptions, goodput and per-model RED - so none remain uncollected.",
+   "signals": []
+  },
+  "why": {
+   "detail": "1 of 4 requests failed with a server error (the inference gateway: 1 of 3; AI Chat: 0 of 1). The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Failures rising: 25.0% of requests through the inference gateway and AI Chat are failing, up from 0.0%.",
+   "signal": "errors"
+  },
+  "window_seconds": 900
+ },
+ "cluster_unloaded_by_hand@15m": {
+  "baseline_gateway": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_requests": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": null,
+   "cluster_cause": "manual",
+   "cluster_state": "unloaded",
+   "collected": false,
+   "coverage_note": "",
+   "machines": 2,
+   "metrics": {},
+   "models": [],
+   "placement": "replicated",
+   "reason": "Unloaded by hand; load it from Cluster > Deployments.",
+   "sampled_at": null,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": false,
+   "next_step": "Collected from the vLLM cluster's Prometheus /metrics scrape once GPU clustering serves the model there. Still uncollected in this sample: Per-model / per-deployment RED, Time to first token (TTFT), Time per output token (TPOT), KV-cache utilisation, Preemptions, Prefix-cache hit rate, Goodput (requests within the latency budget).",
+   "signals": [
+    {
+     "id": "per_model_red",
+     "label": "Per-model / per-deployment RED",
+     "reason": "Per-model RED reads the vLLM engine's per-model_name series; the gateway request log has no model column of its own."
+    },
+    {
+     "id": "ttft",
+     "label": "Time to first token (TTFT)",
+     "reason": "TTFT is the vLLM time-to-first-token histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "tpot",
+     "label": "Time per output token (TPOT)",
+     "reason": "TPOT is the vLLM inter-token-latency histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "kv_cache",
+     "label": "KV-cache utilisation",
+     "reason": "KV-cache occupancy is the vLLM kv_cache_usage gauge, read from the cluster's /metrics."
+    },
+    {
+     "id": "preemptions",
+     "label": "Preemptions",
+     "reason": "Preemption counts are the vLLM num_preemptions counter, read from the cluster's /metrics."
+    },
+    {
+     "id": "prefix_cache",
+     "label": "Prefix-cache hit rate",
+     "reason": "Prefix-cache reuse is the vLLM prefix-cache hit and query counters, read from the cluster's /metrics."
+    },
+    {
+     "id": "goodput",
+     "label": "Goodput (requests within the latency budget)",
+     "reason": "Goodput is the share of requests finishing within the 30 s budget, from the vLLM end-to-end latency histogram."
+    }
+   ]
+  },
+  "why": {
+   "detail": "The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Within budget: the model started 2 answers; 95% began within 500 ms, and answers were written at 12.8 tokens a second on average while writing; no recorded way in carried these requests - they reached the model some other way, such as straight to its balancer.",
+   "signal": "within_budget"
+  },
+  "window_seconds": 900
+ },
+ "cluster_unloaded_cause_unknown@15m": {
+  "baseline_gateway": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_requests": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": null,
+   "cluster_cause": "",
+   "cluster_state": "unloaded",
+   "collected": false,
+   "coverage_note": "",
+   "machines": 2,
+   "metrics": {},
+   "models": [],
+   "placement": "replicated",
+   "reason": "The cluster model is unloaded, and why could not be read, so there are no live serving gauges.",
+   "sampled_at": null,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": false,
+   "next_step": "Collected from the vLLM cluster's Prometheus /metrics scrape once GPU clustering serves the model there. Still uncollected in this sample: Per-model / per-deployment RED, Time to first token (TTFT), Time per output token (TPOT), KV-cache utilisation, Preemptions, Prefix-cache hit rate, Goodput (requests within the latency budget).",
+   "signals": [
+    {
+     "id": "per_model_red",
+     "label": "Per-model / per-deployment RED",
+     "reason": "Per-model RED reads the vLLM engine's per-model_name series; the gateway request log has no model column of its own."
+    },
+    {
+     "id": "ttft",
+     "label": "Time to first token (TTFT)",
+     "reason": "TTFT is the vLLM time-to-first-token histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "tpot",
+     "label": "Time per output token (TPOT)",
+     "reason": "TPOT is the vLLM inter-token-latency histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "kv_cache",
+     "label": "KV-cache utilisation",
+     "reason": "KV-cache occupancy is the vLLM kv_cache_usage gauge, read from the cluster's /metrics."
+    },
+    {
+     "id": "preemptions",
+     "label": "Preemptions",
+     "reason": "Preemption counts are the vLLM num_preemptions counter, read from the cluster's /metrics."
+    },
+    {
+     "id": "prefix_cache",
+     "label": "Prefix-cache hit rate",
+     "reason": "Prefix-cache reuse is the vLLM prefix-cache hit and query counters, read from the cluster's /metrics."
+    },
+    {
+     "id": "goodput",
+     "label": "Goodput (requests within the latency budget)",
+     "reason": "Goodput is the share of requests finishing within the 30 s budget, from the vLLM end-to-end latency histogram."
+    }
+   ]
+  },
+  "why": {
+   "detail": "The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Within budget: the model started 2 answers; 95% began within 500 ms, and answers were written at 12.8 tokens a second on average while writing; no recorded way in carried these requests - they reached the model some other way, such as straight to its balancer.",
+   "signal": "within_budget"
+  },
+  "window_seconds": 900
+ },
+ "cluster_unloaded_idle@15m": {
+  "baseline_gateway": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_requests": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway and AI Chat, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": null,
+   "cluster_cause": "idle",
+   "cluster_state": "unloaded",
+   "collected": false,
+   "coverage_note": "",
+   "machines": 2,
+   "metrics": {},
+   "models": [],
+   "placement": "replicated",
+   "reason": "Scaled to zero to free the GPU; it loads on the next request.",
+   "sampled_at": null,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": false,
+   "next_step": "Collected from the vLLM cluster's Prometheus /metrics scrape once GPU clustering serves the model there. Still uncollected in this sample: Per-model / per-deployment RED, Time to first token (TTFT), Time per output token (TPOT), KV-cache utilisation, Preemptions, Prefix-cache hit rate, Goodput (requests within the latency budget).",
+   "signals": [
+    {
+     "id": "per_model_red",
+     "label": "Per-model / per-deployment RED",
+     "reason": "Per-model RED reads the vLLM engine's per-model_name series; the gateway request log has no model column of its own."
+    },
+    {
+     "id": "ttft",
+     "label": "Time to first token (TTFT)",
+     "reason": "TTFT is the vLLM time-to-first-token histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "tpot",
+     "label": "Time per output token (TPOT)",
+     "reason": "TPOT is the vLLM inter-token-latency histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "kv_cache",
+     "label": "KV-cache utilisation",
+     "reason": "KV-cache occupancy is the vLLM kv_cache_usage gauge, read from the cluster's /metrics."
+    },
+    {
+     "id": "preemptions",
+     "label": "Preemptions",
+     "reason": "Preemption counts are the vLLM num_preemptions counter, read from the cluster's /metrics."
+    },
+    {
+     "id": "prefix_cache",
+     "label": "Prefix-cache hit rate",
+     "reason": "Prefix-cache reuse is the vLLM prefix-cache hit and query counters, read from the cluster's /metrics."
+    },
+    {
+     "id": "goodput",
+     "label": "Goodput (requests within the latency budget)",
+     "reason": "Goodput is the share of requests finishing within the 30 s budget, from the vLLM end-to-end latency histogram."
+    }
+   ]
+  },
+  "why": {
+   "detail": "The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Within budget: the model started 2 answers; 95% began within 500 ms, and answers were written at 12.8 tokens a second on average while writing; no recorded way in carried these requests - they reached the model some other way, such as straight to its balancer.",
+   "signal": "within_budget"
+  },
+  "window_seconds": 900
+ },
+ "nothing_served@15m": {
+  "baseline_gateway": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_requests": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "AI Chat's answers are timed one by one only while a GPU cluster serves them, so AI Chat's requests right now are not in these figures.",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": null,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-timed",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 0,
+   "completion_tokens": 0,
+   "doors": [
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": null,
+     "failures": 0,
+     "label": "Inference gateway",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 0,
+     "requests_per_min": 0.0,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "AI Chat's answers are timed one by one only while a GPU cluster serves them, so AI Chat's requests right now are not in these figures.",
+     "door": "ai-chat",
+     "error_rate": null,
+     "failures": null,
+     "label": "AI Chat",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-timed",
+     "traffic": false,
+     "within_budget": null
+    }
+   ],
+   "error_rate": null,
+   "failures": 0,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": null,
+   "latency_role": "information",
+   "note": "No request was recorded in this window through the inference gateway, and the requests through the LLM Server are not known.",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 0,
+   "requests": 0,
+   "requests_per_min": 0.0,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": null,
+   "traffic": false,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": null,
+   "cluster_state": "none",
+   "collected": false,
+   "coverage_note": "",
+   "machines": null,
+   "metrics": {},
+   "models": [],
+   "placement": "",
+   "reason": "The GPU serving engine is not exposing live metrics right now \u2014 it is not serving, its /metrics endpoint is unreachable, or nothing has been scraped yet \u2014 so there are no live serving gauges to show.",
+   "sampled_at": null,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": false,
+   "next_step": "Collected from the vLLM cluster's Prometheus /metrics scrape once GPU clustering serves the model there. Still uncollected in this sample: Per-model / per-deployment RED, Time to first token (TTFT), Time per output token (TPOT), KV-cache utilisation, Preemptions, Prefix-cache hit rate, Goodput (requests within the latency budget).",
+   "signals": [
+    {
+     "id": "per_model_red",
+     "label": "Per-model / per-deployment RED",
+     "reason": "Per-model RED reads the vLLM engine's per-model_name series; the gateway request log has no model column of its own."
+    },
+    {
+     "id": "ttft",
+     "label": "Time to first token (TTFT)",
+     "reason": "TTFT is the vLLM time-to-first-token histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "tpot",
+     "label": "Time per output token (TPOT)",
+     "reason": "TPOT is the vLLM inter-token-latency histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "kv_cache",
+     "label": "KV-cache utilisation",
+     "reason": "KV-cache occupancy is the vLLM kv_cache_usage gauge, read from the cluster's /metrics."
+    },
+    {
+     "id": "preemptions",
+     "label": "Preemptions",
+     "reason": "Preemption counts are the vLLM num_preemptions counter, read from the cluster's /metrics."
+    },
+    {
+     "id": "prefix_cache",
+     "label": "Prefix-cache hit rate",
+     "reason": "Prefix-cache reuse is the vLLM prefix-cache hit and query counters, read from the cluster's /metrics."
+    },
+    {
+     "id": "goodput",
+     "label": "Goodput (requests within the latency budget)",
+     "reason": "Goodput is the share of requests finishing within the 30 s budget, from the vLLM end-to-end latency histogram."
+    }
+   ]
+  },
+  "why": {
+   "detail": "The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Within budget: the model started 2 answers; 95% began within 500 ms, and answers were written at 12.8 tokens a second on average while writing; no recorded way in carried these requests - they reached the model some other way, such as straight to its balancer.",
+   "signal": "within_budget"
+  },
+  "window_seconds": 900
+ },
+ "serving_reading_stale@15m": {
+  "baseline_gateway": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_requests": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "ttft",
+     "decode"
+    ],
+    "ttft": {
+     "answers": 2,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "",
+     "p95_band_ms": [
+      0,
+      500
+     ],
+     "share_within_budget": null,
+     "state": "measured",
+     "within_budget": true
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": 600,
+   "cluster_state": "serving",
+   "collected": false,
+   "coverage_note": "",
+   "machines": 2,
+   "metrics": {},
+   "models": [],
+   "placement": "replicated",
+   "reason": "A GPU cluster deployment is recorded as serving, but the last reading from its /metrics endpoint is 10 min old, so the gauges are not shown as live: the metrics scrape has stopped reaching it.",
+   "sampled_at": 1789999400.0,
+   "scope_note": "",
+   "stale": true
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": false,
+   "next_step": "Collected from the vLLM cluster's Prometheus /metrics scrape once GPU clustering serves the model there. Still uncollected in this sample: Per-model / per-deployment RED, Time to first token (TTFT), Time per output token (TPOT), KV-cache utilisation, Preemptions, Prefix-cache hit rate, Goodput (requests within the latency budget).",
+   "signals": [
+    {
+     "id": "per_model_red",
+     "label": "Per-model / per-deployment RED",
+     "reason": "Per-model RED reads the vLLM engine's per-model_name series; the gateway request log has no model column of its own."
+    },
+    {
+     "id": "ttft",
+     "label": "Time to first token (TTFT)",
+     "reason": "TTFT is the vLLM time-to-first-token histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "tpot",
+     "label": "Time per output token (TPOT)",
+     "reason": "TPOT is the vLLM inter-token-latency histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "kv_cache",
+     "label": "KV-cache utilisation",
+     "reason": "KV-cache occupancy is the vLLM kv_cache_usage gauge, read from the cluster's /metrics."
+    },
+    {
+     "id": "preemptions",
+     "label": "Preemptions",
+     "reason": "Preemption counts are the vLLM num_preemptions counter, read from the cluster's /metrics."
+    },
+    {
+     "id": "prefix_cache",
+     "label": "Prefix-cache hit rate",
+     "reason": "Prefix-cache reuse is the vLLM prefix-cache hit and query counters, read from the cluster's /metrics."
+    },
+    {
+     "id": "goodput",
+     "label": "Goodput (requests within the latency budget)",
+     "reason": "Goodput is the share of requests finishing within the 30 s budget, from the vLLM end-to-end latency histogram."
+    }
+   ]
+  },
+  "why": {
+   "detail": "1 of 4 requests failed with a server error (the inference gateway: 1 of 3; AI Chat: 0 of 1). The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Failures rising: 25.0% of requests through the inference gateway and AI Chat are failing, up from 0.0%.",
+   "signal": "errors"
+  },
+  "window_seconds": 900
+ },
+ "single_machine_serving@15m": {
+  "baseline_gateway": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_requests": {
+   "error_rate": 0.0,
+   "p95_ms": 900.0,
+   "requests": 1,
+   "traffic": true
+  },
+  "baseline_window_seconds": 900,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "Not timed one by one right now; the requests shown were timed earlier.",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "not-timed",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "decode"
+    ],
+    "ttft": {
+     "answers": null,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "The model serving here does not keep a timer for when its first word came out (llama.cpp has none), so time to first word is not measured.",
+     "p95_band_ms": null,
+     "share_within_budget": null,
+     "state": "not-timed",
+     "within_budget": null
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "15m",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 600,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.3333,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 1800.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 3,
+     "requests_per_min": 0.2,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "Not timed one by one right now; the requests shown were timed earlier.",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "not-timed",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.25,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "decode"
+    ],
+    "ttft": {
+     "answers": null,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "The model serving here does not keep a timer for when its first word came out (llama.cpp has none), so time to first word is not measured.",
+     "p95_band_ms": null,
+     "share_within_budget": null,
+     "state": "not-timed",
+     "within_budget": null
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 96,
+   "requests": 4,
+   "requests_per_min": 0.27,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": 0.77,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": 4,
+   "cluster_state": "none",
+   "collected": true,
+   "coverage_note": "",
+   "machines": null,
+   "metrics": {
+    "busy_slots_per_decode": 1.0,
+    "decode_tokens_per_second": 31.4,
+    "prompt_tokens_per_second": 410.0,
+    "requests_deferred": 0.0,
+    "requests_processing": 1.0
+   },
+   "models": [],
+   "placement": "",
+   "reason": "",
+   "sampled_at": 1789999996.0,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": false,
+   "next_step": "Collected from the vLLM cluster's Prometheus /metrics scrape once GPU clustering serves the model there. Still uncollected in this sample: Per-model / per-deployment RED, Time to first token (TTFT), Time per output token (TPOT), KV-cache utilisation, Preemptions, Prefix-cache hit rate, Goodput (requests within the latency budget).",
+   "signals": [
+    {
+     "id": "per_model_red",
+     "label": "Per-model / per-deployment RED",
+     "reason": "Per-model RED reads the vLLM engine's per-model_name series; the gateway request log has no model column of its own."
+    },
+    {
+     "id": "ttft",
+     "label": "Time to first token (TTFT)",
+     "reason": "TTFT is the vLLM time-to-first-token histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "tpot",
+     "label": "Time per output token (TPOT)",
+     "reason": "TPOT is the vLLM inter-token-latency histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "kv_cache",
+     "label": "KV-cache utilisation",
+     "reason": "KV-cache occupancy is the vLLM kv_cache_usage gauge, read from the cluster's /metrics."
+    },
+    {
+     "id": "preemptions",
+     "label": "Preemptions",
+     "reason": "Preemption counts are the vLLM num_preemptions counter, read from the cluster's /metrics."
+    },
+    {
+     "id": "prefix_cache",
+     "label": "Prefix-cache hit rate",
+     "reason": "Prefix-cache reuse is the vLLM prefix-cache hit and query counters, read from the cluster's /metrics."
+    },
+    {
+     "id": "goodput",
+     "label": "Goodput (requests within the latency budget)",
+     "reason": "Goodput is the share of requests finishing within the 30 s budget, from the vLLM end-to-end latency histogram."
+    }
+   ]
+  },
+  "why": {
+   "detail": "1 of 4 requests failed with a server error (the inference gateway: 1 of 3; AI Chat: 0 of 1). The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Failures rising: 25.0% of requests through the inference gateway and AI Chat are failing, up from 0.0%.",
+   "signal": "errors"
+  },
+  "window_seconds": 900
+ },
+ "single_machine_serving@1h": {
+  "baseline_gateway": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_requests": {
+   "error_rate": null,
+   "p95_ms": null,
+   "requests": 0,
+   "traffic": false
+  },
+  "baseline_window_seconds": 3600,
+  "deployments": [
+   {
+    "completion_tokens": 1200,
+    "counting_since": 1789913600.0,
+    "engine": "vllm",
+    "identity": "cluster:qwen",
+    "last_read_at": 1789999996.0,
+    "last_used_at": 1789999960.0,
+    "live": true,
+    "model": "Qwen/Qwen3-8B",
+    "name": "qwen",
+    "prompt_tokens": 4800,
+    "requests": 9
+   }
+  ],
+  "deployments_readable": true,
+  "deprecated_keys": {
+   "baseline_gateway": "baseline_requests",
+   "gateway": "requests",
+   "gateway.scope": "requests.latency_basis",
+   "gateway_detail": "requests.doors[].coverage"
+  },
+  "gateway": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 720,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.25,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 900.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 4,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "Not timed one by one right now; the requests shown were timed earlier.",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.02,
+     "retry_later": 0,
+     "state": "not-timed",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.2,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "decode"
+    ],
+    "ttft": {
+     "answers": null,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "The model serving here does not keep a timer for when its first word came out (llama.cpp has none), so time to first word is not measured.",
+     "p95_band_ms": null,
+     "share_within_budget": null,
+     "state": "not-timed",
+     "within_budget": null
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 136,
+   "requests": 5,
+   "requests_per_min": 0.08,
+   "retry_later": 0,
+   "scope": "all-doors",
+   "tokens_note": "",
+   "tokens_per_sec": 0.24,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "gateway_detail": {
+   "kept": 10000,
+   "partial": false,
+   "since": null
+  },
+  "generated_at": 1790000000000,
+  "health": {
+   "checked": [
+    "processor",
+    "memory",
+    "graphics"
+   ],
+   "reasons": [],
+   "status": "healthy"
+  },
+  "nodes": [
+   {
+    "gpu_temperature": {
+     "bands": {
+      "critical_c": 100.0,
+      "source": "machine class",
+      "warning_c": 97.0
+     },
+     "note": "No GPU limit reported; using this machine's processor limits.",
+     "sensor": "edge",
+     "value_c": 41.0
+    },
+    "health": {
+     "checked": [
+      "processor",
+      "memory",
+      "graphics"
+     ],
+     "notes": [],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "controller",
+    "last_sample_age_seconds": null,
+    "last_sample_at": null,
+    "name": "This Vaelor controller",
+    "reporting": true,
+    "role": "head-controller",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 72.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 72%."
+    },
+    "use": {
+     "cpu_percent": 18.0,
+     "cpu_temperature_c": 47.0,
+     "gpu_busy_percent": 72.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 27917287424.0,
+     "gpu_temperature_c": 41.0,
+     "memory_percent": 48.0,
+     "npu_activity_percent": 0.0
+    }
+   },
+   {
+    "gpu_temperature": {
+     "bands": null,
+     "note": "No GPU limit is reported and Vaelor does not know what kind of machine this is, so this temperature is shown but not judged.",
+     "sensor": "unlabelled sensor",
+     "value_c": 53.0
+    },
+    "health": {
+     "checked": [
+      "memory"
+     ],
+     "notes": [
+      "Vaelor does not know what kind of machine this is, so its processor temperature is shown but not judged."
+     ],
+     "reasons": [],
+     "status": "healthy"
+    },
+    "id": "node_ab12",
+    "last_sample_age_seconds": 2,
+    "last_sample_at": 1789999998,
+    "name": "ZBook",
+    "reporting": true,
+    "role": "worker",
+    "saturation": {
+     "ceiling": "gpu",
+     "saturated": false,
+     "value": 61.0,
+     "verdict": "Headroom on every resource; busiest is gpu at 61%."
+    },
+    "use": {
+     "cpu_percent": 9.0,
+     "cpu_temperature_c": 52.0,
+     "gpu_busy_percent": 61.0,
+     "gpu_gfx_temperature_c": null,
+     "gpu_gtt_total_bytes": 47244640256.0,
+     "gpu_gtt_used_bytes": 26843545600.0,
+     "gpu_temperature_c": 53.0,
+     "memory_percent": 41.0,
+     "npu_activity_percent": null
+    }
+   }
+  ],
+  "requested_window": "1h",
+  "requests": {
+   "budget_metric": "ttft-p95",
+   "budget_ms": 2500.0,
+   "client_errors": 1,
+   "completion_tokens": 720,
+   "doors": [
+    {
+     "client_errors": 1,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "",
+     "door": "gateway",
+     "error_rate": 0.25,
+     "failures": 1,
+     "label": "Inference gateway",
+     "latency_ms": {
+      "max": 9000.0,
+      "p50": 900.0,
+      "p95": 9000.0,
+      "p99": 9000.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 4,
+     "requests_per_min": 0.07,
+     "retry_later": 0,
+     "state": "measured",
+     "traffic": true,
+     "within_budget": null
+    },
+    {
+     "client_errors": null,
+     "coverage": null,
+     "detail": "The record of these requests was not available to this reading, so they are not known here.",
+     "door": "llm-server",
+     "error_rate": null,
+     "failures": null,
+     "label": "LLM Server",
+     "latency_ms": null,
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": null,
+     "requests_per_min": null,
+     "retry_later": null,
+     "state": "not-known",
+     "traffic": false,
+     "within_budget": null
+    },
+    {
+     "client_errors": 0,
+     "coverage": {
+      "kept": 10000,
+      "partial": false,
+      "since": null
+     },
+     "detail": "Not timed one by one right now; the requests shown were timed earlier.",
+     "door": "ai-chat",
+     "error_rate": 0.0,
+     "failures": 0,
+     "label": "AI Chat",
+     "latency_ms": {
+      "max": 23400.0,
+      "p50": 23400.0,
+      "p95": 23400.0,
+      "p99": 23400.0
+     },
+     "latency_role": "information",
+     "over_budget_by_ms": null,
+     "requests": 1,
+     "requests_per_min": 0.02,
+     "retry_later": 0,
+     "state": "not-timed",
+     "traffic": true,
+     "within_budget": null
+    }
+   ],
+   "error_rate": 0.2,
+   "failures": 1,
+   "generation": {
+    "basis": "model-timings",
+    "decode": {
+     "detail": "",
+     "floor_tokens_per_second": 8.0,
+     "state": "measured",
+     "tokens_per_second": 12.8,
+     "within_budget": true
+    },
+    "judged": [
+     "decode"
+    ],
+    "ttft": {
+     "answers": null,
+     "budget_ms": 2500.0,
+     "budget_share": 0.95,
+     "detail": "The model serving here does not keep a timer for when its first word came out (llama.cpp has none), so time to first word is not measured.",
+     "p95_band_ms": null,
+     "share_within_budget": null,
+     "state": "not-timed",
+     "within_budget": null
+    },
+    "within_budget": true
+   },
+   "latency_basis": "pooled-per-request",
+   "latency_ms": {
+    "max": 23400.0,
+    "p50": 1800.0,
+    "p95": 23400.0,
+    "p99": 23400.0
+   },
+   "latency_role": "information",
+   "note": "",
+   "over_budget_by_ms": null,
+   "prompt_tokens": 136,
+   "requests": 5,
+   "requests_per_min": 0.08,
+   "retry_later": 0,
+   "tokens_note": "",
+   "tokens_per_sec": 0.24,
+   "traffic": true,
+   "unmeasured": [
+    "llm-server"
+   ],
+   "window_scope": "window",
+   "within_budget": true
+  },
+  "serving": {
+   "age_seconds": 4,
+   "cluster_state": "none",
+   "collected": true,
+   "coverage_note": "",
+   "machines": null,
+   "metrics": {
+    "busy_slots_per_decode": 1.0,
+    "decode_tokens_per_second": 31.4,
+    "prompt_tokens_per_second": 410.0,
+    "requests_deferred": 0.0,
+    "requests_processing": 1.0
+   },
+   "models": [],
+   "placement": "",
+   "reason": "",
+   "sampled_at": 1789999996.0,
+   "scope_note": "",
+   "stale": false
+  },
+  "traces": {
+   "collected": true,
+   "enabled": true,
+   "otlp_endpoint": "http://127.0.0.1:6006",
+   "reason": "Per-request traces are captured in Phoenix.",
+   "running": true,
+   "ui_host": "127.0.0.1",
+   "ui_port": 6006
+  },
+  "uncollected": {
+   "collected": false,
+   "next_step": "Collected from the vLLM cluster's Prometheus /metrics scrape once GPU clustering serves the model there. Still uncollected in this sample: Per-model / per-deployment RED, Time to first token (TTFT), Time per output token (TPOT), KV-cache utilisation, Preemptions, Prefix-cache hit rate, Goodput (requests within the latency budget).",
+   "signals": [
+    {
+     "id": "per_model_red",
+     "label": "Per-model / per-deployment RED",
+     "reason": "Per-model RED reads the vLLM engine's per-model_name series; the gateway request log has no model column of its own."
+    },
+    {
+     "id": "ttft",
+     "label": "Time to first token (TTFT)",
+     "reason": "TTFT is the vLLM time-to-first-token histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "tpot",
+     "label": "Time per output token (TPOT)",
+     "reason": "TPOT is the vLLM inter-token-latency histogram, read from the cluster's /metrics."
+    },
+    {
+     "id": "kv_cache",
+     "label": "KV-cache utilisation",
+     "reason": "KV-cache occupancy is the vLLM kv_cache_usage gauge, read from the cluster's /metrics."
+    },
+    {
+     "id": "preemptions",
+     "label": "Preemptions",
+     "reason": "Preemption counts are the vLLM num_preemptions counter, read from the cluster's /metrics."
+    },
+    {
+     "id": "prefix_cache",
+     "label": "Prefix-cache hit rate",
+     "reason": "Prefix-cache reuse is the vLLM prefix-cache hit and query counters, read from the cluster's /metrics."
+    },
+    {
+     "id": "goodput",
+     "label": "Goodput (requests within the latency budget)",
+     "reason": "Goodput is the share of requests finishing within the 30 s budget, from the vLLM end-to-end latency histogram."
+    }
+   ]
+  },
+  "why": {
+   "detail": "1 of 5 requests failed with a server error (the inference gateway: 1 of 4; AI Chat: 0 of 1). The record of these requests was not available to this reading, so they are not known here.",
+   "headline": "Failures rising: 20.0% of requests through the inference gateway and AI Chat are failing, up from 0.0%.",
+   "signal": "errors"
+  },
+  "window_seconds": 3600
+ }
+}

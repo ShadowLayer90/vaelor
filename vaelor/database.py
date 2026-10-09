@@ -8,7 +8,9 @@ from math import floor
 import re
 
 from .utils import log_error
+from .cluster_placement import CONTROLLER_PLACEMENT_ID
 from .telemetry_store import DEFAULT_RETENTION_DAYS, RETENTION_POLICY_NAME
+from .telemetry_ingest import valid_node_id
 import threading
 
 class Database:
@@ -262,6 +264,69 @@ class Database:
         except Exception as e:
             return False, str(e)
 
+    def set_tagged(self, measurement, tags, fields, time=None):
+        """Write one point carrying InfluxDB *tags* as well as fields.
+
+        `set` writes an untagged point and is left unchanged for back-compat;
+        this is its tagged sibling, used to stamp the authenticated `node` on a
+        row so the read path can filter a per-node series. A caller-supplied
+        integer `time` is nanosecond-precise (the ingest path clamps it), so the
+        write declares nanosecond precision; without one InfluxDB stamps the row
+        with the server clock, exactly as `set` does.
+        """
+        if not self.is_ready():
+            self.log.error('Database is not ready')
+            return False, 'Database is not ready'
+        point = {"measurement": measurement, "tags": dict(tags), "fields": fields}
+        if time is not None:
+            point["time"] = time
+        json_body = [point]
+        try:
+            with self.lock:
+                if time is not None:
+                    self.client.write_points(json_body, time_precision='n')
+                else:
+                    self.client.write_points(json_body)
+            return True, json_body
+        except InfluxDBClientError as e:
+            return False, json.loads(e.content)["error"]
+        except Exception as e:
+            return False, str(e)
+
+    @staticmethod
+    def _node_clause(node, keyword):
+        """A `"node" = '<id>'` predicate joined by `keyword`, or `''` for no node.
+
+        **The id is sanitised before it is interpolated**, even though it comes
+        from the controller's own node store rather than the network: the store
+        is trusted today, but a query built by pasting an id into SQL is one
+        refactor away from reading an attacker-influenced value, so the guard
+        lives at the seam that builds the query. A malformed id raises rather
+        than silently widening the filter to every node.
+
+        **The controller's series is its tagged rows plus the untagged ones.**
+        The data logger stamps `node=controller` on every row it writes today,
+        but rows written before that tag existed carry no `node` tag at all, and
+        they are the controller's too - no worker ever wrote an untagged row,
+        because the ingest route always stamps the authenticated node. InfluxQL
+        1.x matches a point that lacks a tag with `"node" = ''`, so the
+        controller predicate is the OR of the two, parenthesised so it binds
+        inside the surrounding `AND`.
+
+        `None` means no filter at all - a read across every node. Only the
+        legacy `/api/v1.0` path still asks for that; the telemetry store always
+        names a node, so its reads can no longer average the fleet (ACC-082).
+        """
+        if node is None:
+            return ""
+        if not valid_node_id(node):
+            raise ValueError(
+                "A node id may hold only letters, digits, hyphen and underscore."
+            )
+        if node == CONTROLLER_PLACEMENT_ID:
+            return "{}(\"node\" = '{}' OR \"node\" = '')".format(keyword, node)
+        return "{}\"node\" = '{}'".format(keyword, node)
+
     def get_data_by_time_range(self, measurement, start_time, end_time, keys="*", function="mean", max_size=300):
         # self.log.warning(f"Getting data from database: measurement={measurement}, keys={keys}, start_time={start_time}, end_time={end_time}, function={function}, max_size={max_size}")
         if not self.is_ready():
@@ -292,7 +357,8 @@ class Database:
     #: back to `mean`.
     TREND_FUNCTIONS = ("mean", "min", "max", "count", "sum")
 
-    def get_trend(self, measurement, since_seconds, bucket_seconds, function="mean"):
+    def get_trend(self, measurement, since_seconds, bucket_seconds, function="mean", node=None,
+                  until_seconds=0):
         """Every numeric field, aggregated into fixed time buckets, **ascending**.
 
         The counterpart to `get`, which returns the newest `n` rows by count:
@@ -317,11 +383,17 @@ class Database:
         function = function if function in self.TREND_FUNCTIONS else "mean"
         since = max(1, int(since_seconds))
         bucket = max(1, int(bucket_seconds))
-        query = (
-            f'SELECT {function.upper()}(*) FROM {measurement} '
-            f'WHERE time > now() - {since}s '
-            f'GROUP BY time({bucket}s) fill(none) ORDER BY time ASC'
+        # An end bound (review S1): "last night" is a window that ended this
+        # morning, not one that runs to now. Integers only reach the query.
+        until = max(0, int(until_seconds or 0))
+        where = "time > now() - {}s{}{}".format(
+            since, " AND time <= now() - {}s".format(until) if until else "",
+            self._node_clause(node, " AND "),
         )
+        query = (
+            "SELECT {}(*) FROM {} WHERE {} "
+            "GROUP BY time({}s) fill(none) ORDER BY time ASC"
+        ).format(function.upper(), measurement, where, bucket)
         with self.lock:
             result = self.client.query(query)
         prefix = f"{function}_"
@@ -336,6 +408,78 @@ class Database:
             rows.append(row)
         return rows
 
+    def latest_sample(self, measurement, node=None):
+        """The newest raw row for a node, `time` in epoch seconds, or None.
+
+        One query answers both "when did this node last report" and "what did
+        it last report": the row's fields are the node's current reading as
+        measured, not a bucket mean, and its `time` is the freshness E2c shows
+        as "not reporting since X". Queried with `epoch='s'` so `time` comes
+        back as an integer rather than a string to be parsed. The node filter
+        goes through the same sanitised clause `get_trend` uses, so the
+        injection guard holds here too; `None` reads the newest row of any
+        node, which is why the telemetry store never passes it.
+        """
+        if not self.is_ready():
+            self.log.error('Database is not ready')
+            return None
+        clause = self._node_clause(node, " WHERE ")
+        query = f'SELECT * FROM {measurement}{clause} ORDER BY time DESC LIMIT 1'
+        with self.lock:
+            result = self.client.query(query, epoch='s')
+        points = list(result.get_points())
+        if not points:
+            return None
+        return dict(points[0])
+
+    def last_sample_time(self, measurement, node=None):
+        """The newest row's time for a node (epoch seconds), or None.
+
+        The `time` of `latest_sample`'s row, so the freshness a reconcile reads
+        and the reading the history route shows come from one query shape.
+        """
+        row = self.latest_sample(measurement, node=node)
+        return None if row is None else row.get("time")
+
+    #: A strict identifier charset for a tag KEY interpolated into a filter: a
+    #: tag key names a column, so letters, digits and underscore only. A key
+    #: outside this shape raises rather than widening the read to every series.
+    _TAG_KEY_PATTERN = re.compile(r"[A-Za-z0-9_]{1,64}")
+
+    #: The hard ceiling on rows a single tagged read returns, whatever a caller
+    #: asks for, so a raw-row read can never be unbounded.
+    GET_TAGGED_MAX_LIMIT = 500
+
+    def get_tagged(self, measurement, tag_key, tag_value, limit=100):
+        """The newest rows carrying ``tag_key == tag_value``, string fields included.
+
+        `get_trend` aggregates and drops the string fields an agent's memory
+        keeps, so this returns the raw rows instead. **Both the tag key and the
+        tag value are guarded before they are interpolated** - the key against a
+        strict identifier charset, the value through the same `valid_node_id`
+        sanitiser `_node_clause` trusts - so neither can smuggle InfluxQL, and a
+        malformed key or value raises rather than reading rows it should not.
+        ``limit`` is clamped to `GET_TAGGED_MAX_LIMIT`.
+        """
+        if not self.is_ready():
+            self.log.error('Database is not ready')
+            return []
+        if not isinstance(tag_key, str) or not self._TAG_KEY_PATTERN.fullmatch(tag_key):
+            raise ValueError(
+                "A tag key may hold only letters, digits and underscore."
+            )
+        if not valid_node_id(tag_value):
+            raise ValueError(
+                "A tag value may hold only letters, digits, hyphen and underscore."
+            )
+        capped = max(1, min(int(limit), self.GET_TAGGED_MAX_LIMIT))
+        query = "SELECT * FROM {} WHERE \"{}\" = '{}' ORDER BY time DESC LIMIT {}".format(
+            measurement, tag_key, tag_value, capped
+        )
+        with self.lock:
+            result = self.client.query(query)
+        return list(result.get_points())
+
     def if_too_many_nulls(self, result, threshold=0.5):
         for point in result:
             error_length = len([key for key, value in point.items() if value is None])
@@ -344,8 +488,14 @@ class Database:
                 return True
         return False
 
-    def get(self, measurement, key="*", n=1):
+    def get(self, measurement, key="*", n=1, node=None):
         """The most recent `n` rows, returned **oldest to newest**.
+
+        `node` filters to one node's series through `_node_clause` (the
+        controller's includes its legacy untagged rows); `None` reads every
+        node, which only the legacy `/api/v1.0` routes and the controller-only
+        serving measurement still do. The telemetry history read passes a node
+        so a worker's rows cannot land in the controller's samples (ACC-082).
 
         `ORDER BY time DESC` is how InfluxDB is asked for the *latest* n rows,
         so the query keeps it and the rows are reversed afterwards. Without the
@@ -360,7 +510,7 @@ class Database:
             return []
 
         # Read data from last 1 second
-        time_filter = "time < now() - 1s"
+        time_filter = "time < now() - 1s" + self._node_clause(node, " AND ")
         query = f"SELECT {key} FROM {measurement} WHERE {time_filter} ORDER BY time DESC LIMIT {n}"
         with self.lock:
             result = self.client.query(query)

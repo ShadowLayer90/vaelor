@@ -13,7 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from .inference_tuning import detect_model_eviction, loaded_models, offered_models
 
@@ -157,6 +157,36 @@ def probe_connection(
     with _LOCK:
         _CACHE[key] = dict(result)
     return dict(result)
+
+
+#: What a readiness check says when the check itself broke before it got an
+#: answer. A failed check is not evidence the model answers (ACC-136).
+CHECK_FAILED_DETAIL = (
+    "Vaelor's readiness check on the selected AI model failed before it got an "
+    "answer, so the model is not counted as answering."
+)
+
+
+def probe_selected_model(
+    resolve_connection: Callable[[], Optional[Mapping[str, str]]],
+) -> Dict[str, Any]:
+    """The one guarded readiness probe for the Assistant's selected model.
+
+    Both ``/agent/status`` and :func:`vaelor.api_common.assistant_model_status`
+    used to catch an exception here and substitute ``reachable: True``, so a
+    probe that broke made Routines show the model ready with Run enabled while
+    nothing had answered. Unknown is not reachable: a check that raised comes
+    back ``reachable: False`` with a plain reason and ``check_failed: True``.
+    """
+    try:
+        return probe_connection(resolve_connection())
+    except (AttributeError, KeyError, OSError, TypeError, ValueError):
+        return {
+            "reachable": False, "endpoint": "", "detail": CHECK_FAILED_DETAIL,
+            "checked_at": time.time(), "loaded_models": [],
+            "offering_models": None, "model_availability_reason": "",
+            "offered_model_names": [], "check_failed": True,
+        }
 
 
 def evicted_models(

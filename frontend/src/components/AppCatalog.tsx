@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { Icon } from "./Icon";
-import { Button, Input, Notice } from "./ui";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import "../styles/apps-setup.css";
+import { AppsDialog, AppsFacts, AppsIconTile } from "./appsKit";
+import { AppsBanner } from "./appsSetupParts";
+import { Icon, ICON_SIZE } from "./Icon";
+import { Button, Input } from "./ui";
 
 /**
  * Post-deploy setup guidance for a catalog app, surfaced in the App Manager so
@@ -30,6 +33,13 @@ export interface AppTemplate {
   description: string;
   image: string;
   default_port: number;
+  /**
+   * The port an install would be offered (W7-D2): the default, or the port the
+   * backend suggests when a stored model holds it. Absent on older servers.
+   */
+  offered_port?: number | null;
+  /** What holds the default port, when something does. */
+  default_port_holder?: string;
   container_port: number;
   memory: string;
   storage: string;
@@ -59,49 +69,129 @@ export interface PortPreflight {
   reason: string;
 }
 
+/** The port a template's install would get: the backend's offer, else its default (W7-D2). */
+export function offeredPort(template: AppTemplate): number {
+  return template.offered_port ?? template.default_port;
+}
+
+/** Why the catalog's install buttons are held when the caller names no reason. */
+const INSTALL_HELD = "Installing needs operator access and Docker ready on this machine.";
+
+function clientPortProblem(port: number) {
+  if (!Number.isFinite(port) || !Number.isInteger(port)) return "Enter a whole-number port from 1024 to 65535.";
+  if (port < 1024) return "Use a port from 1024 to 65535. Lower ports are reserved by the operating system.";
+  if (port > 65535) return "Ports cannot be higher than 65535.";
+  if ([34001, 34002].includes(port)) return "That port is reserved for the Vaelor control plane.";
+  return "";
+}
+
+/** One blueprint as the AppsCatalog board draws it: tile and category, name, line, facts, one action. */
+function TemplateCard({
+  disabledReason,
+  installed,
+  onChoose,
+  onOpenInstalled,
+  template,
+}: {
+  disabledReason?: string;
+  installed: boolean;
+  onChoose: () => void;
+  onOpenInstalled?: () => void;
+  template: AppTemplate;
+}) {
+  const held = template.default_port_holder;
+  return (
+    <article className="apps-catalog-card">
+      <div className="apps-catalog-card__top">
+        <AppsIconTile name="apps" />
+        <span className="apps-catalog-card__category">{template.category}</span>
+      </div>
+      <h3>{template.name}</h3>
+      <p>{template.description}</p>
+      <AppsFacts
+        rows={[
+          { label: "Memory limit", value: template.memory },
+          { label: "Storage", value: template.storage },
+          { label: held ? "Address offered" : "Default address", value: `Port ${offeredPort(template)}` },
+          ...(held ? [{ label: "Default port", value: `${template.default_port} is held by ${held}` }] : []),
+        ]}
+      />
+      <div className="apps-catalog-card__action">
+        {installed ? (
+          <Button
+            disabledReason={onOpenInstalled ? undefined : "Manage cannot be opened from here."}
+            onClick={() => onOpenInstalled?.()}
+          >
+            View in Manage
+          </Button>
+        ) : (
+          <Button disabledReason={disabledReason} onClick={onChoose}>Review installation</Button>
+        )}
+      </div>
+    </article>
+  );
+}
+
 export function AppCatalog({
   templates,
   busy,
   disabled,
+  disabledReason,
+  error,
   onClose,
+  onDismiss,
   onInstall,
   onPreflight,
   initialTemplateId,
   initialPort,
   installedTemplateIds = [],
   onOpenInstalled,
+  onRetry,
+  readError = false,
 }: {
   templates: AppTemplate[];
   busy: boolean;
   disabled: boolean;
+  /** Why installing is held, in the caller's words; a general sentence otherwise. */
+  disabledReason?: string;
+  /** Why the install was refused (VD-189): shown inside the dialog, never on the inert page beneath. */
+  error?: ReactNode;
   onClose: () => void;
+  /** Escape, the backdrop and the header's Close: leave without clearing a resumed choice. Defaults to onClose. */
+  onDismiss?: () => void;
   onInstall: (template: AppTemplate, port: number) => void | Promise<void>;
   onPreflight?: (port: number) => Promise<PortPreflight>;
   initialTemplateId?: string;
   initialPort?: number;
   installedTemplateIds?: string[];
   onOpenInstalled?: () => void;
+  /** Read the blueprint list again after it could not be read. */
+  onRetry?: () => void;
+  /** The blueprint list could not be read: said, never drawn as an empty catalog (LESSONS 8). */
+  readError?: boolean;
 }) {
-  const allInstalled = templates.length > 0 && templates.every((template) => installedTemplateIds.includes(template.id));
+  const allInstalled = !readError && templates.length > 0 && templates.every((template) => installedTemplateIds.includes(template.id));
   const initialTemplate = templates.find((template) => template.id === initialTemplateId) ?? null;
   const [selected, setSelected] = useState<AppTemplate | null>(initialTemplate);
-  const [port, setPort] = useState(initialPort ?? initialTemplate?.default_port ?? 3000);
+  const [port, setPort] = useState(initialPort ?? (initialTemplate ? offeredPort(initialTemplate) : 3000));
   const [preflight, setPreflight] = useState<PortPreflight | null>(null);
   const [preflightPending, setPreflightPending] = useState(false);
   const installInFlight = useRef(false);
-  const clientPortProblem = !Number.isFinite(port) || !Number.isInteger(port)
-    ? "Enter a whole-number port from 1024 to 65535."
-    : port < 1024
-      ? "Use a port from 1024 to 65535. Lower ports are reserved by the operating system."
-    : port > 65535
-      ? "Ports cannot be higher than 65535."
-      : [34001, 34002].includes(port)
-        ? "That port is reserved for the Vaelor control plane."
-        : "";
-  const portProblem = clientPortProblem || (preflight?.conflict ? preflight.reason : "");
+  // W4d-D10: the review replaces the grid and takes focus. It used to render
+  // under a 2,000 px grid with nothing moving, so the button looked dead.
+  useEffect(() => {
+    if (!selected) return;
+    const heading = document.getElementById("app-install-review-title");
+    heading?.setAttribute("tabindex", "-1");
+    heading?.focus();
+  }, [selected]);
+  const localProblem = clientPortProblem(port);
+  const conflict = preflight?.conflict ? preflight.reason : "";
+  const portProblem = localProblem || conflict;
+  const heldReason = disabled ? disabledReason || INSTALL_HELD : undefined;
 
   useEffect(() => {
-    if (!selected || clientPortProblem || !onPreflight) {
+    if (!selected || localProblem || !onPreflight) {
       setPreflight(null);
       setPreflightPending(false);
       return;
@@ -116,11 +206,11 @@ export function AppCatalog({
       if (current) setPreflightPending(false);
     });
     return () => { current = false; };
-  }, [clientPortProblem, onPreflight, port, selected]);
+  }, [localProblem, onPreflight, port, selected]);
 
   const choose = (template: AppTemplate) => {
     setSelected(template);
-    setPort(template.default_port);
+    setPort(offeredPort(template));
     setPreflight(null);
   };
 
@@ -134,73 +224,107 @@ export function AppCatalog({
     }
   };
 
-  return (
-    <section className="app-catalog" aria-labelledby="app-catalog-title">
-      <div className="model-catalog__header">
-        <div><span className="page-eyebrow">App catalog</span><h2 id="app-catalog-title">{allInstalled ? "All catalog apps are managed" : "Choose an app"}</h2><p>{allInstalled ? "Every available blueprint already has a managed instance. View an app in Manage to open it, inspect health, or change its setup." : "Every template uses resource limits, managed storage, and a configuration Vaelor can back up and repair."}</p></div>
-        <Button onClick={onClose} type="button" variant="quiet">Close</Button>
-      </div>
-      <div className="app-template-grid">
-        {templates.map((template) => {
-          const installed = installedTemplateIds.includes(template.id);
-          return (
-          <article className="app-template" key={template.id}>
-            <div className="app-template__icon"><Icon name={template.id === "grafana" ? "activity" : template.id === "uptime-kuma" ? "shield" : "network"} /></div>
-            <small>{template.category}</small>
-            <h3>{template.name}</h3>
-            <p>{template.description}</p>
-            <dl>
-              <div><dt>Memory limit</dt><dd>{template.memory}</dd></div>
-              <div><dt>Storage</dt><dd>{template.storage}</dd></div>
-              <div><dt>Default address</dt><dd>Port {template.default_port}</dd></div>
-            </dl>
-            <Button disabled={disabled || (installed && !onOpenInstalled)} onClick={() => installed ? onOpenInstalled?.() : choose(template)} type="button" variant="secondary">{installed ? "View in Manage" : "Review installation"}</Button>
-          </article>
-          );
-        })}
-      </div>
-      {selected && (
-        <div className="app-install-review" role="region" aria-labelledby="app-install-review-title">
-          <div>
-            <span className="page-eyebrow">Installation review</span>
-            <h3 id="app-install-review-title">Install {selected.name}?</h3>
-            <p>Vaelor will download <strong>{selected.image}</strong>, create persistent storage where required, and start it automatically after a restart.</p>
-          </div>
-          <div className="app-port-field">
-            <Input
-              aria-describedby={portProblem ? "app-host-port-error" : undefined}
-              aria-invalid={Boolean(portProblem)}
-              className="app-port-field__input"
-              id="app-host-port"
-              label="Web address port"
-              max={65535}
-              min={1024}
-              onChange={(event) => setPort(event.target.value === "" ? Number.NaN : Number(event.target.value))}
-              step={1}
-              type="number"
-              value={Number.isFinite(port) ? port : ""}
-            />
-            {portProblem && <small className="field-error" id="app-host-port-error" role="alert">{portProblem}</small>}
-          </div>
-          <div className="app-install-review__checks">
-            <span><Icon name="shield" />No privileged access</span>
-            <span><Icon name="memory" />{selected.memory} memory limit</span>
-            <span><Icon name="database" />Managed by Vaelor</span>
-          </div>
-          <div className="agent-plan__actions">
-            <Button disabled={busy} onClick={() => setSelected(null)} type="button" variant="secondary">Go back</Button>
-            <Button disabled={busy || disabled || preflightPending || Boolean(portProblem)} onClick={() => void approveInstall()} type="button" variant="primary">
+  if (selected) {
+    // A conflict is said under the field; the free port Vaelor found is
+    // offered beside it, and Approve names what it is waiting for.
+    const approveReason = heldReason
+      ?? (conflict ? "Choose a free port first." : localProblem ? "Enter a usable port first." : undefined);
+    return (
+      <AppsDialog
+        busy={busy}
+        error={error}
+        eyebrow="Installation review"
+        footer={(
+          <>
+            <Button disabled={busy} onClick={() => setSelected(null)}>Go back</Button>
+            <Button
+              disabled={busy || preflightPending}
+              disabledReason={busy ? undefined : approveReason}
+              onClick={() => void approveInstall()}
+              variant="primary"
+            >
               {busy ? "Adding to setup..." : "Approve and install"}
             </Button>
-          </div>
-          {preflight?.conflict && preflight.suggested_port && (
-            <Notice severity="warning">
-              <span>{preflight.reason} Vaelor found port {preflight.suggested_port} available.</span>
-              <Button type="button" variant="quiet" onClick={() => { setPort(preflight.suggested_port as number); setPreflight(null); }}>Use port {preflight.suggested_port}</Button>
-            </Notice>
-          )}
+          </>
+        )}
+        onClose={onDismiss ?? onClose}
+        title={`Install ${selected.name}?`}
+        titleId="app-install-review-title"
+      >
+        <p>Vaelor will download <code className="apps-setup-code">{selected.image}</code>, create persistent storage where required, and start it automatically after a restart.</p>
+        <div className="apps-catalog-port">
+          <Input
+            aria-describedby={portProblem ? "app-host-port-error" : preflightPending ? "app-host-port-checking" : undefined}
+            aria-invalid={Boolean(portProblem)}
+            className="apps-catalog-port__input"
+            id="app-host-port"
+            label="Web address port"
+            max={65535}
+            min={1024}
+            onChange={(event) => setPort(event.target.value === "" ? Number.NaN : Number(event.target.value))}
+            step={1}
+            type="number"
+            value={Number.isFinite(port) ? port : ""}
+          />
+          {portProblem
+            ? <small className="apps-field-error" id="app-host-port-error" role="alert">{portProblem}</small>
+            : preflightPending && <small className="apps-field-hint" id="app-host-port-checking">Checking that port {port} is free…</small>}
         </div>
+        {preflight?.conflict && preflight.suggested_port && (
+          <AppsBanner
+            action={<Button onClick={() => { setPort(preflight.suggested_port as number); setPreflight(null); }}>Use port {preflight.suggested_port}</Button>}
+            tone="warning"
+          >
+            {preflight.reason} Vaelor found port {preflight.suggested_port} available.
+          </AppsBanner>
+        )}
+        <ul aria-label="What this install is allowed" className="apps-setup-chips">
+          <li><Icon aria-hidden="true" name="shield" size={ICON_SIZE.inline} />No privileged access</li>
+          <li><Icon aria-hidden="true" name="memory" size={ICON_SIZE.inline} />{selected.memory} memory limit</li>
+          <li><Icon aria-hidden="true" name="database" size={ICON_SIZE.inline} />Managed by Vaelor</li>
+        </ul>
+      </AppsDialog>
+    );
+  }
+
+  const managedCount = templates.filter((template) => installedTemplateIds.includes(template.id)).length;
+  return (
+    <AppsDialog
+      error={error}
+      eyebrow="App catalog"
+      footer={<Button onClick={onClose}>Close</Button>}
+      footerStart={!readError && templates.length > 0
+        ? <span>{templates.length} blueprint{templates.length === 1 ? "" : "s"}{managedCount ? ` · ${managedCount} already managed` : ""}</span>
+        : undefined}
+      onClose={onDismiss ?? onClose}
+      size="wide"
+      title={allInstalled ? "All catalog apps are managed" : "Choose an app"}
+      titleId="app-catalog-title"
+    >
+      {readError ? (
+        <AppsBanner action={onRetry && <Button onClick={onRetry}>Try again</Button>} tone="warning">
+          The blueprint list could not be read. This is not a claim that there are none.
+        </AppsBanner>
+      ) : (
+        <>
+          <p>{allInstalled
+            ? "Every available blueprint already has a managed instance. View an app in Manage to open it, inspect health, or change its setup."
+            : "Every template uses resource limits, managed storage, and a configuration Vaelor can back up and repair."}</p>
+          {templates.length === 0 && <p>This appliance offers no blueprints.</p>}
+          <div className="apps-catalog-grid">
+            {templates.map((template) => (
+              <TemplateCard
+                disabledReason={heldReason}
+                installed={installedTemplateIds.includes(template.id)}
+                key={template.id}
+                onChoose={() => choose(template)}
+                onOpenInstalled={onOpenInstalled}
+                template={template}
+              />
+            ))}
+          </div>
+        </>
       )}
-    </section>
+    </AppsDialog>
   );
 }

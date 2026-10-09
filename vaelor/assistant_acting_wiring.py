@@ -35,6 +35,7 @@ from .assistant_action_proposals import (
     WORKLOADS_ACT_SCOPE,
     managed_projects,
 )
+from .assistant_console_places import APPS
 from .assistant_tools import AssistantToolError
 
 #: The read fact an acting proposal binds to. It must be gathered this turn for
@@ -191,3 +192,59 @@ def acting_proposal(
         return None
     proposal = outcome.get("result", {}).get("proposed_job")
     return proposal if isinstance(proposal, dict) else None
+
+
+#: How each acting operation is named back when it was not done.
+_OPERATION_WORDS = {"workloads.restart": "restarted", "workloads.redeploy": "redeployed"}
+
+
+def acting_decline(
+    message: str,
+    evidence_facts: Optional[Mapping[str, Any]],
+    granted_scopes: Optional[Iterable[str]],
+) -> Optional[Dict[str, Any]]:
+    """Say plainly that an acting request was not carried out, and why (review S3).
+
+    "Restart grafana" with no ``workloads:act`` grant, or naming an app Vaelor
+    does not manage, used to reach either the capability refusal (no model) or
+    the model with no inventory and no decline sentence - which left the model
+    free to say it had restarted the app. ``None`` when the message is not an
+    acting request, so a question about restarts is answered normally.
+    """
+    text = str(message or "")
+    operation, verb_start = _matched_operation(text)
+    if operation is None or _QUESTION_BEFORE.search(text[:verb_start]):
+        # Review round 3 (F1): a change to AI Chat, the LLM Server or the
+        # Assistant's model is declined here too, before any model is asked.
+        from .assistant_action_requests import feature_change_decline
+
+        return feature_change_decline(text)
+    facts = evidence_facts or {}
+    project = _target_project(text, managed_projects(facts.get(EVIDENCE_TOOL)))
+    granted = WORKLOADS_ACT_SCOPE in set(granted_scopes or ())
+    done = _OPERATION_WORDS.get(operation, "changed")
+    if project is None:
+        why = (
+            "it does not name an app Vaelor manages on this machine, so there "
+            "is nothing I could prepare for approval"
+        )
+        target = "anything"
+    elif not granted:
+        why = (
+            "your account has not been granted workload actions, so I cannot "
+            "prepare one for your approval"
+        )
+        target = project
+    else:
+        why = "Vaelor could not prepare a reviewed job for it from this turn's reading"
+        target = project
+    return {
+        "answer": "I have not {} {}: {}. Nothing was changed. Apps are "
+                  "restarted and redeployed on {}.".format(done, target, why, APPS),
+        "evidence": [{
+            "source": EVIDENCE_TOOL,
+            "summary": "No workload job was proposed or run for this request.",
+        }],
+        "suggested_actions": ["Open {} to restart or redeploy an app.".format(APPS)],
+        "proposed_job": None,
+    }

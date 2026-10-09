@@ -23,15 +23,32 @@ import type { Session } from "../types";
 export function useNpuInstall(
   session: Session,
   onNotice?: (message: string) => void,
-): { job: UpdateJob | null; start: (tag: string) => void; dismiss: () => void } {
+): {
+  job: UpdateJob | null;
+  start: (tag: string) => void;
+  dismiss: () => void;
+  /** The poll gave up: the install's state could not be read (LESSONS 8 / VD-189). */
+  readLost: boolean;
+  retryRead: () => void;
+} {
   const [job, setJob] = useState<UpdateJob | null>(null);
+  const [readLost, setReadLost] = useState(false);
   const [dismissedId, setDismissedId] = useState("");
   const activeRef = useRef(false);
   const mountedRef = useRef(true);
+  // Every status GET this hook issues is withdrawn on unmount, so the
+  // transport's dead-socket retry cannot re-send one for a view nobody is
+  // watching; `mountedRef` alone only stopped the *next* poll.
+  const lifetime = useRef<AbortSignal | undefined>(undefined);
   const latestJobId = useRef("");
   const noticeRef = useRef(onNotice);
   useEffect(() => { noticeRef.current = onNotice; }, [onNotice]);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller.signal;
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; controller.abort(); };
+  }, []);
 
   // Poll one install job to completion, updating `job` as it advances. Shared by
   // `start` (which posts a new job first) and the mount effect (which re-attaches
@@ -40,12 +57,13 @@ export function useNpuInstall(
   const pollJob = useCallback(async (jobId: string): Promise<UpdateJob | null> => {
     let current: UpdateJob | null = null;
     let consecutiveErrors = 0;
+    if (mountedRef.current) setReadLost(false);
     for (let attempt = 0; attempt < 1200; attempt += 1) {
       // Stop as soon as the component is gone: keep polling after unmount and
       // this issues GETs for up to an hour against a view nobody is watching.
       if (!mountedRef.current) break;
       try {
-        current = await apiRequest<UpdateJob>(`/jobs/${encodeURIComponent(jobId)}`);
+        current = await apiRequest<UpdateJob>(`/jobs/${encodeURIComponent(jobId)}`, { signal: lifetime.current });
         consecutiveErrors = 0;
         latestJobId.current = current.id;
         if (mountedRef.current) setJob(current);
@@ -55,7 +73,13 @@ export function useNpuInstall(
         // STATUS is not a failure of the install. Give up only after a
         // sustained outage (~1 min of continuous failures).
         consecutiveErrors += 1;
-        if (consecutiveErrors >= 20) break;
+        if (consecutiveErrors >= 20) {
+          // Say it rather than stop in silence: the dialog would otherwise
+          // keep showing the last progress read as if it were current.
+          latestJobId.current = latestJobId.current || jobId;
+          if (mountedRef.current) setReadLost(true);
+          break;
+        }
       }
       await new Promise((resolve) => window.setTimeout(resolve, 3000));
     }
@@ -64,8 +88,7 @@ export function useNpuInstall(
 
   const start = useCallback((tag: string) => {
     // Re-show the in-progress install rather than starting a second one.
-    setDismissedId("");
-    if (activeRef.current) return;
+    if (activeRef.current) { setDismissedId(""); return; }
     activeRef.current = true;
     void (async () => {
       let created: { job_id: string };
@@ -82,6 +105,9 @@ export function useNpuInstall(
         }
         return;
       }
+      // Shown again only once accepted: un-dismissing before the POST reopened
+      // the PREVIOUS install's status over a refusal said on the page (VD-189).
+      if (mountedRef.current) setDismissedId("");
       const current = await pollJob(created.job_id);
       activeRef.current = false;
       if (!current && mountedRef.current) {
@@ -100,7 +126,7 @@ export function useNpuInstall(
       if (activeRef.current) return;
       let jobs: UpdateJob[];
       try {
-        jobs = await apiRequest<UpdateJob[]>("/jobs?limit=50");
+        jobs = await apiRequest<UpdateJob[]>("/jobs?limit=50", { signal: lifetime.current });
       } catch {
         return;
       }
@@ -122,10 +148,19 @@ export function useNpuInstall(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Read the same job again after a give-up; the install itself never stopped.
+  const retryRead = useCallback(() => {
+    const jobId = latestJobId.current;
+    if (!jobId || activeRef.current) return;
+    activeRef.current = true;
+    setReadLost(false);
+    void pollJob(jobId).finally(() => { activeRef.current = false; });
+  }, [pollJob]);
+
   const dismiss = useCallback(() => {
     if (latestJobId.current) setDismissedId(latestJobId.current);
   }, []);
 
   const visible = job && job.id !== dismissedId ? job : null;
-  return { job: visible, start, dismiss };
+  return { job: visible, start, dismiss, readLost: Boolean(visible) && readLost, retryRead };
 }

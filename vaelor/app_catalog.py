@@ -349,8 +349,15 @@ APP_TEMPLATES: dict[str, dict[str, Any]] = {
 
 
 def public_catalog() -> list[dict[str, Any]]:
+    # The `volume` tuple stays private, but whether an app is STATEFUL (keeps
+    # data on the machine it runs on) is surfaced as a boolean so the deploy
+    # modal can disable "spread" for it — spreading replicas over per-task local
+    # volumes splits the data (the cluster reconcile refuses it too).
     return [
-        {key: value for key, value in template.items() if key != "volume"}
+        {
+            **{key: value for key, value in template.items() if key != "volume"},
+            "stateful": bool(template.get("volume")),
+        }
         for template in APP_TEMPLATES.values()
     ]
 

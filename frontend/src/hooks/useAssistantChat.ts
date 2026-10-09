@@ -43,6 +43,8 @@ export interface AssistantChatController {
   /** True once the resumed wait gave up without an answer ever arriving. */
   awaitingAnswerLost: boolean;
   chatBusy: boolean;
+  /** Why the open rename or delete dialog's action was refused; shown inside that dialog. */
+  dialogError: string;
   chatInput: string;
   chatMessages: ChatMessage[];
   chatNotice: string;
@@ -66,7 +68,9 @@ export interface AssistantChatController {
   /** Start a fresh chat pre-filled from another surface, such as a run result. */
   seedChat: (draft: string, notice: string) => void;
   setChatInput: (value: string) => void;
-  setChatNotice: (value: string) => void;
+  /** `refused` marks a failure, which the page shows as an alert rather than a status (VD-189). */
+  setChatNotice: (value: string, refused?: boolean) => void;
+  chatNoticeRefused: boolean;
   setConfirmChatDelete: (open: boolean) => void;
   setConversationView: (view: "active" | "archive") => void;
   setRenameTitle: (title: string | null) => void;
@@ -80,6 +84,10 @@ export function useAssistantChat(session: Session): AssistantChatController {
   const [showChatHistory, setShowChatHistory] = useState(false);
   const [renameTitle, setRenameTitle] = useState<string | null>(null);
   const [confirmChatDelete, setConfirmChatDelete] = useState(false);
+  /** The rename or delete dialog's own refusal (VD-189), cleared whenever either opens or closes. */
+  const [dialogError, setDialogError] = useState("");
+  const renameOpen = renameTitle !== null;
+  useEffect(() => setDialogError(""), [renameOpen, confirmChatDelete]);
   const [conversationView, setConversationView] = useState<"active" | "archive">("active");
   /*
    * #150: navigating away unmounted the Assistant and discarded a
@@ -106,26 +114,37 @@ export function useAssistantChat(session: Session): AssistantChatController {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
   const [chatRequestActive, setChatRequestActive] = useState(false);
-  const [chatNotice, setChatNotice] = useState("");
+  const [chatNotice, setChatNoticeText] = useState("");
+  const [chatNoticeRefused, setChatNoticeRefused] = useState(false);
+  const setChatNotice = useCallback((value: string, refused = false) => {
+    setChatNoticeText(value);
+    setChatNoticeRefused(refused);
+  }, []);
   const [requestStartedAt, setRequestStartedAt] = useState(0);
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   const newChatGeneration = useRef(0);
   const chatAbort = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    // The history load is withdrawn with the surface, so neither its second
+    // request nor the transport's dead-socket retry goes out after unmount.
+    const lifetime = new AbortController();
     void (async () => {
       const generation = newChatGeneration.current;
       try {
         const saved = await apiRequest<AssistantConversation[]>(
           "/assistant/conversations?limit=100&archived=1",
+          { signal: lifetime.signal },
         );
+        if (lifetime.signal.aborted) return;
         setConversations(saved);
         const latest = saved.find((conversation) => !conversation.archived);
         if (!latest) return;
         const messages = await apiRequest<ChatMessage[]>(
           `/assistant/conversations/${encodeURIComponent(latest.id)}/messages?limit=40`,
+          { signal: lifetime.signal },
         );
-        if (generation !== newChatGeneration.current) return;
+        if (lifetime.signal.aborted || generation !== newChatGeneration.current) return;
         setConversationId(latest.id);
         setChatMessages(messages);
         setAwaitingAnswer(messages.at(-1)?.role === "user");
@@ -133,6 +152,7 @@ export function useAssistantChat(session: Session): AssistantChatController {
         // A new conversation can still be started when history is unavailable.
       }
     })();
+    return () => lifetime.abort();
   }, []);
 
   /*
@@ -161,6 +181,22 @@ export function useAssistantChat(session: Session): AssistantChatController {
     );
     setConversations(saved);
   }, []);
+
+  /*
+   * After a rename or delete has succeeded and its dialog has closed, the list
+   * is read again. A refused read is not the action's refusal: the action's
+   * own sentence stands, and the page says the list shown may be stale
+   * (VD-189 review; before, the rejection went unhandled and nothing said so).
+   */
+  const reloadAfter = useCallback(async (done: string) => {
+    setChatNotice(done);
+    try {
+      await refreshConversations();
+    } catch (error) {
+      setChatNotice(`${done} The chat list could not be reloaded, so it may be out of date: ${
+        error instanceof Error && error.message ? error.message : "no reason was given."}`, true);
+    }
+  }, [refreshConversations, setChatNotice]);
 
   const startNewChat = useCallback(() => {
     chatAbort.current?.abort();
@@ -207,7 +243,7 @@ export function useAssistantChat(session: Session): AssistantChatController {
       setAwaitingAnswer(messages.at(-1)?.role === "user");
       setShowChatHistory(false);
     } catch (error) {
-      setChatNotice(error instanceof Error ? error.message : "The saved chat could not be opened.");
+      setChatNotice(error instanceof Error ? error.message : "The saved chat could not be opened.", true);
     } finally {
       if (generation === newChatGeneration.current) setChatBusy(false);
     }
@@ -223,16 +259,23 @@ export function useAssistantChat(session: Session): AssistantChatController {
     const title = renameTitle?.trim();
     if (!title) return;
     setChatBusy(true);
-    await apiRequest(
-      `/assistant/conversations/${encodeURIComponent(conversationId)}`,
-      { method: "PATCH", body: JSON.stringify({ title }) },
-      session.csrf_token,
-    );
+    setDialogError("");
+    try {
+      await apiRequest(
+        `/assistant/conversations/${encodeURIComponent(conversationId)}`,
+        { method: "PATCH", body: JSON.stringify({ title }) },
+        session.csrf_token,
+      );
+    } catch (error) {
+      // VD-189: the rename dialog is still open, so the refusal belongs in it.
+      setDialogError(error instanceof Error && error.message ? error.message : "The chat could not be renamed.");
+      return;
+    } finally {
+      setChatBusy(false);
+    }
     setRenameTitle(null);
-    setChatBusy(false);
-    setChatNotice("Chat renamed. Changes are saved automatically.");
-    await refreshConversations();
-  }, [conversationId, refreshConversations, renameTitle, session.csrf_token]);
+    await reloadAfter("Chat renamed. Changes are saved automatically.");
+  }, [conversationId, reloadAfter, renameTitle, session.csrf_token]);
 
   const exportConversation = useCallback(async () => {
     if (!conversationId) return;
@@ -262,17 +305,23 @@ export function useAssistantChat(session: Session): AssistantChatController {
   const deleteConversation = useCallback(async () => {
     if (!conversationId) return;
     setChatBusy(true);
-    await apiRequest(
-      `/assistant/conversations/${encodeURIComponent(conversationId)}`,
-      { method: "DELETE" },
-      session.csrf_token,
-    );
+    setDialogError("");
+    try {
+      await apiRequest(
+        `/assistant/conversations/${encodeURIComponent(conversationId)}`,
+        { method: "DELETE" },
+        session.csrf_token,
+      );
+    } catch (error) {
+      setDialogError(error instanceof Error && error.message ? error.message : "The saved chat could not be deleted.");
+      return;
+    } finally {
+      setChatBusy(false);
+    }
     setConfirmChatDelete(false);
-    setChatBusy(false);
     startNewChat();
-    setChatNotice("Saved chat deleted.");
-    await refreshConversations();
-  }, [conversationId, refreshConversations, session.csrf_token, startNewChat]);
+    await reloadAfter("Saved chat deleted.");
+  }, [conversationId, reloadAfter, session.csrf_token, startNewChat]);
 
   const archiveConversation = useCallback(async (archived: boolean) => {
     if (!conversationId) return;
@@ -350,6 +399,8 @@ export function useAssistantChat(session: Session): AssistantChatController {
             // The compact timing line the model server reported, so the live
             // turn shows it immediately and a reload restores the same line.
             performance: answer.performance,
+            // Which model wrote it, so a later model change cannot relabel it.
+            model_label: answer.model_label,
           },
         },
       ]);
@@ -445,12 +496,14 @@ export function useAssistantChat(session: Session): AssistantChatController {
     chatInput,
     chatMessages,
     chatNotice,
+    chatNoticeRefused,
     chatRequestActive,
     confirmChatDelete,
     conversationId,
     conversations,
     conversationView,
     deleteConversation,
+    dialogError,
     exportConversation,
     openConversation,
     renameConversation,

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from .operation_projection import ACTIVE_OPERATION_STATES
+from .job_vocabulary import NEVER_RETRIED_JOB_TYPES
+from .operation_projection import ACTIVE_OPERATION_STATES, needs_attention
 
 
 _REJECTION_CODES = {
@@ -150,8 +151,16 @@ def job_projection(job: Dict[str, Any]) -> Dict[str, Any]:
         readiness = "unknown"
     else:
         readiness = "pending"
-    attention = operation in {"failed", "needs_approval", "paused", "unknown"}
-    retryable = operation in {"failed", "cancelled"}
+    # Whether this row's STATE is one the attention rule counts (VD-139). What
+    # the ledger reports as still needing attention - after a successful retry
+    # or the owner's dismissal - is `needs_attention`, attached by JobStore.
+    attention = needs_attention(operation)
+    # CR1: a typed-confirmation plan is re-planned, never retried. That does
+    # not keep it in attention for ever: the owner can dismiss it (VD-139).
+    retryable = (
+        operation in {"failed", "cancelled"}
+        and str(job.get("type", "")) not in NEVER_RETRIED_JOB_TYPES
+    )
     retry_of = job.get("retry_of")
     return {
         "operation_state": operation,

@@ -1,6 +1,8 @@
-import { Button } from "./ui";
-import { useEffect, useMemo, useState } from "react";
-import { Icon } from "./Icon";
+import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { Icon, ICON_SIZE } from "./Icon";
+import { StatusPill } from "./StatusPill";
+import { Button, EmptyState, Notice, type StatusTone } from "./ui";
 import type {
   CompatibleAgentVersion,
   IntegrationAppStatus,
@@ -8,26 +10,56 @@ import type {
   IntegrationCapabilitiesProps,
   IntegrationConnection,
   IntegrationConnectionStatus,
+  IntegrationDependent,
   IntegrationGrantSelection,
+  IntegrationGrantStatus,
   IntegrationOperation,
 } from "./integrationCapabilitiesTypes";
-import "../styles/integration-capabilities.css";
 
-const appStatusCopy: Record<IntegrationAppStatus, { label: string; tone: string; detail: string }> = {
-  active: { label: "Active", tone: "positive", detail: "The installed app is available for reviewed operations." },
+/*
+ * App access for one custom agent (the "Capability control" card on the
+ * AssistRoutines board): what an installed app can do, pinned to an exact
+ * agent version, reviewed before anything is saved. Four numbered steps -
+ * connection, agent pin, grant scope, review - then the access that already
+ * exists and what revoking it would break. Nothing here shows an endpoint, a
+ * credential reference or a secret.
+ */
+
+const appStatusCopy: Record<IntegrationAppStatus, { label: string; tone: StatusTone; detail: string }> = {
+  active: { label: "Active", tone: "success", detail: "The installed app is available for reviewed operations." },
   degraded: { label: "Degraded", tone: "warning", detail: "Health checks are reporting a partial failure. Grants stay blocked until recovery." },
   stopped: { label: "Stopped", tone: "neutral", detail: "The installed app is not running. Start it and retry the health check." },
   incompatible: { label: "Incompatible", tone: "danger", detail: "The installed manifest no longer matches this app registration." },
   removed: { label: "Removed", tone: "danger", detail: "This app registration was removed. Existing access cannot be reused." },
 };
 
-const connectionStatusCopy: Record<IntegrationConnectionStatus, { label: string; tone: string }> = {
+const connectionStatusCopy: Record<IntegrationConnectionStatus, { label: string; tone: StatusTone }> = {
   pending: { label: "Testing", tone: "warning" },
-  healthy: { label: "Healthy", tone: "positive" },
+  healthy: { label: "Healthy", tone: "success" },
   degraded: { label: "Degraded", tone: "warning" },
   expired: { label: "Expired", tone: "danger" },
   revoked: { label: "Revoked", tone: "danger" },
 };
+
+/** A grant's state in the operator's words: the pill never prints the wire's slug. */
+const grantStatusCopy: Record<IntegrationGrantStatus, { label: string; tone: StatusTone }> = {
+  active: { label: "Active", tone: "success" },
+  blocked: { label: "Blocked", tone: "warning" },
+  incompatible: { label: "Incompatible", tone: "warning" },
+  revoked: { label: "Revoked", tone: "danger" },
+};
+
+/** What a dependent is doing now, in words. */
+const dependentStatusCopy: Record<IntegrationDependent["status"], { label: string; tone: StatusTone }> = {
+  active: { label: "Active", tone: "neutral" },
+  blocked: { label: "Blocked", tone: "warning" },
+  stopped: { label: "Stopped", tone: "warning" },
+};
+
+/** A state this page has no words for is said as unrecognised, never printed as its slug. */
+const UNRECOGNISED = { label: "Unrecognised state", tone: "neutral" } as const satisfies { label: string; tone: StatusTone };
+const grantStatus = (status: IntegrationGrantStatus) => grantStatusCopy[status] ?? UNRECOGNISED;
+const dependentStatus = (status: IntegrationDependent["status"]) => dependentStatusCopy[status] ?? UNRECOGNISED;
 
 const kindCopy = {
   read: "Read",
@@ -39,6 +71,8 @@ const riskCopy = {
   medium: "Medium risk",
   high: "High risk",
 } as const;
+
+const riskTone: Record<keyof typeof riskCopy, StatusTone> = { low: "neutral", medium: "warning", high: "danger" };
 
 function defaultConnectionId(data: IntegrationCapabilitiesData | null) {
   return data?.connections.find((connection) => connection.status === "healthy")?.id ?? data?.connections[0]?.id ?? "";
@@ -59,12 +93,23 @@ function getSelectionKey(selection: IntegrationGrantSelection) {
   ].join("|");
 }
 
-function StatusBadge({ label, tone }: { label: string; tone: string }) {
+/** A numbered step: the circle is green once the step is satisfied and orange while it is the one to do. */
+function Step({ children, label, number, state, text, title }: {
+  children: ReactNode;
+  label: string;
+  number: number;
+  state?: "done" | "on";
+  text: string;
+  title: string;
+}) {
   return (
-    <span className={`integration-capabilities__status integration-capabilities__status--${tone}`}>
-      <span aria-hidden="true" className="integration-capabilities__status-dot" />
-      {label}
-    </span>
+    <section aria-label={title} className="ar-step">
+      <span className={state ? `ar-step__num is-${state}` : "ar-step__num"}>{number}</span>
+      <div className="ar-step__content">
+        <div><span className="as-label">{label}</span><h3 className="ar-step__title">{title}</h3><span className="ar-step__hint">{text}</span></div>
+        {children}
+      </div>
+    </section>
   );
 }
 
@@ -75,18 +120,14 @@ function ReadinessNotice({ data, selectedConnection }: { data: IntegrationCapabi
 
   if (appReady && connectionReady) {
     return (
-      <div className="integration-capabilities__notice integration-capabilities__notice--positive" role="status">
-        <Icon name="shield" size={18} />
-        <div>
-          <strong>Ready for a reviewed grant</strong>
-          <span>Reads can run through the broker. Writes will require an exact preview before approval.</span>
-        </div>
-      </div>
+      <Notice heading="Ready for a reviewed grant" severity="success" standing>
+        Reads can run through the broker. Writes will require an exact preview before approval.
+      </Notice>
     );
   }
 
   const reasons = [
-    !appReady ? appStatus.detail : null,
+    !appReady ? `${appStatus.label}: ${appStatus.detail.charAt(0).toLowerCase()}${appStatus.detail.slice(1)}` : null,
     data.connectionRequired && !connectionReady
       ? selectedConnection?.status === "expired"
         ? "The selected connection has expired. Choose a healthy connection or create a replacement."
@@ -94,347 +135,196 @@ function ReadinessNotice({ data, selectedConnection }: { data: IntegrationCapabi
           ? "The selected connection was revoked. Choose a healthy connection or create a replacement."
           : "A healthy connection is required before access can be granted."
       : null,
-  ].filter(Boolean);
+  ].filter((reason): reason is string => Boolean(reason));
 
   return (
-    <div className="integration-capabilities__notice integration-capabilities__notice--warning" role="status">
-      <Icon name="alert" size={18} />
-      <div>
-        <strong>Access is blocked until this is resolved</strong>
-        {reasons.map((reason) => <span key={reason}>{reason}</span>)}
-      </div>
-    </div>
+    <Notice heading="Access is blocked until this is resolved" severity="warning" standing>
+      {reasons.map((reason) => <span className="ar-block-line" key={reason}>{reason}</span>)}
+    </Notice>
   );
 }
 
-function AppHealth({ data }: { data: IntegrationCapabilitiesData }) {
+function AppFacts({ data }: { data: IntegrationCapabilitiesData }) {
   const status = appStatusCopy[data.status];
   return (
-    <section className="integration-capabilities__card integration-capabilities__health" aria-labelledby="integration-health-title">
-      <div className="integration-capabilities__section-heading">
-        <div>
-          <span className="integration-capabilities__eyebrow">Installed app</span>
-          <h2 id="integration-health-title">{data.appName}</h2>
-          <p>{data.healthSummary}</p>
-        </div>
-        <StatusBadge label={status.label} tone={status.tone} />
-      </div>
-      <dl className="integration-capabilities__facts">
-        <div><dt>App version</dt><dd>{data.appVersion}</dd></div>
-        <div><dt>Manifest</dt><dd>{data.manifestVersion}</dd></div>
+    <div className="ar-app-facts">
+      <dl className="as-kv ar-kv2">
+        <div><dt>Installed app</dt><dd>{data.appName}</dd></div>
+        <div><dt>App version</dt><dd className="as-mono">{data.appVersion}</dd></div>
+        <div><dt>Manifest</dt><dd className="as-mono">{data.manifestVersion}</dd></div>
         <div><dt>Access model</dt><dd>{data.connectionRequired ? "Brokered connection required" : "No connection required"}</dd></div>
       </dl>
+      <span className="ar-inline"><StatusPill label={status.label} tone={status.tone} /><span className="ar-step__hint">{data.healthSummary}</span></span>
       {data.compatibilitySummary && (
-        <details className="integration-capabilities__details">
+        <details className="ar-output">
           <summary>How compatibility is checked</summary>
           <p>{data.compatibilitySummary}</p>
         </details>
       )}
       {data.recoveryActions && data.recoveryActions.length > 0 && data.status !== "active" && (
-        <div className="integration-capabilities__recovery">
-          <strong>Recovery path</strong>
-          <ul>{data.recoveryActions.map((action) => <li key={action}>{action}</li>)}</ul>
+        <div className="as-box">
+          <strong className="ar-step__title">Recovery path</strong>
+          <ul className="ar-list">{data.recoveryActions.map((action) => <li key={action}>{action}</li>)}</ul>
         </div>
       )}
-    </section>
-  );
-}
-
-function ConnectionCard({
-  connection,
-  selected,
-  disabled,
-  onSelect,
-  onTest,
-}: {
-  connection: IntegrationConnection;
-  selected: boolean;
-  disabled: boolean;
-  onSelect: () => void;
-  onTest: () => void;
-}) {
-  const status = connectionStatusCopy[connection.status];
-  const unusable = connection.status !== "healthy";
-  return (
-    <div className={`integration-capabilities__connection ${selected ? "integration-capabilities__connection--selected" : ""} ${unusable ? "integration-capabilities__connection--unusable" : ""}`}>
-      <label className="integration-capabilities__connection-select">
-        <input
-          className="integration-capabilities__connection-input" checked={selected}
-          disabled={disabled}
-          name="integration-connection"
-          onChange={onSelect}
-          type="radio"
-          value={connection.id}
-        />
-        <span className="integration-capabilities__connection-body">
-          <span className="integration-capabilities__connection-heading">
-            <strong>{connection.label}</strong>
-            <StatusBadge label={status.label} tone={status.tone} />
-          </span>
-          {connection.issue && <span className="integration-capabilities__connection-issue">{connection.issue}</span>}
-          <span className="integration-capabilities__scope-list">
-            {connection.scopes.map((scope) => <span key={scope}>{scope}</span>)}
-          </span>
-          {connection.expiresAt && <small>Expires {connection.expiresAt}</small>}
-        </span>
-      </label>
-      <Button
-        className="integration-capabilities__text-button"
-        disabled={connection.status === "revoked"}
-        onClick={onTest}
-        type="button"
-      >
-        Test connection
-      </Button>
     </div>
   );
 }
-function ConnectionStep({
-  data,
-  selectedConnectionId,
-  disabled,
-  onSelect,
-  onTest,
-  onCreate,
-}: {
-  data: IntegrationCapabilitiesData;
-  selectedConnectionId: string;
-  disabled: boolean;
-  onSelect: (connectionId: string) => void;
-  onTest: (connectionId: string) => void;
-  onCreate?: () => void;
-}) {
-  if (!data.connectionRequired) {
-    return (
-      <section className="integration-capabilities__card integration-capabilities__step" aria-labelledby="integration-connection-title">
-        <div className="integration-capabilities__step-number">01</div>
-        <div className="integration-capabilities__step-content">
-          <div className="integration-capabilities__section-heading">
-            <div><span className="integration-capabilities__eyebrow">Connection</span><h2 id="integration-connection-title">No connection required</h2><p>This app exposes the selected operations without a credential-backed connection.</p></div>
-            <StatusBadge label="Not needed" tone="neutral" />
-          </div>
-        </div>
-      </section>
-    );
-  }
 
+function ConnectionRow({ connection, disabled, onSelect, onTest, selected }: {
+  connection: IntegrationConnection;
+  disabled: boolean;
+  onSelect: () => void;
+  onTest: () => void;
+  selected: boolean;
+}) {
+  const id = useId().replaceAll(":", "");
+  const status = connectionStatusCopy[connection.status];
   return (
-    <section className="integration-capabilities__card integration-capabilities__step" aria-labelledby="integration-connection-title">
-      <div className="integration-capabilities__step-number">01</div>
-      <div className="integration-capabilities__step-content">
-        <div className="integration-capabilities__section-heading">
-          <div><span className="integration-capabilities__eyebrow">Step 1 · Connection</span><h2 id="integration-connection-title">Choose a tested connection</h2><p>Vaelor stores only the broker reference. Credentials and endpoints stay outside this view.</p></div>
-          {onCreate && <Button disabled={disabled} onClick={onCreate} type="button" variant="quiet">Create connection</Button>}
-        </div>
-        {data.connections.length === 0 ? (
-          <div className="integration-capabilities__empty integration-capabilities__empty--inline">
-            <Icon name="lock" size={20} />
-            <div><strong>No connections available</strong><span>Create and test a connection before granting access.</span></div>
-            {onCreate && <Button disabled={disabled} onClick={onCreate} type="button" variant="quiet">Create connection</Button>}
-          </div>
-        ) : (
-          <div className="integration-capabilities__connection-list">
-            {data.connections.map((connection) => (
-              <ConnectionCard
-                connection={connection}
-                disabled={disabled}
-                key={connection.id}
-                onSelect={() => onSelect(connection.id)}
-                onTest={() => onTest(connection.id)}
-                selected={selectedConnectionId === connection.id}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </section>
+    <div className={connection.status === "healthy" ? "ar-check ar-check--row" : "ar-check ar-check--row is-unusable"}>
+      <input checked={selected} className="ar-check__input" disabled={disabled} id={`${id}-radio`} name="integration-connection" onChange={onSelect} type="radio" value={connection.id} />
+      <span className="ar-check__text">
+        <label htmlFor={`${id}-radio`} id={`${id}-label`}>{connection.label}</label>
+        {connection.issue && <span className="ar-step__hint">{connection.issue}</span>}
+        {connection.scopes.length > 0 && <span className="ar-step__hint as-mono">{connection.scopes.join(" · ")}</span>}
+        {connection.expiresAt && <span className="ar-step__hint">Expires {connection.expiresAt}</span>}
+      </span>
+      <StatusPill label={status.label} tone={status.tone} />
+      <Button aria-describedby={`${id}-label`} aria-label="Test connection" disabled={connection.status === "revoked"} onClick={onTest}>Test</Button>
+    </div>
   );
 }
 
-function AgentStep({
-  agents,
-  selectedAgentVersionId,
-  disabled,
-  onSelect,
-}: {
-  agents: CompatibleAgentVersion[];
-  selectedAgentVersionId: string;
+function OperationRow({ compatible, disabled, onToggle, operation, selected }: {
+  compatible: boolean;
   disabled: boolean;
-  onSelect: (versionId: string) => void;
-}) {
-  const selected = agents.find((agent) => agent.versionId === selectedAgentVersionId);
-  return (
-    <section className="integration-capabilities__card integration-capabilities__step" aria-labelledby="integration-agent-title">
-      <div className="integration-capabilities__step-number">02</div>
-      <div className="integration-capabilities__step-content">
-        <div className="integration-capabilities__section-heading">
-          <div><span className="integration-capabilities__eyebrow">Step 2 · Agent pin</span><h2 id="integration-agent-title">Choose the exact custom-agent version</h2><p>Access is pinned to this version. Vaelor will not silently move a grant to the latest definition.</p></div>
-          {selected && <StatusBadge label={selected.status === "archived" ? "Archived" : "Version pinned"} tone={selected.status === "archived" ? "warning" : "positive"} />}
-        </div>
-        {agents.length === 0 ? (
-          <div className="integration-capabilities__empty integration-capabilities__empty--inline">
-            <Icon name="alert" size={20} />
-            <div><strong>No compatible custom-agent version</strong><span>Create or update a custom agent with an app-compatible version before continuing.</span></div>
-          </div>
-        ) : (
-          <label className="integration-capabilities__field">
-            <span>Select exact version</span>
-            <select className="ui-control integration-capabilities__agent-select" disabled={disabled} onChange={(event) => onSelect(event.target.value)} value={selectedAgentVersionId}>
-              {agents.map((agent) => <option key={agent.versionId} value={agent.versionId}>{agent.agentName} · {agent.versionLabel}</option>)}
-            </select>
-          </label>
-        )}
-        {selected && (
-          <div className="integration-capabilities__agent-summary">
-            <span><strong>{selected.agentName}</strong> will receive access through <strong>{selected.versionLabel}</strong>.</span>
-            <small>{selected.compatibleOperationIds.length} compatible operation{selected.compatibleOperationIds.length === 1 ? "" : "s"} detected from this version.</small>
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function OperationCard({
-  operation,
-  selected,
-  disabled,
-  compatible,
-  onToggle,
-}: {
+  onToggle: () => void;
   operation: IntegrationOperation;
   selected: boolean;
-  disabled: boolean;
-  compatible: boolean;
-  onToggle: () => void;
 }) {
+  const id = useId().replaceAll(":", "");
   const unavailable = !compatible || (operation.availability && operation.availability !== "available");
   return (
-    <label className={`integration-capabilities__operation integration-capabilities__operation--${operation.kind} ${unavailable ? "integration-capabilities__operation--unavailable" : ""}`}>
-      <input checked={selected} className="integration-capabilities__operation-input" disabled={disabled || Boolean(unavailable)} onChange={onToggle} type="checkbox" />
-      <span className="integration-capabilities__operation-body">
-        <span className="integration-capabilities__operation-heading">
-          <strong>{operation.label}</strong>
-          <span className="integration-capabilities__operation-tags">
-            <span className="integration-capabilities__tag">{kindCopy[operation.kind]}</span>
-            <span className={`integration-capabilities__tag integration-capabilities__tag--${operation.risk}`}>{riskCopy[operation.risk]}</span>
-          </span>
+    <div className={unavailable ? "ar-check ar-check--row is-unusable" : "ar-check ar-check--row"}>
+      <input aria-describedby={`${id}-detail`} aria-labelledby={`${id}-label`} checked={selected} className="ar-check__input" disabled={disabled || Boolean(unavailable)} id={`${id}-box`} onChange={onToggle} type="checkbox" />
+      <span className="ar-check__text">
+        <label htmlFor={`${id}-box`} id={`${id}-label`}>{operation.label}</label>
+        <span className="ar-step__hint" id={`${id}-detail`}>
+          {kindCopy[operation.kind].toLowerCase()} · {operation.description}
+          {unavailable && <> · {!compatible ? "Not compatible with the selected agent version." : operation.unavailableReason ?? "This operation is not compatible with the selected app or agent version."}</>}
         </span>
-        <span>{operation.description}</span>
-        {unavailable && <small>{!compatible ? "Not compatible with the selected agent version." : operation.unavailableReason ?? "This operation is not compatible with the selected app or agent version."}</small>}
       </span>
-    </label>
+      <StatusPill label={riskCopy[operation.risk]} tone={riskTone[operation.risk]} />
+    </div>
   );
 }
 
-function OperationStep({
-  data,
-  selectedAgent,
-  selectedOperationIds,
-  disabled,
-  onToggle,
-}: {
-  data: IntegrationCapabilitiesData;
-  selectedAgent?: CompatibleAgentVersion;
-  selectedOperationIds: string[];
-  disabled: boolean;
-  onToggle: (operationId: string) => void;
-}) {
-  const compatibleIds = new Set(selectedAgent?.compatibleOperationIds ?? []);
-  const compatibleOperations = data.operations.filter((operation) => compatibleIds.has(operation.id));
-  return (
-    <section className="integration-capabilities__card integration-capabilities__step" aria-labelledby="integration-operation-title">
-      <div className="integration-capabilities__step-number">03</div>
-      <div className="integration-capabilities__step-content">
-        <div className="integration-capabilities__section-heading">
-          <div><span className="integration-capabilities__eyebrow">Step 3 · Grant scope</span><h2 id="integration-operation-title">Select compatible operations</h2><p>Only operations declared by the pinned agent version can be selected. Review risk before continuing.</p></div>
-          <span className="integration-capabilities__selection-count">{selectedOperationIds.length} selected</span>
-        </div>
-        {data.operations.length === 0 ? (
-          <div className="integration-capabilities__empty integration-capabilities__empty--inline"><Icon name="database" size={20} /><div><strong>No operations published</strong><span>This app manifest does not currently expose any grantable operations.</span></div></div>
-        ) : compatibleOperations.length === 0 ? (
-          <div className="integration-capabilities__empty integration-capabilities__empty--inline"><Icon name="alert" size={20} /><div><strong>No compatible operations for this version</strong><span>Choose another exact agent version or update the agent definition.</span></div></div>
-        ) : (
-          <div className="integration-capabilities__operation-list">
-            {data.operations.map((operation) => (
-              <OperationCard
-                compatible={compatibleIds.has(operation.id)}
-                disabled={disabled || !selectedAgent}
-                key={operation.id}
-                onToggle={() => onToggle(operation.id)}
-                operation={operation}
-                selected={selectedOperationIds.includes(operation.id)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function GrantPreview({
-  preview,
-  onSave,
-  saving,
-}: {
-  preview: NonNullable<IntegrationCapabilitiesProps["preview"]>;
+function GrantPreview({ onSave, preview, saving }: {
   onSave: () => void;
+  preview: NonNullable<IntegrationCapabilitiesProps["preview"]>;
   saving: boolean;
 }) {
   return (
-    <section className="integration-capabilities__preview" aria-labelledby="integration-preview-title">
-      <div className="integration-capabilities__section-heading">
-        <div><span className="integration-capabilities__eyebrow">Server-owned preview</span><h2 id="integration-preview-title">Review before saving</h2><p>{preview.summary}</p></div>
-        <StatusBadge label="Preview ready" tone="positive" />
+    <section aria-labelledby="integration-preview-title" className="as-box ar-preview">
+      <div className="ar-split-head">
+        <div><span className="as-label">Server-owned preview</span><h4 className="ar-step__title" id="integration-preview-title">Review before saving</h4><span className="ar-step__hint">{preview.summary}</span></div>
+        <StatusPill label="Preview ready" tone="success" />
       </div>
-      <ul className="integration-capabilities__preview-list">
-        {preview.items.map((item) => <li key={`${item.kind}-${item.label}`}><span><strong>{item.label}</strong><small>{item.summary}</small></span><span className={`integration-capabilities__tag integration-capabilities__tag--${item.risk}`}>{kindCopy[item.kind]} · {riskCopy[item.risk]}</span></li>)}
+      <ul className="ar-plain-list">
+        {preview.items.map((item) => (
+          <li key={`${item.kind}-${item.label}`}>
+            <span><strong>{item.label}</strong><span className="ar-step__hint">{item.summary}</span></span>
+            <StatusPill label={`${kindCopy[item.kind]} · ${riskCopy[item.risk]}`} tone={riskTone[item.risk]} />
+          </li>
+        ))}
       </ul>
-      {preview.warnings.length > 0 && <div className="integration-capabilities__preview-warning" role="note"><Icon name="alert" size={18} /><div>{preview.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div></div>}
-      <div className="integration-capabilities__preview-footer"><small>Preview expires {preview.expiresAt}</small><Button disabled={saving} onClick={onSave} type="button" variant="primary">{saving ? "Saving grant…" : "Save grant"}</Button></div>
+      {preview.warnings.length > 0 && (
+        <Notice severity="warning" standing>{preview.warnings.map((warning) => <span className="ar-block-line" key={warning}>{warning}</span>)}</Notice>
+      )}
+      <div className="ar-actions ar-actions--spread">
+        <span className="ar-step__hint">Preview expires {preview.expiresAt}</span>
+        <Button disabled={saving} onClick={onSave} variant="primary">{saving ? "Saving grant…" : "Save grant"}</Button>
+      </div>
     </section>
   );
 }
 
-function DependentImpact({ data, showRevoke, onToggleRevoke, onRevoke, revoking }: { data: IntegrationCapabilitiesData; showRevoke: boolean; onToggleRevoke: () => void; onRevoke: () => void; revoking: boolean }) {
+/**
+ * What the revoke confirmation says will break: every recorded dependent by
+ * name with its recovery, or that none is recorded. The owner reads this in
+ * the dialog itself, so a one-click revoke never hides who fails closed.
+ */
+function revokeDependentsNote(dependents: IntegrationDependent[]) {
+  if (dependents.length === 0) return "No dependent agents, tasks, or automations are currently recorded.";
+  const named = dependents.map((dependent) => `${dependent.label} (recovery: ${dependent.recoveryAction})`);
+  return `${dependents.length === 1 ? "This dependent fails" : `These ${dependents.length} dependents fail`} closed until reconnected or re-granted: ${named.join("; ")}.`;
+}
+
+function ExistingAccess({ data, onRevoke, onToggleRevoke, revoking, showRevoke }: {
+  data: IntegrationCapabilitiesData;
+  onRevoke: () => void;
+  onToggleRevoke: () => void;
+  revoking: boolean;
+  showRevoke: boolean;
+}) {
+  const [confirming, setConfirming] = useState(false);
   const grant = data.existingGrant;
   if (!grant) return null;
+  const alreadyRevoked = grant.status === "revoked";
   return (
-    <section className="integration-capabilities__card integration-capabilities__dependents" aria-labelledby="integration-dependents-title">
-      <div className="integration-capabilities__section-heading">
-        <div><span className="integration-capabilities__eyebrow">Existing access</span><h2 id="integration-dependents-title">Dependent impact and recovery</h2><p>{grant.agentName} · {grant.agentVersionLabel} has a {grant.status} grant for {grant.operationIds.length} operation{grant.operationIds.length === 1 ? "" : "s"}.</p></div>
-        <StatusBadge label={grant.status} tone={grant.status === "active" ? "positive" : grant.status === "revoked" ? "danger" : "warning"} />
-      </div>
-      {grant.blockedReason && <div className="integration-capabilities__notice integration-capabilities__notice--warning"><Icon name="alert" size={18} /><div><strong>Grant is blocked</strong><span>{grant.blockedReason}</span></div></div>}
-      <details className="integration-capabilities__details" open={showRevoke} onToggle={(event) => { if (event.currentTarget.open !== showRevoke) onToggleRevoke(); }}>
-        <summary>Review revoke impact</summary>
-        {data.dependents.length === 0 ? (
-          <p>No dependent agents, tasks, or automations are currently recorded.</p>
-        ) : (
-          <div className="integration-capabilities__dependent-list">
-            {data.dependents.map((dependent) => <div className="integration-capabilities__dependent" key={dependent.id}><span><strong>{dependent.label}</strong><small>{dependent.impact}</small></span><span className={`integration-capabilities__tag integration-capabilities__tag--${dependent.status === "active" ? "low" : "high"}`}>{dependent.status}</span><small>Recovery: {dependent.recoveryAction}</small></div>)}
-          </div>
+    <section aria-labelledby="integration-dependents-title" className="ar-existing">
+      <div><span className="as-label">Existing access</span><h3 className="ar-step__title" id="integration-dependents-title">Dependent impact and recovery</h3></div>
+      <div className="as-box">
+        <span className="ar-split-head">
+          <strong className="ar-step__title">{grant.agentName} · {grant.agentVersionLabel}</strong>
+          <StatusPill label={grantStatus(grant.status).label} tone={grantStatus(grant.status).tone} />
+        </span>
+        <span className="ar-step__hint">A {grantStatus(grant.status).label.toLowerCase()} grant for {grant.operationIds.length} operation{grant.operationIds.length === 1 ? "" : "s"}.</span>
+        {grant.blockedReason && <Notice heading="Grant is blocked" severity="warning" standing>{grant.blockedReason}</Notice>}
+        {showRevoke && (
+          data.dependents.length === 0 ? (
+            <span className="ar-step__hint">No dependent agents, tasks, or automations are currently recorded.</span>
+          ) : (
+            <ul className="ar-plain-list">
+              {data.dependents.map((dependent) => (
+                <li key={dependent.id}>
+                  <span><strong>{dependent.label}</strong><span className="ar-step__hint">{dependent.impact}</span><span className="ar-step__hint">Recovery: {dependent.recoveryAction}</span></span>
+                  <StatusPill label={dependentStatus(dependent.status).label} tone={dependentStatus(dependent.status).tone} />
+                </li>
+              ))}
+            </ul>
+          )
         )}
-        <div className="integration-capabilities__revoke-confirmation">
-          <p>Revoking removes this grant immediately. Dependents will fail closed and must be reconnected or re-granted explicitly.</p>
-          <Button disabled={revoking || grant.status === "revoked"} onClick={onRevoke} type="button" variant="danger">{revoking ? "Revoking…" : "Revoke grant"}</Button>
-        </div>
-      </details>
+        <span className="ar-step__hint">Revoking removes this grant immediately. Dependents will fail closed and must be reconnected or re-granted explicitly.</span>
+        <span className="ar-actions">
+          <Button aria-expanded={showRevoke} onClick={onToggleRevoke}>Review revoke impact</Button>
+          <Button className="as-btn-danger" disabled={revoking} disabledReason={alreadyRevoked ? "Already revoked" : undefined} onClick={() => setConfirming(true)}>{revoking ? "Revoking…" : "Revoke grant"}</Button>
+        </span>
+      </div>
+      <ConfirmDialog
+        busy={revoking}
+        confirmLabel="Revoke access"
+        description={`Revoke ${grant.agentName} · ${grant.agentVersionLabel} access to ${data.appName}? The grant is removed immediately and cannot be restored; access needs a new reviewed grant.`}
+        irreversible
+        note={revokeDependentsNote(data.dependents)}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => { setConfirming(false); onRevoke(); }}
+        open={confirming && !alreadyRevoked}
+        title="Revoke this access grant?"
+      />
     </section>
   );
 }
 
-function LoadingState() {
-  return <div className="integration-capabilities__state" role="status" aria-live="polite"><span className="integration-capabilities__spinner" aria-hidden="true" /><strong>Loading integration capabilities…</strong><span>Checking app health, manifest compatibility, and available grants.</span></div>;
-}
-
-function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) {
-  return <div className="integration-capabilities__state integration-capabilities__state--error" role="alert"><Icon name="alert" size={24} /><strong>Capabilities could not be loaded</strong><span>{error}</span><Button onClick={onRetry} type="button" variant="quiet">Retry</Button></div>;
-}
-
-function EmptyState() {
-  return <div className="integration-capabilities__state"><Icon name="grid" size={24} /><strong>No installed integration selected</strong><span>Choose an installed app to inspect its health, operations, connections, and dependent access.</span></div>;
+/** The surface frame: named for assistive technology, with the credential-safe promise on top. */
+function Surface({ children }: { children: ReactNode }) {
+  return (
+    <section aria-labelledby="integration-capabilities-title" className="ar-capabilities">
+      <h2 className="sr-only" id="integration-capabilities-title">Integration capabilities</h2>
+      <span className="ar-inline ar-step__hint"><Icon name="shield" size={ICON_SIZE.inline} />Credential-safe view · No endpoints, refs, or secrets are shown.</span>
+      {children}
+    </section>
+  );
 }
 
 export function IntegrationCapabilities({
@@ -490,20 +380,36 @@ export function IntegrationCapabilities({
   const formDisabled = appBlocked || connectionBlocked || !data;
 
   if (loading) {
-    return <section className="integration-capabilities" aria-labelledby="integration-capabilities-title"><div className="integration-capabilities__intro"><span className="integration-capabilities__eyebrow">Operator surface</span><h1 id="integration-capabilities-title">Integration capabilities</h1></div><LoadingState /></section>;
+    return (
+      <Surface>
+        <div aria-live="polite" className="as-box" role="status">
+          <span className="ar-step__hint">Loading integration capabilities… Checking app health, manifest compatibility, and available grants.</span>
+        </div>
+      </Surface>
+    );
   }
   if (error) {
-    return <section className="integration-capabilities" aria-labelledby="integration-capabilities-title"><div className="integration-capabilities__intro"><span className="integration-capabilities__eyebrow">Operator surface</span><h1 id="integration-capabilities-title">Integration capabilities</h1></div><ErrorState error={error} onRetry={onRetry} /></section>;
+    return (
+      <Surface>
+        <Notice severity="danger">
+          <span className="ar-notice-row"><span>Capabilities could not be loaded. {error}</span><Button onClick={onRetry}>Retry</Button></span>
+        </Notice>
+      </Surface>
+    );
   }
   if (!data) {
-    return <section className="integration-capabilities" aria-labelledby="integration-capabilities-title"><div className="integration-capabilities__intro"><span className="integration-capabilities__eyebrow">Operator surface</span><h1 id="integration-capabilities-title">Integration capabilities</h1></div><EmptyState /></section>;
+    return (
+      <Surface>
+        <EmptyState icon={<Icon name="grid" size={18} />} text="Choose an installed app to inspect its health, operations, connections, and dependent access." title="No installed integration selected" />
+      </Surface>
+    );
   }
 
+  const resetPreview = () => { setPreviewSelectionKey(null); setValidationMessage(null); };
   const toggleOperation = (operationId: string) => {
     if (!compatibleIds.has(operationId)) return;
     setSelectedOperationIds((current) => current.includes(operationId) ? current.filter((id) => id !== operationId) : [...current, operationId]);
-    setPreviewSelectionKey(null);
-    setValidationMessage(null);
+    resetPreview();
   };
 
   const validateSelection = () => {
@@ -530,44 +436,114 @@ export function IntegrationCapabilities({
     onSaveGrant({ ...selection, previewId: currentPreview.previewId });
   };
 
+  const compatibleOperations = data.operations.filter((operation) => compatibleIds.has(operation.id));
+  const connectionDone = !data.connectionRequired || selectedConnection?.status === "healthy";
+  const selectedLabels = data.operations.filter((operation) => selectedOperationIds.includes(operation.id)).map((operation) => operation.label);
+
   return (
-    <section className="integration-capabilities" aria-labelledby="integration-capabilities-title">
-      <header className="integration-capabilities__intro">
-        <div>
-          <span className="integration-capabilities__eyebrow">Operator surface · Access control</span>
-          <h1 id="integration-capabilities-title">Integration capabilities</h1>
-          <p>Inspect what an installed app can do, pin access to an exact agent version, and review the impact before anything is saved.</p>
-        </div>
-        <div className="integration-capabilities__privacy-note"><Icon name="lock" size={18} /><span>Credential-safe view<br /><small>No endpoints, refs, or secrets are shown.</small></span></div>
-      </header>
-
-      {successMessage && <div className="integration-capabilities__notice integration-capabilities__notice--positive" role="status" aria-live="polite"><Icon name="shield" size={18} /><div><strong>Success</strong><span>{successMessage}</span></div></div>}
-      <AppHealth data={data} />
+    <Surface>
+      {successMessage && <Notice heading="Success" severity="success">{successMessage}</Notice>}
       <ReadinessNotice data={data} selectedConnection={selectedConnection} />
+      <AppFacts data={data} />
 
-      <div className="integration-capabilities__workflow">
-        <ConnectionStep data={data} disabled={formDisabled} onCreate={onCreateConnection} onSelect={(id) => { setSelectedConnectionId(id); setPreviewSelectionKey(null); setValidationMessage(null); }} onTest={onTestConnection} selectedConnectionId={selectedConnectionId} />
-        <AgentStep agents={data.agentVersions} disabled={formDisabled} onSelect={(id) => { setSelectedAgentVersionId(id); setSelectedOperationIds([]); setPreviewSelectionKey(null); setValidationMessage(null); }} selectedAgentVersionId={selectedAgentVersionId} />
-        <OperationStep data={data} disabled={formDisabled} onToggle={toggleOperation} selectedAgent={selectedAgent} selectedOperationIds={selectedOperationIds} />
-      </div>
-
-      <section className="integration-capabilities__card integration-capabilities__review" aria-labelledby="integration-review-title">
-        <div className="integration-capabilities__section-heading">
-          <div><span className="integration-capabilities__eyebrow">Step 4 · Review</span><h2 id="integration-review-title">Preview and save the grant</h2><p>Vaelor validates the pinned identities and selected operation IDs before saving a new grant.</p></div>
-          {hasWrite && <StatusBadge label="Includes write access" tone="warning" />}
-        </div>
-        {validationMessage && <div className="integration-capabilities__validation" role="alert"><Icon name="alert" size={18} />{validationMessage}</div>}
-        <div className="integration-capabilities__review-summary">
-          <span><small>App</small><strong>{data.appName} · {data.appVersion}</strong></span>
-          <span><small>Agent version</small><strong>{selectedAgent ? `${selectedAgent.agentName} · ${selectedAgent.versionLabel}` : "Not selected"}</strong></span>
-          <span><small>Operations</small><strong>{selectedOperationIds.length ? `${selectedOperationIds.length} selected` : "None selected"}</strong></span>
-        </div>
-        {currentPreview ? <GrantPreview onSave={saveGrant} preview={currentPreview} saving={saving} /> : (
-          <div className="integration-capabilities__review-actions"><span>{hasWrite ? "Write operations stop at an exact preview and need approval." : "Read operations will use the selected broker connection."}</span><Button disabled={formDisabled || previewing} onClick={previewGrant} type="button" variant="primary">{previewing ? "Preparing preview…" : "Preview grant"}</Button></div>
+      <Step label={data.connectionRequired ? "Step 1 · Connection" : "Connection"} number={1} state={connectionDone ? "done" : "on"}
+        text={data.connectionRequired ? "Vaelor stores only the broker reference. Credentials and endpoints stay outside this view." : "This app exposes the selected operations without a credential-backed connection."}
+        title={data.connectionRequired ? "Choose a tested connection" : "No connection required"}>
+        {data.connectionRequired && (
+          data.connections.length === 0 ? (
+            <div className="as-box ar-empty-row">
+              <span aria-hidden="true" className="ar-icon"><Icon name="lock" size={16} /></span>
+              <div><strong className="ar-step__title">No connections available</strong><span className="ar-step__hint">Create and test a connection before granting access.</span></div>
+            </div>
+          ) : data.connections.map((connection) => (
+            <ConnectionRow
+              connection={connection}
+              disabled={appBlocked}
+              key={connection.id}
+              onSelect={() => { setSelectedConnectionId(connection.id); resetPreview(); }}
+              onTest={() => onTestConnection(connection.id)}
+              selected={selectedConnectionId === connection.id}
+            />
+          ))
         )}
-      </section>
+        {data.connectionRequired && onCreateConnection && (
+          <span><Button className="as-btn-ghost" disabled={appBlocked} onClick={onCreateConnection} variant="quiet"><Icon className="ar-btn-icon" name="add" size={ICON_SIZE.inline} />Create connection</Button></span>
+        )}
+      </Step>
 
-      <DependentImpact data={data} onRevoke={() => { if (data.existingGrant) onRevokeGrant(data.existingGrant.id); }} onToggleRevoke={() => setShowRevokeImpact((current) => !current)} revoking={revoking} showRevoke={showRevokeImpact} />
-    </section>
+      <Step label="Step 2 · Agent pin" number={2} state={selectedAgent ? "done" : connectionDone ? "on" : undefined}
+        text="Access is pinned to this version. Vaelor will not silently move a grant to the latest definition."
+        title="Choose the exact custom-agent version">
+        {data.agentVersions.length === 0 ? (
+          <div className="as-box ar-empty-row">
+            <span aria-hidden="true" className="ar-icon"><Icon name="alert" size={16} /></span>
+            <div><strong className="ar-step__title">No compatible custom-agent version</strong><span className="ar-step__hint">Create or update a custom agent with an app-compatible version before continuing.</span></div>
+          </div>
+        ) : (
+          <label className="ar-field">
+            <span className="ar-field__label">Select exact version</span>
+            <select className="ui-control" disabled={formDisabled} onChange={(event) => { setSelectedAgentVersionId(event.target.value); setSelectedOperationIds([]); resetPreview(); }} value={selectedAgentVersionId}>
+              {data.agentVersions.map((agent) => <option key={agent.versionId} value={agent.versionId}>{agent.agentName} · {agent.versionLabel}{agent.status === "archived" ? " · Archived" : " · Version pinned"}</option>)}
+            </select>
+          </label>
+        )}
+        {selectedAgent?.status === "archived" && (
+          // The archived warning the earlier screen carried beside the version (VD-200 assist review).
+          <span><StatusPill label="Archived version" tone="warning" /></span>
+        )}
+        {selectedAgent && <AgentSummary agent={selectedAgent} />}
+      </Step>
+
+      <Step label="Step 3 · Grant scope" number={3} state={selectedOperationIds.length ? "done" : selectedAgent && connectionDone ? "on" : undefined}
+        text="Only operations declared by the pinned agent version can be selected. Review risk before continuing."
+        title="Select compatible operations">
+        {data.operations.length === 0 ? (
+          <div className="as-box ar-empty-row"><span aria-hidden="true" className="ar-icon"><Icon name="database" size={16} /></span><div><strong className="ar-step__title">No operations published</strong><span className="ar-step__hint">This app manifest does not currently expose any grantable operations.</span></div></div>
+        ) : compatibleOperations.length === 0 ? (
+          <div className="as-box ar-empty-row"><span aria-hidden="true" className="ar-icon"><Icon name="alert" size={16} /></span><div><strong className="ar-step__title">No compatible operations for this version</strong><span className="ar-step__hint">Choose another exact agent version or update the agent definition.</span></div></div>
+        ) : data.operations.map((operation) => (
+          <OperationRow
+            compatible={compatibleIds.has(operation.id)}
+            disabled={formDisabled || !selectedAgent}
+            key={operation.id}
+            onToggle={() => toggleOperation(operation.id)}
+            operation={operation}
+            selected={selectedOperationIds.includes(operation.id)}
+          />
+        ))}
+      </Step>
+
+      <Step label="Step 4 · Review" number={4} state={currentPreview ? "on" : undefined}
+        text="Vaelor validates the pinned identities and selected operation IDs before saving a new grant."
+        title="Preview and save the grant">
+        {hasWrite && <span><StatusPill label="Includes write access" tone="warning" /></span>}
+        {validationMessage && <Notice severity="danger">{validationMessage}</Notice>}
+        <dl className="as-kv ar-kv1">
+          <div><dt>App</dt><dd>{data.appName} · {data.appVersion}</dd></div>
+          <div><dt>Agent version</dt><dd>{selectedAgent ? `${selectedAgent.agentName} · ${selectedAgent.versionLabel}` : "Not selected"}</dd></div>
+          <div><dt>Operations</dt><dd>{selectedLabels.length ? selectedLabels.join(" · ") : "None selected"}</dd></div>
+        </dl>
+        {currentPreview ? <GrantPreview onSave={saveGrant} preview={currentPreview} saving={saving} /> : (
+          <>
+            <span className="ar-step__hint">{hasWrite ? "Write operations stop at an exact preview and need approval." : "Read operations will use the selected broker connection."}</span>
+            <span className="ar-actions">
+              <Button disabled={formDisabled || previewing} onClick={previewGrant} variant="primary">{previewing ? "Preparing preview…" : "Preview grant"}</Button>
+              <Button disabledReason="Preview first">Save grant</Button>
+            </span>
+          </>
+        )}
+      </Step>
+
+      <ExistingAccess data={data} onRevoke={() => { if (data.existingGrant) onRevokeGrant(data.existingGrant.id); }} onToggleRevoke={() => setShowRevokeImpact((current) => !current)} revoking={revoking} showRevoke={showRevokeImpact} />
+    </Surface>
+  );
+}
+
+function AgentSummary({ agent }: { agent: CompatibleAgentVersion }) {
+  return (
+    <span className="ar-step__hint">
+      <span><strong>{agent.agentName}</strong> will receive access through <strong>{agent.versionLabel}</strong>.</span>{" "}
+      <span>{agent.compatibleOperationIds.length} compatible operation{agent.compatibleOperationIds.length === 1 ? "" : "s"} detected from this version.</span>
+    </span>
   );
 }

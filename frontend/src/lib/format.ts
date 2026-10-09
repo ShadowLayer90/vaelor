@@ -65,6 +65,50 @@ export function formatBytes(
   return `${amount.toFixed(precision)} ${units[index]}${suffix}`;
 }
 
+/**
+ * The unit a field's figure is typed or held in, and its bytes. The unit in a
+ * field's label and the factor its value is multiplied by come from here, so
+ * they cannot disagree (W8-1: three "(GB)" fields multiplied by 1024 ** 3 and
+ * stored 7.4% more than they said). A model file is GiB and storage GB, as
+ * the formatter shows them (VD-199).
+ */
+export type ByteUnit = "MB" | "GB" | "MiB" | "GiB";
+const BYTES_PER: Record<ByteUnit, number> = {
+  MB: 1_000 ** 2,
+  GB: 1_000 ** 3,
+  MiB: 1_024 ** 2,
+  GiB: 1_024 ** 3,
+};
+
+/** A constant written in a unit (a 100 MiB upload limit), as bytes. */
+export function bytesIn(amount: number, unit: ByteUnit): number {
+  return Math.round(amount * BYTES_PER[unit]);
+}
+
+/** What the owner typed in `unit`, as whole bytes; null when it is not a number at or above zero. */
+export function bytesFromTyped(value: unknown, unit: ByteUnit): number | null {
+  const amount = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(amount) && amount >= 0 ? bytesIn(amount, unit) : null;
+}
+
+/**
+ * Bytes as a figure in `unit`, for a field's value or its minimum. `ceil`
+ * keeps a minimum a field offers at or above the bytes it stands for.
+ */
+export function typedFromBytes(bytes: number, unit: ByteUnit, rounding: "round" | "ceil" | "floor" = "round"): number {
+  return Math[rounding](bytes / BYTES_PER[unit]);
+}
+
+/**
+ * A size the owner TYPES in binary GiB (a GPU memory pool, which the kernel
+ * takes in whole GiB), with its decimal figure beside it so it reads against
+ * every other memory figure on the screen (W7-D5: "40 GiB (42.9 GB)").
+ */
+export function formatTypedGib(gib: number | null | undefined): string {
+  if (typeof gib !== "number" || !Number.isFinite(gib) || gib < 0) return "—";
+  return `${gib} GiB (${formatQuantity(bytesIn(gib, "GiB"), "capacity")})`;
+}
+
 export function formatQuantity(
   value: unknown,
   quantity: ByteQuantity,

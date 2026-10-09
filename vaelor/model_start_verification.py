@@ -35,6 +35,8 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from .accelerator_runtime import (
     ANNOUNCED_CONTEXT_STATES,
+    FELL_BACK_TO_CPU,
+    NOT_OFFLOADED,
     reported_gpu_memory_bytes,
     verify_accelerator_in_use,
     verify_context_from_server,
@@ -62,7 +64,7 @@ def accelerator_baseline(
 #: and it was previously invisible twice over: the plan's own fallback reason
 #: sat in a different field, and the acceleration block said the model *"runs
 #: on the CPU by configuration, so no accelerator was expected"*.
-ANNOUNCED_ACCELERATION_STATES = ("cpu-fallback", "not-offloaded")
+ANNOUNCED_ACCELERATION_STATES = (FELL_BACK_TO_CPU, NOT_OFFLOADED)
 
 
 def verify_started_model(

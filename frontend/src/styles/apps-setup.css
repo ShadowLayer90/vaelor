@@ -1,0 +1,725 @@
+/*
+ * The catalogs, the Assistant setup and the approvals in Apps and AI (VD-200:
+ * the AppsCatalog, AppsModelCatalog, AppsAssistantSetup, AddConnection,
+ * AppsActionReview and AppsWebResearch boards). Colours are tokens only; the
+ * dialog chrome itself is the area kit's (apps.css).
+ */
+
+/* ---- Shared pieces ---- */
+
+.apps-banner {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 12px 14px;
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.apps-banner--warning { color: var(--warning-text); background: var(--warning-soft); border-color: var(--warning-border); }
+.apps-banner--info { color: var(--info-text); background: var(--info-soft); border-color: var(--info-line); }
+.apps-banner--danger { color: var(--danger-text); background: var(--danger-soft); border-color: var(--danger-border); }
+
+.apps-banner__text { min-width: 0; flex: 1 1 260px; }
+
+.apps-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.apps-setup-code {
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: break-word;
+}
+
+.apps-setup-chips {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.apps-setup-chips > li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-field-error {
+  color: var(--danger-text);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-field-hint {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* A quiet bordered card inside a dialog: the catalogs' choices, Assistant setup's two cards. */
+.apps-choice {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-choice--accent { border-color: var(--accent-deep); }
+
+.apps-choice h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+  overflow-wrap: break-word;
+}
+
+.apps-choice > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.apps-choice__action {
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.apps-flag {
+  width: fit-content;
+  padding: 2px 8px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-flag--accent {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-deep);
+}
+
+.apps-label {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+/* ---- App catalog (AppsCatalog) ---- */
+
+.apps-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 10px;
+}
+
+.apps-catalog-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-catalog-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.apps-catalog-card__category {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.apps-catalog-card h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 600;
+}
+
+.apps-catalog-card > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.apps-catalog-card .apps-facts { font-size: var(--font-size-ui-xs); gap: 4px; }
+
+.apps-catalog-card__action {
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+.apps-catalog-port {
+  display: grid;
+  gap: 6px;
+  max-width: 320px;
+}
+
+@media (max-width: 720px) {
+  .apps-catalog-port { max-width: none; }
+}
+
+/* ---- Model catalog (AppsModelCatalog) ---- */
+
+.apps-model-scope,
+.apps-model-tiers { margin: 0; color: var(--text-muted); }
+
+.apps-model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 10px;
+}
+
+.apps-model-card__badges {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.apps-model-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-model-card__facts { font-size: var(--font-size-ui-xs); gap: 4px; }
+
+.apps-model-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-row);
+}
+
+.apps-model-search__text {
+  display: grid;
+  gap: 4px;
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-model-search__text strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
+}
+
+.apps-model-search .ui-field { margin: 0; }
+
+@media (max-width: 1024px) {
+  .apps-model-search { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---- Assistant setup (AppsAssistantSetup) ---- */
+
+.apps-assistant-setup {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-assistant-setup__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.apps-assistant-setup__header > div { display: grid; gap: 6px; }
+
+.apps-assistant-setup__header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.apps-assistant-setup__intro { margin: 0; color: var(--text-muted); }
+
+.apps-hardware-strip {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-hardware-strip__text {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+}
+
+.apps-hardware-strip__text small,
+.apps-hardware-strip__text span { color: var(--text-muted); font-size: var(--font-size-ui-xs); }
+
+.apps-hardware-strip__text strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 600;
+  overflow-wrap: break-word;
+}
+
+/* The two choices share one height and their actions sit at the cards' feet
+   (.apps-choice__action pushes them down), as on the other card grids
+   (polish cause 7; held by styles/pageGrids.test.ts). */
+.apps-assistant-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 14px;
+}
+
+.apps-choice__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.apps-assistant-facts { font-size: var(--font-size-ui-xs); gap: 4px; }
+
+.apps-fineprint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.apps-ram-profile {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.apps-ram-profile legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-ram-profile__options {
+  display: grid;
+  align-items: stretch;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.apps-ram-profile__options > .ui-button-wrap { display: flex; }
+
+.apps-ram-profile__option.ui-button {
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  min-height: 44px;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 8px 10px;
+  color: var(--text-muted);
+  text-align: left;
+  background: var(--bg-button);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--font-size-ui-xs);
+  cursor: pointer;
+}
+
+.apps-ram-profile__option.ui-button strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.apps-ram-profile__option.ui-button:hover { background: var(--bg-hover); }
+
+.apps-ram-profile__option.ui-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.apps-ram-profile__option.ui-button[aria-pressed="true"] {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.apps-ram-profile__option.ui-button[aria-pressed="true"] strong { color: var(--accent-text); }
+
+.apps-disclosure {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-disclosure > summary {
+  width: fit-content;
+  min-height: var(--target-min);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.apps-disclosure > p { margin: 8px 0 0; line-height: 1.5; }
+
+.apps-link {
+  color: var(--accent-text);
+  font-size: var(--font-size-ui-sm);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ---- Add a connection (AddConnection) ---- */
+
+.apps-connection-where {
+  display: grid;
+  gap: 8px;
+}
+
+.apps-connection-label {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* The where-it-runs choice (VD-206): six choices, so a radio group of tiles
+   rather than a segmented control, which holds four at most. */
+fieldset.apps-connection-where {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+fieldset.apps-connection-where > legend {
+  padding: 0;
+  margin-bottom: 8px;
+}
+
+.apps-connection-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.apps-connection-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  min-height: var(--control-height);
+  padding: 10px 12px;
+  color: var(--text-muted);
+  background: var(--bg-button);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-ui-xs);
+  cursor: pointer;
+}
+
+.apps-connection-choice:hover { background: var(--bg-hover); }
+
+.apps-connection-choice:has(.apps-connection-choice__radio:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The tile carries the focus ring; the radio's own would draw a second one. */
+.apps-connection-choice__radio:focus-visible { outline: none; }
+
+/* A disabled action's reason keeps off the dialog's edge on a phone. */
+.apps-connection-dialog .apps-dialog__footer-actions .ui-button__disabled-reason {
+  padding-inline: var(--space-1);
+}
+
+.apps-connection-choice__radio {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+}
+
+.apps-connection-choice__text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.apps-connection-choice__text strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.apps-connection-choice.is-on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.apps-connection-choice.is-on strong { color: var(--accent-text); }
+
+fieldset.apps-connection-where:disabled .apps-connection-choice {
+  cursor: default;
+  opacity: 0.6;
+}
+
+fieldset.apps-connection-where:disabled .apps-connection-choice.is-on { opacity: 1; }
+
+.apps-connection-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 14px;
+}
+
+.apps-connection-tested {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-connection-tested__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.apps-connection-token {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* ---- On-device Assistant install (NpuInstallDialog) ---- */
+
+.apps-npu-job {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-npu-job--failed { border-color: var(--danger-border); }
+
+.apps-npu-job__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.apps-npu-job__head strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
+}
+
+.apps-npu-job__bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.apps-npu-job__bar > .apps-progress:only-child { grid-column: 1 / -1; }
+
+.apps-npu-job__percent,
+.apps-npu-job__step-percent {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-npu-job__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-npu-job__steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.apps-npu-job__steps > li {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-npu-job__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--info);
+}
+
+.apps-npu-job__dot--success { background: var(--success); }
+.apps-npu-job__dot--danger { background: var(--danger); }
+.apps-npu-job__dot--neutral { background: var(--dot-off); }
+
+@media (max-width: 1024px) {
+  .apps-assistant-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 720px) {
+  .apps-connection-pair,
+  .apps-connection-token,
+  .apps-connection-choices { grid-template-columns: minmax(0, 1fr); }
+  .apps-ram-profile__options { grid-template-columns: minmax(0, 1fr); }
+  .apps-hardware-strip { flex-wrap: wrap; }
+}
+
+/* ---- Guarded web research (AppsWebResearch) ---- */
+
+.apps-research-row,
+.apps-research-status {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 14px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-research-row__text {
+  min-width: 0;
+  flex: 1 1 220px;
+  display: grid;
+  gap: 2px;
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-research-row__text strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
+}
+
+.apps-research-row__text span,
+.apps-research-row__text small { color: var(--text-muted); }
+
+.apps-research-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.apps-research-job {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-research-job--failed { border-color: var(--danger-border); }
+
+.apps-research-job__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.apps-research-job__head > strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
+}
+
+.apps-research-job__title {
+  min-width: 0;
+  flex: 1 1 220px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.apps-research-job__percent {
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-research-job__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-research-job__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}

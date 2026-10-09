@@ -304,7 +304,7 @@ export async function qualityReport(page) {
       const style = window.getComputedStyle(element);
       return rect.left < -1 || rect.right > window.innerWidth + 1 || element.scrollWidth > element.clientWidth + 1 || !['alert', 'status'].includes(role) || (style.position === 'fixed' && rect.top < 0) ? [{ text: element.textContent?.trim().replace(/\s+/g, ' ').slice(0, 100), role, left: Math.round(rect.left), right: Math.round(rect.right), scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }] : [];
     });
-    const longValueSelectors = ['code[title]', 'code', 'pre', '.managed-card p', '.managed-card small', '.managed-model-list small', '.memory-card p', '.memory-card strong', '.memory-card small', '.app-drawer p', '[data-long-value]'];
+    const longValueSelectors = ['code[title]', 'code', 'pre', '.manage-row__detail', '.apps-kv dd', '.mp-memory p', '.mp-memory strong', '.mp-memory small', '.app-drawer p', '[data-long-value]'];
     const longValueCandidates = [...new Set(longValueSelectors.flatMap((selector) => [...main.querySelectorAll(selector)]))].filter((element) => visible(element) && ((element.textContent ?? '').trim().length >= 48 || (element.getAttribute('title') ?? '').length >= 48));
     const overflowIssues = longValueCandidates.flatMap((element) => {
       const rect = element.getBoundingClientRect();

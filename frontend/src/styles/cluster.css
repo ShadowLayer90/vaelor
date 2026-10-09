@@ -1,0 +1,866 @@
+/*
+ * The Cluster page (VD-200, the Cluster boards): the page frame, the tab row
+ * with its Detail choice, and the cluster building blocks of
+ * components/ClusterPrimitives.tsx. Values are the board's, through the
+ * tokens; a tab's own layout lives in its own sheet (cluster-*.css).
+ */
+
+/* Page frame: title row, notices, the tab row, the tab's content. */
+.cl-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.cl-page > .ui-page-header .ui-button svg {
+  flex: 0 0 auto;
+}
+
+.cl-page > .ui-page-header .ui-page-header__actions {
+  align-items: flex-start;
+}
+
+/* The title's grey second line, the size of the title (the boards' h1 span). */
+.cl-title {
+  min-width: 0;
+}
+
+.cl-title__second.ui-page-header__title {
+  color: var(--text-faint-label);
+}
+
+/* A header action's reason sits under it, quiet and narrow (the ClusterHeader board). */
+.cl-page > .ui-page-header .ui-button__disabled-reason {
+  max-width: 220px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  text-align: left;
+}
+
+.cl-page > .ui-page-header .ui-button,
+.cl-status__reload.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* The status pill and Reload, in the top bar's page slot. */
+.cl-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cl-status__reload.ui-button {
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .cl-status__reload.ui-button {
+    min-height: 44px;
+  }
+}
+
+/* A phone's top bar has room for the pill and a 44 px Reload icon; the word stays for a screen reader. */
+@media (max-width: 720px) {
+  .cl-status__reload.ui-button {
+    width: 44px;
+    padding: 0;
+  }
+
+  .cl-status__reload-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+/* The boards' outline danger button (Remove worker, Review forced removal); a confirm's own button stays solid. */
+.ui-button.cl-danger-outline {
+  color: var(--danger-text);
+  background: var(--bg-button);
+  border-color: var(--danger-border);
+}
+
+.ui-button.cl-danger-outline:hover:not(:disabled) {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+.cl-strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cl-notices {
+  display: grid;
+  gap: 10px;
+}
+
+/* With no notice to show, the strip takes no row: empty, it still cost the
+   page one 20 px gap, which put Performance's first row below the fold. */
+.cl-notices:empty {
+  display: none;
+}
+
+.cl-notices .ui-notice__content {
+  flex: 1 1 auto;
+}
+
+.cl-notices .ui-notice__content > span {
+  display: block;
+}
+
+.cl-notice-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  width: 100%;
+}
+
+.cl-notice-row > span:first-child {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.cl-notice-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The tab strip, with the Detail choice at its right end. */
+.cl-tabs {
+  position: relative;
+}
+
+.cl-tabs .ui-tab-set__list {
+  /* The Detail choice's width and a gap, so no tab runs under it. */
+  padding-right: calc(220px + 20px);
+}
+
+.cl-tabs .ui-tab-set__panel {
+  padding-top: 20px;
+}
+
+.cl-detail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+@media (max-width: 1024px) {
+  .cl-tabs .ui-tab-set__list {
+    padding-right: 0;
+  }
+
+  .cl-detail {
+    position: static;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+  }
+}
+
+/* A phone wraps the six tabs onto two rows and puts Detail under the title (the 390 boards). */
+@media (max-width: 720px) {
+  .cl-tabs .ui-tab-set__list {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .cl-detail {
+    justify-content: flex-start;
+  }
+}
+
+/* A tab's content: stacked sections, two-up card grids. */
+.cl-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.cl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 16px;
+  /* Cards in one row share one height, so their footers and actions line up
+     (polish cause 7; LESSONS 6). The card is a flex column whose body grows. */
+  align-items: stretch;
+  min-width: 0;
+}
+
+.cl-grid--three {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+}
+
+.cl-intro {
+  margin: 0;
+  max-width: 880px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.6;
+}
+
+/* Card with an icon tile in its header. */
+.cl-card__header {
+  flex-wrap: nowrap;
+}
+
+.cl-card__lead {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.cl-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cl-card__body.ui-card__body--flush {
+  gap: 0;
+}
+
+.cl-card__body > p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+@media (max-width: 720px) {
+  .cl-card__header {
+    flex-wrap: wrap;
+  }
+}
+
+.cl-ico {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: var(--text-secondary);
+  background: var(--bg-icon);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-md);
+}
+
+.cl-ico--accent {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-deep);
+}
+
+/* Labels and small text. */
+.cl-section-label,
+.cl-eyebrow {
+  margin: 0;
+  color: var(--text-faint-label);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cl-eyebrow {
+  color: var(--text-unread);
+}
+
+.cl-eyebrow--danger {
+  color: var(--danger-text);
+}
+
+.cl-eyebrow--accent {
+  color: var(--accent-text);
+}
+
+.cl-eyebrow--warning {
+  color: var(--warning-text);
+}
+
+.cl-meta {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.cl-warn-text {
+  color: var(--warning-text);
+}
+
+.cl-bad-text {
+  color: var(--danger-text);
+}
+
+.cl-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  color: var(--text-secondary);
+  background: var(--bg-row-active);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-ui-xs);
+  white-space: nowrap;
+}
+
+.cl-tag--mono {
+  font-family: var(--font-family-data);
+}
+
+.cl-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cl-code {
+  display: block;
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  background: var(--bg-control);
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+/* Key/value grid. */
+.cl-kv {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--border-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.cl-kv > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--bg-kv);
+}
+
+.cl-kv dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-kv dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  overflow-wrap: anywhere;
+}
+
+.cl-kv dd.cl-kv__mono {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* A definition list drawn as label | value rows (Worker requirements). */
+.cl-facts {
+  display: grid;
+  grid-template-columns: minmax(96px, 160px) 1fr;
+  gap: 10px 20px;
+  margin: 0;
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-facts dt {
+  color: var(--text-muted);
+}
+
+.cl-facts dd {
+  margin: 0;
+  line-height: 1.5;
+}
+
+
+/* Rows inside a card (settings, removals, keys). */
+.cl-rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cl-rows > * {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.cl-rows > *:first-child {
+  border-top: 0;
+}
+
+.cl-rows__text {
+  display: grid;
+  flex: 1 1 260px;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-rows__text > strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cl-rows__text > span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+/* A row of actions. */
+.cl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.cl-actions--end {
+  justify-content: flex-end;
+}
+
+.cl-actions .ui-button,
+.cl-dialog__footer .ui-button,
+.cl-card__footer .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .cl-actions .ui-button,
+  .cl-dialog__footer .ui-button,
+  .cl-card__footer .ui-button {
+    min-height: 44px;
+  }
+}
+
+/* A dialog's own answer (Cancel, the confirm) is 44 px tall at every width:
+   the layout contract holds a confirmation's buttons at 44 px on a desktop too. */
+.cl-dialog__footer .ui-button {
+  min-height: 44px;
+}
+
+.cl-spacer {
+  flex: 1 1 auto;
+}
+
+/* Step strip. */
+.cl-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cl-steps__step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  color: var(--text-faint-label);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-steps__step > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: var(--bg-icon);
+  border: 1px solid var(--border-icon);
+  border-radius: 50%;
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-steps__step.is-on {
+  color: var(--text-primary);
+  border-color: var(--accent-deep);
+}
+
+.cl-steps__step.is-on > span {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.cl-steps__step.is-done > span {
+  color: var(--success-text);
+  background: var(--bg-kv);
+  border-color: var(--success-border);
+}
+
+/* Option card: a radio or checkbox drawn as a card. */
+.cl-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  background: var(--bg-kv);
+  border: 1px solid var(--border-icon);
+  border-radius: 10px;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.cl-opt.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.cl-opt.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.cl-opt > input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.cl-opt__text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cl-opt__text > strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.cl-opt:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .cl-opt {
+    min-height: 44px;
+  }
+}
+
+/* Filter chips. */
+.cl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ui-button.cl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  font: inherit;
+  font-size: var(--font-size-ui-sm);
+  cursor: pointer;
+}
+
+.ui-button.cl-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.ui-button.cl-chip.is-on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.cl-chip__count {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ui-button.cl-chip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .ui-button.cl-chip {
+    min-height: 44px;
+  }
+}
+
+/* Dialog: eyebrow and title, a body that scrolls, a fixed footer. */
+.modal-shell__dialog.cl-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 440px);
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+  background: var(--bg-card);
+  border-color: var(--border-default);
+}
+
+.modal-shell__dialog.cl-dialog--wide {
+  width: min(100%, 720px);
+}
+
+.cl-dialog__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.cl-dialog__titles {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cl-dialog__header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.ui-button.cl-dialog__subtitle {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.cl-dialog__aside {
+  flex: 0 0 auto;
+}
+
+.cl-dialog__close {
+  min-height: 36px;
+  padding: 0 10px;
+  color: var(--text-secondary);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  font: inherit;
+  font-size: var(--font-size-ui-sm);
+  cursor: pointer;
+}
+
+.ui-button.cl-dialog__close:hover {
+  color: var(--text-primary);
+}
+
+.cl-dialog__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px 20px 18px;
+  overflow-y: auto;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.cl-dialog__body p {
+  margin: 0;
+}
+
+/* overview.css spaces every .notice from what sits above it; a dialog body
+   and the page's notice stack space their children with their own gap. */
+.cl-dialog__body .ui-notice,
+.cl-notices > .ui-notice,
+.cl-page .cl-stack > .ui-notice,
+.cl-page .ui-card__body > .ui-notice {
+  margin-top: 0;
+}
+
+.cl-dialog__body > .modal-error {
+  margin: 0;
+}
+
+.cl-dialog__footer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  /* A button's disabled reason hangs under it; the buttons stay level. */
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-row);
+}
+
+.cl-dialog__footer .ui-button__disabled-reason {
+  max-width: 320px;
+}
+
+/* A dialog's labelled panel ("Expected impact", "Current state"). */
+.cl-panel {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+.cl-panel > strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cl-panel > p,
+.cl-panel > span {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.cl-ordered {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.cl-progress {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  background: var(--meter-track);
+  border: 0;
+  border-radius: var(--radius-pill);
+  appearance: none;
+}
+
+.cl-progress::-webkit-progress-bar {
+  background: var(--meter-track);
+  border-radius: var(--radius-pill);
+}
+
+.cl-progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+.cl-progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+@media (max-width: 720px) {
+  .modal-shell__dialog.cl-dialog,
+  .modal-shell__dialog.cl-dialog--wide {
+    width: 100%;
+    max-height: 94dvh;
+  }
+
+  .cl-dialog__header,
+  .cl-dialog__body,
+  .cl-dialog__footer {
+    padding-inline: 16px;
+  }
+
+  .cl-dialog__footer .ui-button-wrap,
+  .cl-dialog__footer .ui-button {
+    flex: 1 1 auto;
+  }
+}
+
+/* The first read, before the cluster has answered. */
+.cl-first-load .ui-loading {
+  padding: 0;
+}
+
+@media (forced-colors: active) {
+  .ui-button.cl-chip.is-on,
+  .cl-opt.is-on,
+  .cl-steps__step.is-on {
+    border: 2px solid Highlight;
+  }
+}
+
+/* These are Button primitives drawn as the board draws them: the wrapper
+   spans the row, and the primitive's own weight and radius give way. */
+.ui-button-wrap:has(> .ui-button.cl-chip),
+.ui-button-wrap:has(> .ui-button.cl-dialog__close) {
+  display: grid;
+}
+
+.ui-button.cl-chip,
+.ui-button.cl-dialog__close {
+  min-width: 0;
+  font-weight: 400;
+}
+
+.ui-button.cl-chip.is-on:hover:not(:disabled) {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.ui-button.cl-dialog__close:hover:not(:disabled) {
+  border-color: transparent;
+}

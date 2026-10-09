@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { IntegrationCapabilities } from "./IntegrationCapabilities";
+import { Button, Notice, Select } from "./ui";
 import type { AgentProfile } from "./agentTypes";
 import type {
   CompatibleAgentVersion,
@@ -183,10 +184,13 @@ export function IntegrationCapabilitiesContainer({
   agent,
   csrfToken,
   onChanged,
+  onClose,
 }: {
   agent: AgentProfile;
   csrfToken: string;
   onChanged: () => void;
+  /** Closes the panel; when given, the card header carries "Close app access". */
+  onClose?: () => void;
 }) {
   const [apps, setApps] = useState<InstalledApp[]>([]);
   const [selectedAppId, setSelectedAppId] = useState("");
@@ -201,7 +205,6 @@ export function IntegrationCapabilitiesContainer({
   const [message, setMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const selectedApp = useMemo(() => apps.find((item) => item.id === selectedAppId), [apps, selectedAppId]);
 
   const loadDetail = useCallback(async (appId: string, cancelled?: () => boolean) => {
     if (!appId) {
@@ -323,34 +326,44 @@ export function IntegrationCapabilitiesContainer({
   };
 
   return (
-    <section className="custom-agent-app-access" aria-labelledby="custom-agent-app-access-title">
-      <div className="custom-agent-app-access__heading">
+    <section aria-labelledby="custom-agent-app-access-title" className="ar-app-access__inner">
+      <header className="ar-card__head ar-card__head--start">
         <div>
-          <span className="page-eyebrow">Capability control</span>
-          <h3 id="custom-agent-app-access-title">App access</h3>
-          <p>Pin installed-app operations to the exact <strong>{agent.name}</strong> version. Stopped or incompatible apps remain visible with recovery guidance.</p>
+          <span className="as-label">Capability control</span>
+          <h3 className="ar-card__title" id="custom-agent-app-access-title">App access</h3>
+          <p className="ar-step__hint">Pin installed-app operations to the exact <strong>{agent.name}</strong> version. Stopped or incompatible apps remain visible with recovery guidance.</p>
         </div>
-        {apps.length > 0 && <label className="custom-agent-app-access__selector"><span>Installed capability-enabled app</span><select aria-label="Installed capability-enabled app" className="ui-control custom-agent-app-access__select" onChange={(event) => { setSelectedAppId(event.target.value); setMessage(null); setActionError(null); }} value={selectedAppId}>{apps.map((app) => <option key={app.id} value={app.id}>{app.name} · {app.status} · {app.operationCount} operation{app.operationCount === 1 ? "" : "s"}</option>)}</select></label>}
+        {onClose && <Button className="as-btn-ghost" onClick={onClose} variant="quiet">Close app access</Button>}
+      </header>
+      <div className="ar-card__pad">
+        {apps.length > 0 && (
+          <Select
+            label="Installed capability-enabled app"
+            onChange={(event) => { setSelectedAppId(event.target.value); setMessage(null); setActionError(null); }}
+            value={selectedAppId}
+          >
+            {apps.map((app) => <option key={app.id} value={app.id}>{app.name} · {app.status} · {app.operationCount} operation{app.operationCount === 1 ? "" : "s"}</option>)}
+          </Select>
+        )}
+        {actionError && <Notice severity="danger">{actionError}</Notice>}
+        {message && !actionError && <Notice severity="info">{message}</Notice>}
+        <IntegrationCapabilities
+          data={data}
+          error={error}
+          loading={loading}
+          onCreateConnection={createConnectionNotice}
+          onPreviewGrant={(selection) => void previewGrant(selection)}
+          onRetry={() => { void loadApps().then(() => { if (selectedAppId) void loadDetail(selectedAppId); }); }}
+          onRevokeGrant={(grantId) => void revokeGrant(grantId)}
+          onSaveGrant={(selection) => void saveGrant(selection)}
+          onTestConnection={(connectionId) => void testConnection(connectionId)}
+          preview={preview}
+          previewing={previewing}
+          revoking={revoking}
+          saving={saving}
+        />
+        {testingConnectionId && <span className="sr-only" role="status">Testing connection…</span>}
       </div>
-      {(message || actionError) && <div className={`custom-agent-app-access__feedback ${actionError ? "custom-agent-app-access__feedback--error" : ""}`} role={actionError ? "alert" : "status"}>{actionError ?? message}</div>}
-      {selectedApp && <p className="custom-agent-app-access__selected">Reviewing {selectedApp.name}. No credential reference, endpoint, or secret is displayed.</p>}
-      <IntegrationCapabilities
-        data={data}
-        error={error}
-        loading={loading}
-        onCreateConnection={createConnectionNotice}
-        onPreviewGrant={(selection) => void previewGrant(selection)}
-        onRetry={() => { void loadApps().then(() => { if (selectedAppId) void loadDetail(selectedAppId); }); }}
-        onRevokeGrant={(grantId) => void revokeGrant(grantId)}
-        onSaveGrant={(selection) => void saveGrant(selection)}
-        onTestConnection={(connectionId) => void testConnection(connectionId)}
-        preview={preview}
-        previewing={previewing}
-        revoking={revoking}
-        saving={saving}
-        successMessage={message}
-      />
-      {testingConnectionId && <span className="custom-agent-app-access__sr-status" role="status">Testing connection…</span>}
     </section>
   );
 }

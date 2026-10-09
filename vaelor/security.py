@@ -12,10 +12,11 @@ import sqlite3
 import threading
 import time
 import struct
+from collections import OrderedDict
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 from urllib.parse import quote
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -167,6 +168,15 @@ class SecurityStore:
             )
         )
 
+    _UNKNOWN_ACCOUNT_HASH: Optional[str] = None
+
+    @classmethod
+    def _unknown_account_hash(cls) -> str:
+        """A scrypt hash with the real parameters, made once, matching nothing."""
+        if cls._UNKNOWN_ACCOUNT_HASH is None:
+            cls._UNKNOWN_ACCOUNT_HASH = cls._password_hash(secrets.token_urlsafe(24))
+        return cls._UNKNOWN_ACCOUNT_HASH
+
     @staticmethod
     def _password_matches(password: str, encoded: str) -> bool:
         try:
@@ -220,7 +230,13 @@ class SecurityStore:
                 """,
                 (username,),
             ).fetchone()
-        if row is None or not self._password_matches(password, row["password_hash"]):
+        if row is None:
+            # R2-3 (pre-existing): an unknown account skipped scrypt, so the
+            # answer's timing said whether the account exists. The same work
+            # is done against a fixed hash and its answer thrown away.
+            self._password_matches(password, self._unknown_account_hash())
+            return None
+        if not self._password_matches(password, row["password_hash"]):
             return None
         return {
             "username": row["username"], "role": row["role"],
@@ -668,6 +684,28 @@ class SecurityStore:
             )
             connection.commit()
 
+    def audit_between(
+        self, since: float, until: float, action: str, target: str = "", limit: int = 500,
+    ) -> list[Dict[str, Any]]:
+        """One action's audit rows in a time span, oldest first.
+
+        For the Assistant's machine history (VD-205 item 3): the newest rows
+        across the whole appliance say nothing about a window last night once
+        a busy morning has pushed them out (adversarial review B-2).
+        """
+        query = ("SELECT created_at, actor, action, target, result FROM audit_events "
+                 "WHERE action = ? AND created_at >= ? AND created_at <= ?")
+        values: list = [action, int(since), int(until)]
+        if target:
+            query += " AND target = ?"
+            values.append(target[:256])
+        query += " ORDER BY created_at ASC LIMIT ?"
+        values.append(max(1, min(int(limit), 2000)))
+        with closing(self._connect()) as connection:
+            rows = connection.execute(query, values).fetchall()
+        return [{key: row[key] for key in ("created_at", "actor", "action", "target", "result")}
+                for row in rows]
+
     def list_audit(self, limit: int = 50) -> list[Dict[str, Any]]:
         safe_limit = max(1, min(int(limit), 200))
         with closing(self._connect()) as connection:
@@ -697,32 +735,149 @@ class SecurityStore:
 
 
 class LoginLimiter:
-    """In-memory limiter for a single dashboard process."""
+    """Failed sign-ins, counted two ways, in memory for one dashboard process.
 
-    def __init__(self, attempts: int = 5, window_seconds: int = 300):
-        self.attempts = attempts
-        self.window_seconds = window_seconds
-        self._failures: Dict[str, list[float]] = {}
+    **F11 (owner decision 2026-10-03, "Both limits").** W4d-D6 gave the
+    limiter each browser's real address, so keyed on (address, username) it
+    gave every address its own budget and N addresses had N times the guesses
+    at one account (LESSONS 8: a limit is a limit over the population it
+    counts). Now:
+
+    - **per (address, username):** ``ADDRESS_ATTEMPTS`` failures in
+      ``ADDRESS_WINDOW_SECONDS`` - 5 in 5 minutes - slows one noisy machine;
+    - **per username, all addresses:** ``USERNAME_ATTEMPTS`` failures in
+      ``USERNAME_WINDOW_SECONDS`` - 30 in 5 minutes - bounds what many
+      addresses can try together, at most 8,640 guesses a day per account.
+
+    **A stranger may slow the owner, never block them for long.** The account
+    cap is a sliding window, so it lifts at most 5 minutes after the last
+    counted failure, and refused attempts are not counted. An attack that keeps
+    the cap full could still hold it, so an address that signed in as the
+    account within ``KNOWN_ADDRESS_SECONDS`` (30 days) is not subject to the
+    account cap - it keeps its own per-address limit - and the owner's usual
+    machine is never locked out by strangers' failures.
+    """
+
+    ADDRESS_ATTEMPTS = 5
+    ADDRESS_WINDOW_SECONDS = 300
+    USERNAME_ATTEMPTS = 30
+    USERNAME_WINDOW_SECONDS = 300
+    KNOWN_ADDRESS_SECONDS = 30 * 24 * 3600
+    #: A bound on the known-address memory per account, oldest dropped first.
+    KNOWN_ADDRESSES_KEPT = 16
+
+    ADDRESS_REFUSAL = "Too many attempts. Try again in a few minutes."
+    USERNAME_REFUSAL = (
+        "Too many failed sign-ins for this account from different addresses. "
+        "Try again in a few minutes, or sign in from a machine that has signed "
+        "in as this account before."
+    )
+
+    #: R2-3: the most keys any one table holds. A key used to be pruned only
+    #: when the same key was asked about again, so 100,000 distinct usernames
+    #: tried once each stayed in memory for ever - reachable without an
+    #: account. Past this bound the least recently counted key is dropped
+    #: first, after every expired key has been swept. The cost is stated, not
+    #: hidden: a flood of more distinct names than this inside one window can
+    #: push a real account's count out early; bounded memory is the trade.
+    MAX_TRACKED_KEYS = 20_000
+    #: Seconds between sweeps of keys whose window has passed.
+    SWEEP_SECONDS = 60
+    #: Usernames longer than this are keyed by their SHA-256, so a
+    #: multi-megabyte name is not stored, twice, as a dictionary key.
+    KEYED_USERNAME_CHARS = 64
+
+    def __init__(self, clock: Callable[[], float] = time.time):
+        self._clock = clock
+        self._by_address: "OrderedDict[tuple, list[float]]" = OrderedDict()
+        self._by_username: "OrderedDict[str, list[float]]" = OrderedDict()
+        self._known: "OrderedDict[str, Dict[str, float]]" = OrderedDict()
         self._lock = threading.Lock()
+        self._swept = clock()
 
-    def _active(self, key: str, now: float) -> list[float]:
-        cutoff = now - self.window_seconds
-        return [item for item in self._failures.get(key, []) if item > cutoff]
+    @classmethod
+    def _key(cls, username: str) -> str:
+        if len(username) <= cls.KEYED_USERNAME_CHARS:
+            return username
+        return "sha256:" + hashlib.sha256(username.encode("utf-8", "replace")).hexdigest()
 
-    def allowed(self, key: str) -> bool:
-        now = time.time()
+    @staticmethod
+    def _active(table: Dict[Any, list[float]], key: Any, cutoff: float) -> list[float]:
+        active = [item for item in table.get(key, []) if item > cutoff]
+        if active:
+            table[key] = active
+        else:
+            table.pop(key, None)
+        return active
+
+    def _sweep(self, now: float) -> None:
+        """Drop every expired key, at most once per ``SWEEP_SECONDS``."""
+        if now - self._swept < self.SWEEP_SECONDS:
+            return
+        self._swept = now
+        for table, window in ((self._by_address, self.ADDRESS_WINDOW_SECONDS),
+                              (self._by_username, self.USERNAME_WINDOW_SECONDS)):
+            for key in [key for key, stamps in table.items() if not stamps or stamps[-1] <= now - window]:
+                del table[key]
+        for username in list(self._known):
+            addresses = self._known[username]
+            for address in [a for a, seen in addresses.items() if now - seen > self.KNOWN_ADDRESS_SECONDS]:
+                del addresses[address]
+            if not addresses:
+                del self._known[username]
+
+    def _count(self, table: "OrderedDict[Any, list[float]]", key: Any, now: float, keep: int) -> None:
+        stamps = table.pop(key, [])
+        stamps.append(now)
+        table[key] = stamps[-keep:]  # counting past the limit changes nothing
+        while len(table) > self.MAX_TRACKED_KEYS:
+            table.popitem(last=False)
+
+    def _is_known(self, address: str, username: str, now: float) -> bool:
+        seen = self._known.get(username, {}).get(address)
+        return seen is not None and now - seen <= self.KNOWN_ADDRESS_SECONDS
+
+    def refusal(self, address: str, username: str) -> Optional[tuple]:
+        """``None`` when a sign-in may be tried, else ``(code, message)``."""
+        now = self._clock()
+        username = self._key(username)
         with self._lock:
-            active = self._active(key, now)
-            self._failures[key] = active
-            return len(active) < self.attempts
+            self._sweep(now)
+            mine = self._active(
+                self._by_address, (address, username), now - self.ADDRESS_WINDOW_SECONDS)
+            if len(mine) >= self.ADDRESS_ATTEMPTS:
+                return ("login_rate_limited", self.ADDRESS_REFUSAL)
+            everyone = self._active(
+                self._by_username, username, now - self.USERNAME_WINDOW_SECONDS)
+            if (len(everyone) >= self.USERNAME_ATTEMPTS
+                    and not self._is_known(address, username, now)):
+                return ("login_rate_limited", self.USERNAME_REFUSAL)
+            return None
 
-    def failed(self, key: str) -> None:
-        now = time.time()
+    def failed(self, address: str, username: str) -> None:
+        now = self._clock()
+        username = self._key(username)
         with self._lock:
-            active = self._active(key, now)
-            active.append(now)
-            self._failures[key] = active
+            self._sweep(now)
+            self._count(self._by_address, (address, username), now, self.ADDRESS_ATTEMPTS)
+            self._count(self._by_username, username, now, self.USERNAME_ATTEMPTS)
 
-    def succeeded(self, key: str) -> None:
+    def succeeded(self, address: str, username: str) -> None:
+        """A sign-in worked: clear this address's own count, and remember it.
+
+        R2-4: the account-wide count is NOT cleared. A success from a known
+        address resetting it would let an attacker who also controls one
+        known address (or simply waits for the owner to sign in) start a fresh
+        30-guess budget; the cap still lifts on its own after its window.
+        """
+        now = self._clock()
+        username = self._key(username)
         with self._lock:
-            self._failures.pop(key, None)
+            self._by_address.pop((address, username), None)
+            known = self._known.pop(username, {})
+            known[address] = now
+            for stale in sorted(known, key=known.get)[:-self.KNOWN_ADDRESSES_KEPT]:
+                del known[stale]
+            self._known[username] = known
+            while len(self._known) > self.MAX_TRACKED_KEYS:
+                self._known.popitem(last=False)

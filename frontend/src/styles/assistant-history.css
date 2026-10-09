@@ -1,0 +1,299 @@
+/*
+ * The Assistant's History tab (VD-200: the AssistHistory board) and the
+ * "Review knowledge document" dialog (AssistRunDialogs). The page frame, the
+ * section labels, inner boxes, key/value grids, pager and dialog parts are the
+ * shared ones in assistant-page.css; this file is the run list itself.
+ *
+ * Tokens only. The `ah-` prefix keeps these clear of the pre-redesign
+ * agent-task-* rules, which still style other Assistant screens.
+ */
+
+/* The board's quiet second line under the title: 14 px, grey. */
+.ah-panel .ui-page-header__title > span {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+  letter-spacing: 0;
+  line-height: 1.5;
+}
+
+/* One control band: the filters, then View archive and Archive finished. */
+.ah-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ah-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ah-history {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* The Evidence card: its header carries the label, the name and "N runs". */
+.ah-evidence,
+.ah-automatic {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ah-evidence > .ui-card__header,
+.ah-automatic > .ui-card__header {
+  align-items: center;
+}
+
+.ah-evidence .ui-card__titles h2,
+.ah-automatic .ui-card__titles h2 {
+  margin: 2px 0 0;
+}
+
+/* A run: what it is and what it found on the left, its state on the right. */
+.ah-run {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 16px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.ah-run--open {
+  background: var(--bg-row-hover);
+}
+
+.ah-run > .status-pill {
+  flex: 0 0 auto;
+}
+
+.ah-run__main {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.ah-run__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.ah-run__summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui);
+  line-height: 1.5;
+}
+
+ul.ah-run__summary {
+  padding-left: 18px;
+}
+
+.ah-run__asked,
+.ah-run__lead {
+  margin: 0;
+}
+
+.ah-run__lead {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.ah-run__note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.ah-run__access {
+  gap: 2px;
+  padding: 10px 12px;
+}
+
+.ah-run__access strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.ah-run__access small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* Findings, Recommendations, Next actions / Evidence, Warnings, Knowledge. */
+.ah-result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.ah-result {
+  min-width: 0;
+}
+
+.ah-result h4 {
+  margin: 0 0 6px;
+}
+
+.ah-result ul,
+.ah-result p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.6;
+}
+
+.ah-result ul {
+  padding-left: 18px;
+}
+
+/* Proposed knowledge writes: the accent's hairline, the action at the right. */
+.ah-writes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-deep);
+  border-radius: 10px;
+}
+
+.ah-writes__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ah-writes__name {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  overflow-wrap: anywhere;
+}
+
+.ah-owner {
+  margin: 0;
+}
+
+.ah-owner__binding {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  margin-top: 8px;
+}
+
+.ah-owner-state {
+  margin: 0;
+}
+
+.ah-owner-state .ui-skeleton {
+  width: 70%;
+}
+
+.ah-run__handoff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.ah-run__handoff .ui-field {
+  min-width: min(100%, 220px);
+}
+
+.ah-run__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+/* The Automatic filter's own card: the schedules and rules behind the runs. */
+.ah-automatic__intro {
+  margin: 0;
+  padding: 14px 18px;
+  line-height: 1.5;
+}
+
+.ah-automatic__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.ah-automatic__row > div {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ah-automatic__name {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+}
+
+/* The knowledge-document review: the exact text, in the data face. */
+.ah-write-review__content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ah-write-review__content h3 {
+  margin: 0;
+}
+
+.ah-write-review__content pre {
+  max-height: 50vh;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  color: var(--text-secondary);
+  background: var(--bg-control);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .ah-run,
+  .ah-automatic__row,
+  .ah-automatic__intro {
+    padding-inline: 16px;
+  }
+
+  .ah-toolbar .ui-segmented {
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+/* An icon and its word inside one button. */
+.ui-button.ah-reload {
+  gap: 6px;
+}

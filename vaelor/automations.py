@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sqlite3
@@ -13,14 +14,30 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .agent_tasks import PROFILES
+from .automation_status import (
+    last_run_view,
+    next_slot_after,
+    schedule_status,
+    trigger_status,
+)
 from .runtime_paths import env_value, state_path
 
+LOGGER = logging.getLogger(__name__)
+
+# The `worker` flag marks a signal a per-worker alert can be built on: one the
+# controller derives from a worker's reported row (control_plane_runtime
+# WORKER_SIGNAL_FIELDS), which today is cpu_temperature and memory_percent. A
+# worker also reports disk, network and fan readings (VD-205 item 6), but no
+# worker alert signal is derived from them yet, and service failures and the
+# fan-failure signal are controller-only. A rule on any of those aimed at a
+# worker would silently never fire, so it is refused at creation - honest
+# degradation rather than a rule that can never trigger.
 TRIGGER_SOURCES = {
-    "cpu_temperature": {"label": "CPU temperature", "minimum": 40, "maximum": 100},
-    "memory_percent": {"label": "Memory use", "minimum": 1, "maximum": 100},
-    "storage_percent": {"label": "Storage use", "minimum": 1, "maximum": 100},
-    "service_failures": {"label": "Failed Vaelor services", "minimum": 1, "maximum": 10},
-    "fan_failure": {"label": "Fan failure signal", "minimum": 1, "maximum": 1},
+    "cpu_temperature": {"label": "CPU temperature", "minimum": 40, "maximum": 100, "worker": True},
+    "memory_percent": {"label": "Memory use", "minimum": 1, "maximum": 100, "worker": True},
+    "storage_percent": {"label": "Storage use", "minimum": 1, "maximum": 100, "worker": False},
+    "service_failures": {"label": "Failed Vaelor services", "minimum": 1, "maximum": 10, "worker": False},
+    "fan_failure": {"label": "Fan failure signal", "minimum": 1, "maximum": 1, "worker": False},
 }
 
 
@@ -36,6 +53,38 @@ WRITE_POLICY = (
 
 class AutomationError(ValueError):
     pass
+
+
+#: Recorded on a rule whose evaluation raised (a locked store, an unreadable
+#: value). The raw Python error goes to the log only; the card shows this
+#: sentence, and the next evaluation that reads a value clears it, so one
+#: transient failure cannot leave the rule red until it next fires.
+EVALUATION_FAILED = (
+    "evaluation_failed: The last check of this rule failed before it could "
+    "read the signal. It is retried every few seconds; the control-plane log "
+    "has the details."
+)
+
+#: Refused when a one-time schedule that already ran is re-enabled. Enabling it
+#: used to store it as enabled with nothing left to run, so it read green and
+#: could never fire again (ACC-139).
+ONE_SHOT_ALREADY_RAN = (
+    "This one-time schedule has already run, so it cannot run again. "
+    "Create a new schedule instead."
+)
+
+
+def machine_label(node: str, machine_names=None) -> str:
+    """The machine a rule watches, by the name the owner knows it by.
+
+    ``""`` is the controller. A worker is named from the fleet's own records;
+    when that name cannot be read the label says so in words rather than
+    printing the node id (ACC-087, ACC-127).
+    """
+    if not node:
+        return "the controller"
+    name = str((machine_names or {}).get(node) or "").strip()
+    return name or "an enrolled worker"
 
 
 def unattended_disclosure(profile: str, version, definition) -> dict:
@@ -193,12 +242,16 @@ class AutomationStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_run_once
                 ON automation_runs(automation_id,scheduled_for);
+                CREATE INDEX IF NOT EXISTS idx_automation_runs_latest
+                ON automation_runs(automation_id,created_at);
+                CREATE INDEX IF NOT EXISTS idx_automation_runs_task
+                ON automation_runs(task_id);
                 CREATE TABLE IF NOT EXISTS automation_triggers (
                     id TEXT PRIMARY KEY, actor TEXT NOT NULL, name TEXT NOT NULL,
                     prompt TEXT NOT NULL, profile TEXT NOT NULL, source TEXT NOT NULL,
                     operator TEXT NOT NULL, threshold REAL NOT NULL,
                     cooldown_seconds INTEGER NOT NULL, enabled INTEGER NOT NULL,
-                    last_triggered_at REAL, last_value REAL,
+                    last_triggered_at REAL, last_value REAL, node TEXT NOT NULL DEFAULT '',
                     created_at REAL NOT NULL, updated_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS automation_trigger_runs (
@@ -206,6 +259,8 @@ class AutomationStore:
                     task_id TEXT NOT NULL, created_at REAL NOT NULL,
                     FOREIGN KEY(trigger_id) REFERENCES automation_triggers(id) ON DELETE CASCADE
                 );
+                CREATE INDEX IF NOT EXISTS idx_automation_trigger_runs_task
+                ON automation_trigger_runs(task_id);
                 """
             )
             for table in ("automations", "automation_triggers"):
@@ -232,11 +287,31 @@ class AutomationStore:
                 connection.execute(
                     "ALTER TABLE automation_triggers ADD COLUMN last_delivery TEXT NOT NULL DEFAULT ''"
                 )
+            # Per-worker alert thresholds (VD-128). An appliance DB written before
+            # this column existed must gain it in place, or every trigger read
+            # would raise on the missing `node`. Empty is the controller, so the
+            # migration leaves every existing rule pointing at the controller —
+            # exactly the machine it evaluated against before.
+            if "node" not in trigger_columns:
+                connection.execute(
+                    "ALTER TABLE automation_triggers ADD COLUMN node TEXT NOT NULL DEFAULT ''"
+                )
+            # When the rule last READ its signal (ACC-086). `last_value` alone
+            # said nothing about its age, so a machine that stopped reporting
+            # left a frozen number under a green "watching" pill.
+            if "last_value_at" not in trigger_columns:
+                connection.execute(
+                    "ALTER TABLE automation_triggers ADD COLUMN last_value_at REAL"
+                )
             connection.commit()
 
     def _row(self, row):
         item = dict(row)
         item["enabled"] = bool(item["enabled"])
+        # A trigger names the machine it watches; "" is the controller. The
+        # migration makes the column always present, but a defensive default
+        # keeps a pre-migration read (schedules have no node) from raising.
+        item.setdefault("node", "")
         item["capability_disclosure"] = self._disclosure(
             item["profile"], item.get("profile_version", 0), item["actor"]
         )
@@ -281,7 +356,11 @@ class AutomationStore:
         if profile in PROFILES:
             return 0
         definition = self.profile_store.get(profile, actor) if self.profile_store else None
-        if not definition or not definition.get("enabled"):
+        if (
+            not definition
+            or not definition.get("enabled")
+            or str(definition.get("surface", "assistant")) == "inference"
+        ):
             raise AutomationError("Choose an enabled built-in or custom agent.")
         return int(definition.get("version", 0))
 
@@ -293,7 +372,7 @@ class AutomationStore:
             values.append(actor)
         with closing(self._connect()) as connection:
             row = connection.execute(query, values).fetchone()
-        return self._row(row) if row else None
+            return self._schedule_views(connection, [self._row(row)])[0] if row else None
 
     def list(self, actor: Optional[str] = None):
         query = "SELECT * FROM automations"
@@ -303,9 +382,77 @@ class AutomationStore:
             values.append(actor)
         query += " ORDER BY created_at DESC"
         with closing(self._connect()) as connection:
-            return [self._row(row) for row in connection.execute(query, values)]
+            items = [self._row(row) for row in connection.execute(query, values)]
+            return self._schedule_views(connection, items)
+
+    @staticmethod
+    def _schedule_views(connection, items):
+        """Attach each schedule's latest recorded run and its derived status.
+
+        Failed and blocked runs were recorded in ``automation_runs`` and read
+        by nothing, so a schedule whose every run failed stayed green (ACC-135).
+        """
+        latest = {
+            row["automation_id"]: dict(row)
+            for row in AutomationStore._latest_runs(connection, [item["id"] for item in items])
+        }
+        now = time.time()
+        for item in items:
+            run = latest.get(item["id"])
+            item["last_run"] = last_run_view(run)
+            item["status"] = schedule_status(item, run, now)
+        return items
+
+    @staticmethod
+    def _latest_runs(connection, automation_ids):
+        """The newest recorded run of each schedule - one row each, chosen in SQL.
+
+        A schedule running every five minutes records ~8,600 runs a month; the
+        list must not read all of them to show one. One ``LIMIT 1`` read per
+        schedule walks the ``(automation_id, created_at)`` index backwards, so
+        each costs one index seek however long the history grows.
+        """
+        rows = []
+        for automation_id in automation_ids:
+            row = connection.execute(
+                "SELECT * FROM automation_runs WHERE automation_id=? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (automation_id,),
+            ).fetchone()
+            if row is not None:
+                rows.append(row)
+        return rows
+
+    def task_origins(self, task_ids):
+        """Which recorded run started each task: ``alert_rule`` or ``schedule``.
+
+        The recorded fact, not the task's idempotency key: a caller of
+        ``POST /assistant/tasks`` chooses its own key, so a key shaped
+        ``trigger:...`` proves nothing (ACC-127 review, S3). A task id absent
+        from both run tables was not started by a rule or a schedule.
+        """
+        ids = [str(item) for item in task_ids if item]
+        if not ids:
+            return {}
+        marks = ",".join("?" for _ in ids)
+        origins = {}
+        with closing(self._connect()) as connection:
+            for row in connection.execute(
+                "SELECT task_id FROM automation_runs WHERE task_id IN ({})".format(marks), ids,
+            ):
+                origins[row["task_id"]] = "schedule"
+            for row in connection.execute(
+                "SELECT task_id FROM automation_trigger_runs WHERE task_id IN ({})".format(marks), ids,
+            ):
+                origins[row["task_id"]] = "alert_rule"
+        return origins
 
     def set_enabled(self, item_id: str, actor: str, enabled: bool):
+        current = self.get(item_id, actor)
+        if current is None:
+            raise AutomationError("Schedule not found.")
+        if enabled and current["kind"] == "once" and current["next_run_at"] is None:
+            raise AutomationError(ONE_SHOT_ALREADY_RAN)
         with closing(self._connect()) as connection:
             cursor = connection.execute(
                 "UPDATE automations SET enabled=?,updated_at=? WHERE id=? AND actor=?",
@@ -359,9 +506,13 @@ class AutomationStore:
                     (now, automation["id"]),
                 )
             else:
+                # The next slot AFTER now, not after the slot that just ran: a
+                # paused or missed schedule runs once and resumes its cadence
+                # instead of firing one catch-up run per poll (ACC-139).
                 connection.execute(
                     "UPDATE automations SET next_run_at=?,updated_at=? WHERE id=?",
-                    (scheduled + automation["interval_seconds"], now, automation["id"]),
+                    (next_slot_after(scheduled, automation["interval_seconds"], now),
+                     now, automation["id"]),
                 )
             connection.commit()
 
@@ -391,6 +542,20 @@ class AutomationStore:
                 "FROM automation_trigger_runs "
                 "ORDER BY created_at DESC LIMIT ?",
                 (max(1, min(limit, 200)),),
+            )
+            return [dict(row) for row in rows]
+
+    def trigger_runs_between(self, since: float, until: float):
+        """Fired alert runs in a time span with their rule's machine, oldest first.
+
+        ``node`` is ``""`` for a rule on the controller (VD-205 item 3, review B-2).
+        """
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT r.trigger_id, r.value, r.created_at, t.name, t.source, t.node "
+                "FROM automation_trigger_runs r JOIN automation_triggers t ON t.id = r.trigger_id "
+                "WHERE r.created_at >= ? AND r.created_at <= ? ORDER BY r.created_at ASC LIMIT 500",
+                (float(since), float(until)),
             )
             return [dict(row) for row in rows]
 
@@ -424,9 +589,11 @@ class AutomationStore:
     def create_trigger(
         self, actor: str, name: str, prompt: str, profile: str,
         source: str, operator: str, threshold: float, cooldown_seconds: int = 1800,
+        node: str = "",
     ):
         name = str(name).strip()[:100]
         prompt = str(prompt).strip()[:4000]
+        node = str(node).strip()[:64]
         if not name or not prompt:
             raise AutomationError("An alert name and specialist task are required.")
         profile_version = self._profile_version(profile, actor)
@@ -434,6 +601,14 @@ class AutomationStore:
             raise AutomationError("Choose a supported alert signal.")
         if operator not in {">=", "<="}:
             raise AutomationError("Choose above or below threshold.")
+        # Only cpu_temperature and memory_percent are derived as alert signals
+        # for a worker, so a rule aimed at one may watch only those. Refusing a controller-only signal
+        # here keeps a per-worker rule from being stored in a state that could
+        # never fire. The controller ("") keeps all five. Whether the node is a
+        # real enrolled worker is the route's check, not the store's — the store
+        # only owns the source/node compatibility rule.
+        if node and not TRIGGER_SOURCES[source].get("worker"):
+            raise AutomationError("That signal can raise an alert only for the controller.")
         try:
             threshold = float(threshold)
             cooldown_seconds = int(cooldown_seconds)
@@ -451,14 +626,24 @@ class AutomationStore:
                 """
                 INSERT INTO automation_triggers
                 (id,actor,name,prompt,profile,profile_version,source,operator,threshold,cooldown_seconds,
-                 enabled,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)
+                 node,enabled,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?,?)
                 """,
                 (trigger_id, actor, name, prompt, profile, profile_version, source, operator,
-                 threshold, cooldown_seconds, now, now),
+                 threshold, cooldown_seconds, node, now, now),
             )
             connection.commit()
         return self.get_trigger(trigger_id, actor)
+
+    def _trigger_row(self, row, now: float):
+        item = self._row(row)
+        item["status"] = trigger_status(item, now)
+        # The signal's words from TRIGGER_SOURCES, the one table that owns
+        # them, so the cards never keep a second copy of the labels.
+        item["signal_label"] = TRIGGER_SOURCES.get(item["source"], {}).get(
+            "label", "An unrecognised signal"
+        )
+        return item
 
     def get_trigger(self, trigger_id: str, actor: Optional[str] = None):
         query = "SELECT * FROM automation_triggers WHERE id=?"
@@ -468,7 +653,7 @@ class AutomationStore:
             values.append(actor)
         with closing(self._connect()) as connection:
             row = connection.execute(query, values).fetchone()
-        return self._row(row) if row else None
+        return self._trigger_row(row, time.time()) if row else None
 
     def list_triggers(self, actor: Optional[str] = None):
         query = "SELECT * FROM automation_triggers"
@@ -477,8 +662,9 @@ class AutomationStore:
             query += " WHERE actor=?"
             values.append(actor)
         query += " ORDER BY created_at DESC"
+        now = time.time()
         with closing(self._connect()) as connection:
-            return [self._row(row) for row in connection.execute(query, values)]
+            return [self._trigger_row(row, now) for row in connection.execute(query, values)]
 
     def set_trigger_enabled(self, trigger_id: str, actor: str, enabled: bool):
         with closing(self._connect()) as connection:
@@ -525,86 +711,147 @@ class AutomationStore:
             )
             connection.commit()
 
-    def evaluate_triggers(self, values: dict[str, float], task_store,
-                          owner_authorized=None, deliver=None):
+    def evaluate_triggers(self, values_by_node: dict[str, dict[str, float]], task_store,
+                          owner_authorized=None, deliver=None, machine_names=None):
+        """Evaluate every enabled rule against its own machine's readings.
+
+        ``values_by_node`` is keyed by machine: ``""`` holds the controller's
+        readings and each worker node-id key holds that worker's. A rule reads
+        only its own node's dict, so a worker's memory has no bearing on a
+        controller rule and vice versa. A node ABSENT from the dict is a machine
+        that did not report this pass (stale, never enrolled, or telemetry off);
+        its rules are skipped rather than fired, because a missing reading is not
+        a reading of zero and must never raise a false alarm.
+
+        Each rule is evaluated on its own: one rule that raises records its own
+        ``last_error`` (shown on its card) and the pass moves on, instead of the
+        whole pass being dropped in silence (ACC-135). ``machine_names`` maps a
+        node id to the name the owner knows it by, so a fired alert and its run
+        name the machine rather than printing its id (ACC-087, ACC-127).
+        """
         now = time.time()
         created = []
         for trigger in self.list_triggers():
-            if not trigger["enabled"] or trigger["source"] not in values:
-                continue
-            if not owner_still_authorized(owner_authorized, trigger["actor"]):
-                self._record_trigger_error(trigger["id"], OWNER_REVOKED, now)
-                continue
-            value = float(values[trigger["source"]])
-            matched = (
-                value >= trigger["threshold"]
-                if trigger["operator"] == ">="
-                else value <= trigger["threshold"]
-            )
-            cooled = (
-                trigger["last_triggered_at"] is None
-                or now - trigger["last_triggered_at"] >= trigger["cooldown_seconds"]
-            )
-            with closing(self._connect()) as connection:
-                connection.execute(
-                    "UPDATE automation_triggers SET last_value=?,updated_at=? WHERE id=?",
-                    (value, now, trigger["id"]),
-                )
-                connection.commit()
-            if not matched or not cooled:
+            if not trigger["enabled"]:
                 continue
             try:
-                task = task_store.create(
-                    trigger["actor"],
-                    "Alert: {}".format(trigger["name"]),
-                    "{}\n\nObserved {} {} {}.".format(
-                        trigger["prompt"], trigger["source"], trigger["operator"], value
-                    ),
-                    kind="durable", profile=trigger["profile"], approval_required=False,
-                    profile_version=(trigger["profile_version"] or None),
-                    idempotency_key="trigger:{}:{}".format(trigger["id"], int(now)),
+                task = self._evaluate_trigger(
+                    trigger, values_by_node, task_store, owner_authorized,
+                    deliver, machine_names, now,
                 )
-            except ValueError as error:
-                self._record_trigger_error(
-                    trigger["id"], "task_creation: " + str(error)[:480], now
-                )
+            except (sqlite3.Error, OSError, TypeError, ValueError) as error:
+                LOGGER.warning("Alert rule %s could not be evaluated: %s", trigger["id"], error)
+                try:
+                    self._record_trigger_error(trigger["id"], EVALUATION_FAILED, now)
+                except sqlite3.Error as record_error:
+                    LOGGER.warning("Could not record the alert rule error: %s", record_error)
                 continue
-            with closing(self._connect()) as connection:
-                connection.execute(
-                    "UPDATE automation_triggers SET last_triggered_at=?,last_value=?,last_error='',updated_at=? WHERE id=?",
-                    (now, value, now, trigger["id"]),
-                )
-                connection.execute(
-                    "INSERT INTO automation_trigger_runs(id,trigger_id,value,task_id,created_at) VALUES(?,?,?,?,?)",
-                    (uuid.uuid4().hex, trigger["id"], value, task["id"], now),
-                )
-                connection.commit()
-            # Out-of-band delivery is best-effort and strictly after the run is
-            # durable: a broken email relay or webhook must never fail the
-            # trigger, lose the task, or raise into this loop. It also blocks on
-            # the network, so it runs OFF this evaluation thread by default - a
-            # hung relay must not delay the other triggers in this pass or the
-            # next poll cycle. The recorded outcome lands when delivery finishes.
-            if deliver is not None:
-                alert = {
-                    "trigger_name": trigger["name"],
-                    "source": trigger["source"],
-                    "operator": trigger["operator"],
-                    "threshold": trigger["threshold"],
-                    "observed_value": value,
-                    "timestamp": now,
-                    "task_id": task["id"],
-                }
-                if self._delivery_async:
-                    threading.Thread(
-                        target=self._run_delivery,
-                        args=(deliver, trigger["id"], alert, now),
-                        name="pm-alert-delivery", daemon=True,
-                    ).start()
-                else:
-                    self._run_delivery(deliver, trigger["id"], alert, now)
-            created.append(task)
+            if task is not None:
+                created.append(task)
         return created
+
+    def _evaluate_trigger(self, trigger, values_by_node, task_store, owner_authorized,
+                          deliver, machine_names, now):
+        """Evaluate one enabled rule; the task it created, or ``None``."""
+        node_values = values_by_node.get(trigger["node"])
+        # The node is not reporting this pass: skip, do not fire. Distinct
+        # from a node that reported without this field (below), which is also
+        # a skip but for a different reason.
+        if node_values is None or trigger["source"] not in node_values:
+            return None
+        if not owner_still_authorized(owner_authorized, trigger["actor"]):
+            self._record_trigger_error(trigger["id"], OWNER_REVOKED, now)
+            return None
+        value = float(node_values[trigger["source"]])
+        matched = (
+            value >= trigger["threshold"]
+            if trigger["operator"] == ">="
+            else value <= trigger["threshold"]
+        )
+        cooled = (
+            trigger["last_triggered_at"] is None
+            or now - trigger["last_triggered_at"] >= trigger["cooldown_seconds"]
+        )
+        with closing(self._connect()) as connection:
+            # The reading and WHEN it was read. The two errors that describe
+            # a check rather than a fired run - a revoked owner and a failed
+            # evaluation - clear as soon as a check succeeds; a failed task
+            # creation stays until the rule next fires cleanly.
+            connection.execute(
+                "UPDATE automation_triggers SET last_value=?,last_value_at=?,"
+                "last_error=CASE WHEN last_error IN (?,?) THEN '' ELSE last_error END,"
+                "updated_at=? WHERE id=?",
+                (value, now, OWNER_REVOKED, EVALUATION_FAILED, now, trigger["id"]),
+            )
+            connection.commit()
+        if not matched or not cooled:
+            return None
+        # Name the machine that crossed. A fired alert that only said the
+        # signal and value left the reader guessing whether it was the
+        # controller or one of several workers; the diagnostic run and the
+        # out-of-band alert both have to say which box to look at - by its
+        # name, not its node id.
+        machine = machine_label(trigger["node"], machine_names)
+        signal = TRIGGER_SOURCES.get(trigger["source"], {}).get("label", trigger["source"])
+        try:
+            task = task_store.create(
+                trigger["actor"],
+                "Alert: {} on {}".format(trigger["name"], machine),
+                "{}\n\nObserved {} {} {} {} on {}.".format(
+                    trigger["prompt"], signal, value, trigger["operator"],
+                    trigger["threshold"], machine,
+                ),
+                kind="durable", profile=trigger["profile"], approval_required=False,
+                profile_version=(trigger["profile_version"] or None),
+                idempotency_key="trigger:{}:{}".format(trigger["id"], int(now)),
+            )
+        except ValueError as error:
+            self._record_trigger_error(
+                trigger["id"], "task_creation: " + str(error)[:480], now
+            )
+            return None
+        with closing(self._connect()) as connection:
+            connection.execute(
+                "UPDATE automation_triggers SET last_triggered_at=?,last_value=?,last_error='',updated_at=? WHERE id=?",
+                (now, value, now, trigger["id"]),
+            )
+            connection.execute(
+                "INSERT INTO automation_trigger_runs(id,trigger_id,value,task_id,created_at) VALUES(?,?,?,?,?)",
+                (uuid.uuid4().hex, trigger["id"], value, task["id"], now),
+            )
+            connection.commit()
+        # Out-of-band delivery is best-effort and strictly after the run is
+        # durable: a broken email relay or webhook must never fail the
+        # trigger, lose the task, or raise into this loop. It also blocks on
+        # the network, so it runs OFF this evaluation thread by default - a
+        # hung relay must not delay the other triggers in this pass or the
+        # next poll cycle. The recorded outcome lands when delivery finishes.
+        if deliver is not None:
+            alert = {
+                "trigger_name": trigger["name"],
+                "source": trigger["source"],
+                "signal": signal,
+                # The machine by name, for a person reading the email or
+                # the chat message; `node` keeps the id for a program.
+                "machine": machine,
+                "operator": trigger["operator"],
+                "threshold": trigger["threshold"],
+                "observed_value": value,
+                # Which machine crossed, so an emailed/webhooked alert names
+                # the box. "controller" rather than "" for a human reader.
+                "node": trigger["node"] or "controller",
+                "timestamp": now,
+                "task_id": task["id"],
+            }
+            if self._delivery_async:
+                threading.Thread(
+                    target=self._run_delivery,
+                    args=(deliver, trigger["id"], alert, now),
+                    name="pm-alert-delivery", daemon=True,
+                ).start()
+            else:
+                self._run_delivery(deliver, trigger["id"], alert, now)
+        return task
 
     def _run_delivery(self, deliver, trigger_id: str, alert: dict, now: float):
         """Deliver one fired alert and record its outcome. Never raises.
@@ -626,7 +873,8 @@ class AutomationStore:
 
 class AutomationRunner:
     def __init__(self, store, task_store, context_provider=None,
-                 poll_seconds: float = 5, owner_authorized=None, deliver=None):
+                 poll_seconds: float = 5, owner_authorized=None, deliver=None,
+                 machine_names=None):
         self.store = store
         self.task_store = task_store
         self.poll_seconds = max(1, min(float(poll_seconds), 60))
@@ -636,6 +884,8 @@ class AutomationRunner:
         # behaviour (a fired trigger creates a task and nothing is sent), so
         # existing callers and tests are unaffected.
         self.deliver = deliver
+        # Optional: node id -> the name the owner knows the machine by.
+        self.machine_names = machine_names
         self._stop = threading.Event()
         self._thread = None
 
@@ -649,7 +899,12 @@ class AutomationRunner:
 
     def _loop(self):
         while not self._stop.is_set():
-            self.run_once()
+            try:
+                self.run_once()
+            except Exception:  # noqa: BLE001 - one bad pass must not end the scheduler
+                # Logged with its traceback: an exception here used to end the
+                # thread, and every schedule and alert rule with it, silently.
+                LOGGER.exception("The schedule and alert-rule pass failed")
             self._stop.wait(self.poll_seconds)
 
     def run_once(self, now: Optional[float] = None):
@@ -687,9 +942,22 @@ class AutomationRunner:
                         self.context_provider(), self.task_store,
                         owner_authorized=self.owner_authorized,
                         deliver=self.deliver,
+                        machine_names=self._machine_names(),
                     )
                 )
-            except (AutomationError, OSError, ValueError):
-                pass
+            except (AutomationError, OSError, ValueError, sqlite3.Error) as error:
+                # Swallowed with `pass` before (ACC-135): no reading, no rule
+                # evaluated, and nothing anywhere said so. Rules that did not
+                # get a fresh reading show "Not reporting" on their cards.
+                LOGGER.warning("Alert rules could not be evaluated this pass: %s", error)
         self.store.sync_runs(self.task_store)
         return created
+
+    def _machine_names(self):
+        if self.machine_names is None:
+            return {}
+        try:
+            return dict(self.machine_names() or {})
+        except Exception as error:  # noqa: BLE001 - names only label an alert
+            LOGGER.warning("Machine names for alerts could not be read: %s", error)
+            return {}

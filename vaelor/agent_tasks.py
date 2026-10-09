@@ -60,6 +60,11 @@ class AgentTaskError(ValueError):
     pass
 
 
+#: The rows one actor may see: the tasks it owns and the tasks assigned to it.
+#: Written once so every read that filters by actor filters the same way.
+_VISIBLE_TO_ACTOR = "(actor=? OR assigned_to=?)"
+
+
 class AgentTaskStore:
     def __init__(self, database_path: Optional[str] = None, profile_store=None, app_grant_context=None,
                  workload_act_grants=None):
@@ -199,6 +204,16 @@ class AgentTaskStore:
                 connection.execute("ALTER TABLE agent_tasks ADD COLUMN assigned_to TEXT")
             if "retry_of" not in columns:
                 connection.execute("ALTER TABLE agent_tasks ADD COLUMN retry_of TEXT")
+            # VD-139: the owner dismissed this attention item.
+            if "dismissed_at" not in columns:
+                connection.execute("ALTER TABLE agent_tasks ADD COLUMN dismissed_at REAL")
+            if "dismissed_by" not in columns:
+                connection.execute("ALTER TABLE agent_tasks ADD COLUMN dismissed_by TEXT")
+            # The episode a dismissal covers (review B1).
+            if "dismissed_state" not in columns:
+                connection.execute("ALTER TABLE agent_tasks ADD COLUMN dismissed_state TEXT")
+            if "dismissed_updated_at" not in columns:
+                connection.execute("ALTER TABLE agent_tasks ADD COLUMN dismissed_updated_at REAL")
             if "profile_version" not in columns:
                 connection.execute(
                     "ALTER TABLE agent_tasks ADD COLUMN profile_version INTEGER NOT NULL DEFAULT 0"
@@ -240,14 +255,20 @@ class AgentTaskStore:
                 "AND state IN ('triage', 'ready', 'running', 'needs_approval')"
             )
 
-    def profiles(self, actor: Optional[str] = None):
+    def profiles(self, actor: Optional[str] = None, surface: Optional[str] = None):
         builtins = [
             {"id": key, **value, "custom": False, "version": 0, "enabled": True}
             for key, value in PROFILES.items()
-        ]
-        return builtins + (
+        ] if surface in (None, "assistant") else []
+        customs = (
             self.profile_store.list(actor) if self.profile_store and actor else []
         )
+        if surface is not None:
+            customs = [
+                item for item in customs
+                if str(item.get("surface", "assistant")) == surface
+            ]
+        return builtins + customs
 
     def profile(self, profile_id: str, actor: str):
         if profile_id in PROFILES:
@@ -255,7 +276,12 @@ class AgentTaskStore:
                 "id": profile_id, **PROFILES[profile_id],
                 "custom": False, "version": 0, "enabled": True,
             }
-        return self.profile_store.get(profile_id, actor) if self.profile_store else None
+        if self.profile_store is None:
+            return None
+        definition = self.profile_store.get(profile_id, actor)
+        if definition is not None and str(definition.get("surface", "assistant")) == "inference":
+            return None
+        return definition
 
     @staticmethod
     def _row(row):
@@ -427,7 +453,7 @@ class AgentTaskStore:
         query = "SELECT * FROM agent_tasks WHERE id=?"
         values = [task_id]
         if actor is not None:
-            query += " AND (actor=? OR assigned_to=?)"
+            query += " AND ({})".format(_VISIBLE_TO_ACTOR)
             values.extend((actor, actor))
         with self._connection() as connection:
             row = connection.execute(query, values).fetchone()
@@ -437,13 +463,41 @@ class AgentTaskStore:
             self._attach_revisions(connection, [item])
         return item
 
-    def list(self, actor: Optional[str] = None, limit: int = 100):
+    def list(
+        self, actor: Optional[str] = None, limit: int = 100, *,
+        archived: Optional[bool] = None, profile: Optional[str] = None,
+        open_only: bool = False,
+    ):
+        """Newest tasks first, filtered in SQL before the limit applies.
+
+        ACC-134: the route used to take the newest N rows and drop archived
+        ones in Python afterwards, so a large archive filled the window and
+        the recent list (needs-approval runs included) came back empty. Every
+        filter a caller needs therefore lives here, ahead of ``LIMIT``:
+        ``archived`` True/False selects only archived / only unarchived rows
+        (None keeps both), ``profile`` narrows to one agent, and
+        ``open_only`` keeps only work that has not reached an end state.
+        """
         limit = max(1, min(int(limit), 200))
-        query = "SELECT * FROM agent_tasks"
-        values = []
+        clauses = []
+        values: list = []
         if actor is not None:
-            query += " WHERE actor=? OR assigned_to=?"
+            # Parenthesised: the visibility test is an OR, and the filters
+            # below are ANDed onto it (review S6).
+            clauses.append("({})".format(_VISIBLE_TO_ACTOR))
             values.extend((actor, actor))
+        if archived is not None:
+            clauses.append("state = 'archived'" if archived else "state != 'archived'")
+        if profile is not None:
+            clauses.append("profile=?")
+            values.append(profile)
+        if open_only:
+            clauses.append(
+                "state NOT IN ('completed', 'failed', 'cancelled', 'archived')"
+            )
+        query = "SELECT * FROM agent_tasks"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY updated_at DESC LIMIT ?"
         values.append(limit)
         with self._connection() as connection:
@@ -451,8 +505,70 @@ class AgentTaskStore:
             self._attach_revisions(connection, records)
         return records
 
+    def activity_index(self, actor: Optional[str] = None) -> list[Dict[str, Any]]:
+        """``id``/``state``/``retry_of``/``updated_at``/``dismissed_at`` of EVERY visible task.
+
+        ACC-125: the Activity summary partitions every operation, and ``list``
+        stops at 200. Only the columns the partition and the attention rule
+        (VD-139) read are selected, so the page's three-second poll does not
+        parse every task's JSON.
+        """
+        query = (
+            "SELECT id, state, retry_of, updated_at, dismissed_at, dismissed_state, "
+            "dismissed_updated_at FROM agent_tasks"
+        )
+        values: list[Any] = []
+        if actor is not None:
+            query += " WHERE " + _VISIBLE_TO_ACTOR
+            values.extend((actor, actor))
+        query += " ORDER BY updated_at DESC"
+        with self._connection() as connection:
+            return [dict(row) for row in connection.execute(query, values)]
+
+    def dismiss(self, task_id: str, by: str, *, scope: Optional[str] = None) -> None:
+        """Record the owner's dismissal of an attention item (VD-139).
+
+        ``scope`` limits it to tasks that actor may see (None: any task). The
+        task's state, events and ``updated_at`` are left alone.
+        """
+        query = (
+            "UPDATE agent_tasks SET dismissed_at=?, dismissed_by=?, dismissed_state=state, "
+            "dismissed_updated_at=updated_at WHERE id=?"
+        )
+        values: list[Any] = [time.time(), str(by), task_id]
+        if scope is not None:
+            query += " AND " + _VISIBLE_TO_ACTOR
+            values.extend((scope, scope))
+        with self._connection() as connection:
+            changed = connection.execute(query, values).rowcount
+        if not changed:
+            raise KeyError(task_id)
+
+    def list_by_ids(
+        self, task_ids: list[str], actor: Optional[str] = None
+    ) -> list[Dict[str, Any]]:
+        """Full rows for the named tasks that ``actor`` may see (at most 200)."""
+        ids = [str(item) for item in task_ids][:200]
+        if not ids:
+            return []
+        query = "SELECT * FROM agent_tasks WHERE id IN ({})".format(
+            ",".join("?" for _ in ids))
+        values: list[Any] = list(ids)
+        if actor is not None:
+            query += " AND ({})".format(_VISIBLE_TO_ACTOR)
+            values.extend((actor, actor))
+        with self._connection() as connection:
+            records = [self._row(row) for row in connection.execute(query, values)]
+            self._attach_revisions(connection, records)
+        return records
+
     def archive_finished(self, actor: str) -> int:
-        """Hide finished work from the recent ledger without erasing its audit trail."""
+        """Hide finished work from the recent ledger without erasing its audit trail.
+
+        The row keeps its ``updated_at``: archiving is not new activity, and
+        bumping it floated every archived task above live work in the
+        newest-first ledger (ACC-134). The ``archived`` event row records when.
+        """
         now = time.time()
         with self._connection() as connection:
             rows = connection.execute(
@@ -464,8 +580,8 @@ class AgentTaskStore:
             ).fetchall()
             for row in rows:
                 connection.execute(
-                    "UPDATE agent_tasks SET state = 'archived', updated_at = ? WHERE id = ?",
-                    (now, row["id"]),
+                    "UPDATE agent_tasks SET state = 'archived' WHERE id = ?",
+                    (row["id"],),
                 )
                 connection.execute(
                     """

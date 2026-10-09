@@ -1,0 +1,635 @@
+/*
+ * Apps and AI, the Install tab (VD-200: the Apps, AppsInstallStates,
+ * AppsSetupActivity, AppsComposeImport and AppsPlanner boards). Colours are
+ * tokens only (tokens-auth.css); the boards' values map 1:1 (DESIGN_TOKENS).
+ */
+
+/* ---- The page, its tab strip, and the Docker pill + Reload ---- */
+
+.apps-page {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.apps-page__subtitle {
+  margin: 0;
+  color: var(--text-faint-label);
+  font-size: var(--font-size-display);
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  overflow-wrap: break-word;
+}
+
+.apps-page__tabs {
+  position: relative;
+  min-width: 0;
+}
+
+.apps-page__tab-count {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ui-tab-set__panel.apps-page__panel {
+  min-width: 0;
+  padding: var(--space-2) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  outline: none;
+}
+
+/* ---- Readiness card ---- */
+
+.apps-readiness {
+  min-width: 0;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge);
+}
+
+.apps-readiness__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.apps-readiness__text {
+  min-width: 220px;
+  flex: 1 1 0;
+  display: grid;
+  gap: 2px;
+}
+
+.apps-readiness__text strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.apps-readiness__text span {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-readiness__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.ui-button.apps-readiness__toggle {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-pill);
+  font: inherit;
+  font-size: var(--font-size-ui-sm);
+  cursor: pointer;
+}
+
+.ui-button.apps-readiness__toggle::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.ui-button.apps-readiness__toggle[aria-expanded="true"]::after { transform: translateY(2px) rotate(225deg); }
+.ui-button.apps-readiness__toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+.ui-button.apps-readiness__toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.apps-readiness__details {
+  display: grid;
+  gap: 10px;
+  padding: 0 18px 16px;
+}
+
+.apps-readiness__details-label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* ---- The five install doors ---- */
+
+.apps-doors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 14px;
+}
+
+.apps-door {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge);
+}
+
+.apps-door__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.apps-door__eyebrow {
+  color: var(--text-unread);
+  font-size: var(--font-size-ui-xs);
+  letter-spacing: .06em;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.apps-door__text h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.apps-door__text p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.apps-door__action { margin-top: auto; }
+
+.apps-door__action .ui-button-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.apps-door__action .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-door__action .ui-button__disabled-reason {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+/* ---- Messages between the cards and Running now ---- */
+
+.apps-messages {
+  display: grid;
+  gap: 12px;
+}
+
+.apps-messages > .apps-message { margin: 0; }
+
+.apps-message .ui-notice__content { flex: 1 1 auto; }
+
+.apps-message .ui-notice__content > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.apps-message__text {
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.apps-message__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.apps-message__actions .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+/* ---- Running now ---- */
+
+.ui-button.apps-link {
+  min-height: 36px;
+  padding: 0;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--font-size-ui-sm);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.ui-button.apps-link:hover { color: var(--accent-hover); }
+.ui-button.apps-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.apps-running__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+}
+
+.apps-running__row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-row);
+}
+
+.apps-running__text {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+}
+
+.apps-running__text strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.apps-running__text span {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-running__unread {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  border-top: 1px solid var(--border-row);
+}
+
+.apps-running__unread .ui-loading { flex: 1 1 auto; }
+
+/* ---- Current setup operation (OperationOwner, the setup activity board) ---- */
+
+.apps-operation-connecting .ui-card__body {
+  display: grid;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-operation__choices-lead {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+/* ---- Recent setup activity ---- */
+
+.apps-activity .ui-card__body {
+  display: grid;
+  gap: 12px;
+}
+
+.apps-job-list {
+  margin: 0 -18px;
+  padding: 0;
+  list-style: none;
+}
+
+.apps-job {
+  display: grid;
+  gap: 12px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-row);
+}
+
+.apps-job:first-child { border-top: 0; }
+
+.apps-job__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.apps-job__summary {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 4px;
+}
+
+.apps-job__summary strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.apps-job__meta {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: break-word;
+}
+
+.apps-job__summary .apps-progress {
+  max-width: 520px;
+  margin-top: 6px;
+}
+
+.apps-job__controls {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.apps-job__controls .ui-button {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-job__body {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding-left: var(--space-8);
+}
+
+.apps-job__guidance {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-job__note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-disclosure {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-disclosure summary {
+  min-height: var(--target-min);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.apps-disclosure code {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-family-data);
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.apps-job__choices {
+  display: grid;
+  gap: 10px;
+}
+
+.apps-job__files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.apps-job__file {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-job__file-text {
+  min-width: 0;
+  flex: 1 1 260px;
+  display: grid;
+  gap: 2px;
+}
+
+.apps-job__file-text strong { color: var(--text-primary); font-weight: 500; overflow-wrap: break-word; }
+.apps-job__file-text span { color: var(--text-secondary); font-size: var(--font-size-ui-xs); }
+
+.apps-job__file .ui-button,
+.apps-job__deploy .ui-button,
+.apps-pager .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-job__deploy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-job__readings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 14px;
+}
+
+.apps-job__readings > * {
+  grid-column: auto;
+  min-width: 0;
+}
+
+.apps-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-pager__buttons {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---- Compose import dialog ---- */
+
+.apps-compose__project {
+  max-width: 340px;
+  display: grid;
+  gap: 6px;
+}
+
+.apps-field-error {
+  color: var(--danger-text);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-compose .apps-compose__editor textarea,
+.apps-compose textarea.apps-compose__editor {
+  min-height: 190px;
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-sm);
+}
+
+/* A disabled footer action keeps its pill size; its reason sits under it, grey (the boards). */
+.apps-compose .apps-dialog__footer-actions .ui-button-wrap,
+.apps-planner .apps-dialog__footer-actions .ui-button-wrap {
+  max-width: 360px;
+  justify-items: end;
+}
+
+.apps-compose .ui-button__disabled-reason,
+.apps-planner .ui-button__disabled-reason {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  text-align: right;
+}
+
+/* ---- Planner dialog ---- */
+
+.apps-dialog.apps-planner { position: relative; }
+
+/* The model pill sits in the header beside Close (the board), above the body. */
+.apps-planner__capabilities {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 14px;
+}
+
+.apps-planner__capabilities .apps-inset__text small {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+.apps-planner__prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.apps-planner__prompts .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-planner__request textarea,
+textarea.apps-planner__request {
+  font-family: var(--font-family-data);
+}
+
+.apps-planner__plan {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-planner__plan-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.apps-planner__plan-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.apps-planner__plan-head strong { color: var(--text-primary); font-size: var(--font-size-ui-lg); font-weight: 500; }
+.apps-planner__plan-head p { margin: 0; color: var(--text-secondary); font-size: var(--font-size-ui-xs); }
+
+.apps-planner__plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 14px;
+}
+
+.apps-planner__plan ol,
+.apps-planner ol {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.apps-planner .apps-inset p { margin: 0; }
+
+.apps-planner__warning { color: var(--warning-text); }
+
+.apps-planner .apps-disclosure code { display: inline; margin: 0; }
+
+@media (max-width: 720px) {
+  .ui-button.apps-readiness__toggle,
+  .apps-door__action .ui-button,
+  .apps-message__actions .ui-button,
+  .apps-job__controls .ui-button,
+  .apps-job__file .ui-button,
+  .apps-job__deploy .ui-button,
+  .apps-pager .ui-button,
+  .apps-planner__prompts .ui-button,
+  .ui-button.apps-link {
+    min-height: 44px;
+  }
+
+  .apps-readiness__actions { width: 100%; }
+
+  .apps-job__head { flex-wrap: wrap; }
+  .apps-job__controls { width: 100%; justify-content: flex-start; padding-left: var(--space-8); }
+  .apps-job__body { padding-left: 0; }
+
+}

@@ -8,6 +8,8 @@
  * accepted-type rule testable in one place.
  */
 
+import { typedFromBytes } from "./format";
+
 const BINARY = /\.(pdf|docx|xlsx|pptx|xls)$/i;
 const TEXT = /\.(txt|md|markdown|json|csv|tsv|ya?ml|log|rst|ini|conf|xml)$/i;
 
@@ -49,7 +51,7 @@ export async function prepareDocumentUpload(
   limitBytes: number,
 ): Promise<DocumentUploadBody> {
   if (file.size > limitBytes) {
-    const mib = Math.round(limitBytes / (1024 * 1024));
+    const mib = typedFromBytes(limitBytes, "MiB");
     throw new Error(`This file exceeds the ${mib} MiB document limit.`);
   }
   if (!isSupportedDocument(file.name)) {

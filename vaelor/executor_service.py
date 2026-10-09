@@ -7,7 +7,19 @@ import time
 from typing import Any, Callable, Dict, Optional
 
 from .executor import JobExecutor
-from .job_vocabulary import ACTIVE_JOB_STATES
+from .job_vocabulary import (
+    ACTIVE_JOB_STATES, CLUSTER_GPU_LOAD_JOB, CLUSTER_GPU_REFRESH_JOB,
+    CLUSTER_LLM_DEPLOY_JOB,
+)
+
+#: The job types the mode reconcile treats as a deploy in flight (B3, G3a):
+#: a cluster LLM deploy, a GPU LOAD, whose ``deploying`` window re-serves
+#: an unloaded row, and the post-upgrade REFRESH, whose Load half writes the
+#: same window (W4-D1). All must be recognised here, or a load written as
+#: ``deploying`` would look like an abandoned deploy and be torn down.
+_DEPLOY_IN_FLIGHT_JOB_TYPES = frozenset(
+    {CLUSTER_LLM_DEPLOY_JOB, CLUSTER_GPU_LOAD_JOB, CLUSTER_GPU_REFRESH_JOB}
+)
 from .jobs import JobStore
 from .model_connection import assistant_model_configured
 
@@ -44,6 +56,16 @@ GPU_CHAT_SUPERVISE_INTERVAL_SECONDS = 30.0
 #: relaunch), so ticks never overlap and two relaunches can never race — the
 #: bridge also serialises launches under its own lock (VD-001).
 NPU_ASSISTANT_SUPERVISE_INTERVAL_SECONDS = 30.0
+
+#: How often the Phoenix trace-collector supervisor re-converges the container to
+#: its persisted enable flag. The trace-collector sibling of
+#: :data:`GPU_CHAT_SUPERVISE_INTERVAL_SECONDS`: restart-on-BOOT is the executor
+#: unit starting this thread (Phoenix is a bridge-launched container that a reboot
+#: kills), and restart-on-FAILURE is that same thread re-running
+#: ``apply_phoenix`` on this interval, so an enabled collector that crashed comes
+#: back without a toggle. The pass is a single loopback ``docker inspect`` when
+#: converged, so it is negligible on an idle box and a no-op when tracing is off.
+PHOENIX_SUPERVISE_INTERVAL_SECONDS = 30.0
 
 
 def launch_web_research_autostart(
@@ -208,6 +230,98 @@ def launch_gpu_chat_autostart(
     return thread
 
 
+def launch_cluster_mode_reconcile(
+    executor: JobExecutor,
+    *,
+    interval_seconds: float = GPU_CHAT_SUPERVISE_INTERVAL_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    stop: Optional[threading.Event] = None,
+) -> threading.Thread:
+    """Keep the GPU serving MODE and what is running in step (VD-125).
+
+    The mode switch's sibling of :func:`launch_gpu_chat_autostart`, in the same
+    shape and on the same interval, and it exists for the same class of reason -
+    a mode is a persisted intention, and nothing else re-asserts it:
+
+    * **Restart-on-boot.** A Mode B cluster's units are ``WantedBy=multi-user.target``
+      and come back on their own after a reboot, but nothing re-points AI Chat at
+      them or brings the LLM Server's auth proxy back in front of the cluster
+      port. The first pass does both.
+    * **Restart-on-failure, and the give-up.** A Mode B record whose deployment
+      is gone or failed is a box holding AI Chat hostage to a cluster that is not
+      there; the reconcile returns it to Mode A, and the GPU failure-watch then
+      relaunches llama.cpp on its next pass - the fallback VD-125 measured live.
+      A deploy that DIED with the executor is the same give-up, and this process
+      is the one that can tell: the pass is handed :func:`deploy_job_active`.
+
+    Both threads take :data:`~vaelor.gpu_cluster_mode.GPU_SERVING_LOCK`, so a
+    mode reconcile and a model relaunch never interleave (D5). The pass is
+    idempotent, gated (Mode A is a no-op, and an executor with no cluster
+    operations does nothing at all) and NON-FATAL - `reconcile` never raises - so
+    one bad pass can neither kill this thread nor stop the next. ``sleep`` and
+    ``stop`` are injected seams: production wires neither and the loop runs
+    forever; a test passes a fake ``sleep`` and a :class:`threading.Event`.
+    """
+    def _supervise() -> None:
+        while stop is None or not stop.is_set():
+            run_cluster_mode_reconcile(executor)
+            if stop is not None and stop.is_set():
+                return
+            sleep(interval_seconds)
+
+    thread = threading.Thread(
+        target=_supervise, name="vaelor-gpu-cluster-mode", daemon=True
+    )
+    thread.start()
+    return thread
+
+
+def deploy_job_active(executor: JobExecutor) -> bool:
+    """Whether THIS process is executing a deploy-in-flight job right now.
+
+    The witness the mode reconcile reads for "a deploy owns the switch" (VD-127,
+    B3). `JobExecutor.run_once` records the id of the job it is executing for
+    the life of that job, and the job store says what kind it is; the reconcile
+    runs on a thread of the same process, so the two are one fact rather than a
+    timer guessing at one. An executor that crashed mid-deploy comes back with
+    no active job - `main` recovers the interrupted rows before the watch
+    starts - which is exactly when the mode file's own claim must not be
+    believed. A store that cannot be read raises, and the switch's non-fatal
+    pass then keeps the current mode for one more tick rather than guessing.
+    """
+    job_id = getattr(executor, "_active_job_id", None)
+    if not job_id:
+        return False
+    record = executor.store.get(job_id)
+    return record is not None and record.get("type") in _DEPLOY_IN_FLIGHT_JOB_TYPES
+
+
+def run_cluster_mode_reconcile(executor: JobExecutor) -> Optional[Dict[str, Any]]:
+    """One mode-reconcile pass, gated and non-fatal.
+
+    Reaches the switch through ``executor.cluster``, which is the executor's own
+    :class:`vaelor.cluster_operations.ClusterOperations` - the instance that
+    carries a real switch. An executor built without one (or a control-plane
+    instance, which never gets a switch) answers ``None`` and does nothing. The
+    job fact travels as a callable so the switch reads it at the moment it
+    decides, under its own lock, not at the moment this pass was scheduled.
+    """
+    try:
+        cluster = getattr(executor, "cluster", None)
+        if cluster is None:
+            return None
+        return cluster.reconcile_gpu_cluster_mode(
+            deploy_job_active=lambda: deploy_job_active(executor),
+            # G3b: the shared job store the idle-watch enqueues a scale-to-zero
+            # cluster.gpu.unload into when a healthy deployment reads idle.
+            job_store=executor.store,
+        )
+    except Exception:
+        # A boot-time reconcile must never raise into the boot path, the same
+        # broad, non-fatal contract every autostart pass here keeps.
+        return None
+
+
 def assistant_deploy_pending(store: JobStore) -> bool:
     """Whether a ``model.deploy`` for the Assistant is already queued or running.
 
@@ -344,6 +458,94 @@ def launch_assistant_autoenable(
     return thread
 
 
+def launch_phoenix_autostart(
+    executor: JobExecutor,
+    *,
+    interval_seconds: float = PHOENIX_SUPERVISE_INTERVAL_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    stop: Optional[threading.Event] = None,
+) -> threading.Thread:
+    """Keep the Phoenix trace collector matched to its flag, OFF the job loop.
+
+    The trace-collector sibling of :func:`launch_gpu_chat_autostart`, giving the
+    observability tier BOTH restart-on-boot AND restart-on-failure: Phoenix is a
+    bridge-launched container, so a reboot kills it and nothing under the bridge
+    restarts a dead child. The first pass is the boot reconcile (an enabled
+    collector comes back after a reboot); every later pass is the failure watch (a
+    crashed one is relaunched). ``apply_phoenix`` is idempotent - a converged
+    collector is left alone - and this wrapper is non-fatal so one bad pass can
+    neither kill the thread nor stop the next. A box with tracing off no-ops every
+    pass. ``sleep`` and ``stop`` are injected seams a test drives for a bounded
+    number of passes.
+    """
+    def _supervise() -> None:
+        while stop is None or not stop.is_set():
+            try:
+                executor.apply_phoenix()
+            except Exception:  # noqa: BLE001 - a boot reconcile must never raise
+                pass
+            if stop is not None and stop.is_set():
+                return
+            sleep(interval_seconds)
+
+    thread = threading.Thread(
+        target=_supervise, name="vaelor-phoenix-autostart", daemon=True
+    )
+    thread.start()
+    return thread
+
+
+def run_agent_reconcile(executor: JobExecutor) -> Optional[Dict[str, Any]]:
+    """One cluster-agent reconcile pass (SF-A), gated and non-fatal.
+
+    Reaches the agent operations through ``executor.cluster`` (the executor's
+    own :class:`vaelor.cluster_operations.ClusterOperations`, the instance that
+    can drive the root bridge). An executor built without a cluster answers
+    ``None`` and does nothing. Every error is swallowed so a boot-time pass can
+    never keep the executor from processing jobs.
+    """
+    try:
+        cluster = getattr(executor, "cluster", None)
+        if cluster is None:
+            return None
+        return cluster.reconcile_cluster_agents(job_store=getattr(executor, "store", None))
+    except Exception:
+        return None
+
+
+def launch_agent_reconcile(
+    executor: JobExecutor,
+    *,
+    interval_seconds: float = GPU_CHAT_SUPERVISE_INTERVAL_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    stop: Optional[threading.Event] = None,
+) -> threading.Thread:
+    """Keep deployed cluster agents alive across reboot and crash, OFF the job loop.
+
+    The cluster-agent sibling of :func:`launch_phoenix_autostart`, in the same
+    shape and on the same interval: a reboot clears each agent's tmpfs configs
+    and takes its bridge-launched gate down, and nothing under the bridge
+    re-renders it. The first pass is the boot reconcile (a healthy agent whose
+    gate is down is re-rendered with its RESOLVED inbound key); every later
+    pass is the failure watch. :func:`run_agent_reconcile` is idempotent and
+    non-fatal, so one bad pass can neither kill this thread nor stop the next,
+    and a box with no deployed agents no-ops every pass. ``sleep`` and ``stop``
+    are injected seams a test drives for a bounded number of passes.
+    """
+    def _supervise() -> None:
+        while stop is None or not stop.is_set():
+            run_agent_reconcile(executor)
+            if stop is not None and stop.is_set():
+                return
+            sleep(interval_seconds)
+
+    thread = threading.Thread(
+        target=_supervise, name="vaelor-cluster-agent-reconcile", daemon=True
+    )
+    thread.start()
+    return thread
+
+
 def main() -> None:
     store = JobStore()
     store.recover_interrupted()
@@ -351,7 +553,10 @@ def main() -> None:
     launch_web_research_autostart(executor)
     launch_npu_assistant_autostart(executor)
     launch_gpu_chat_autostart(executor)
+    launch_cluster_mode_reconcile(executor)
     launch_assistant_autoenable(executor)
+    launch_phoenix_autostart(executor)
+    launch_agent_reconcile(executor)
     while True:
         completed = executor.run_once()
         time.sleep(2 if completed is None else 0.2)

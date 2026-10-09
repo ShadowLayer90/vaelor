@@ -82,6 +82,29 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+#: The account that owns the control plane's files at the state root.
+SERVICE_ACCOUNT = "vaelor"
+
+
+def _service_account() -> tuple[int, int] | None:
+    """The control plane account's ``(uid, gid)``, or ``None`` off an appliance."""
+    try:
+        import grp
+        import pwd
+
+        return (
+            pwd.getpwnam(SERVICE_ACCOUNT).pw_uid,
+            grp.getgrnam(SERVICE_ACCOUNT).gr_gid,
+        )
+    except (ImportError, KeyError):
+        return None
+
+
+def _give(path: Path, owner: tuple[int, int]) -> None:
+    if hasattr(os, "chown"):
+        os.chown(path, owner[0], owner[1])
+
+
 def _safe_relative(value: str) -> Path:
     candidate = PurePosixPath(value)
     if candidate.is_absolute() or ".." in candidate.parts or not candidate.parts:
@@ -381,6 +404,42 @@ class PortableState:
                 "The transfer archive or manifest is invalid."
             ) from error
 
+    def _owner_for(self, path: Path) -> tuple[int, int]:
+        """Who a file or folder the import writes at ``path`` must belong to.
+
+        An existing one keeps its owner, and a new one takes its folder's -
+        except directly under the state root. That folder is ``root:vaelor``
+        since ACC-063 and the import runs in the ROOT recovery broker, so its
+        owner is the wrong answer there: a new top-level file (``totp.key``,
+        ``security.sqlite3``) belongs to the control plane's account, or the
+        control plane is locked out of its own state (review B2).
+        """
+        if path.exists():
+            info = path.stat()
+            return info.st_uid, info.st_gid
+        if path.parent == self.root:
+            account = _service_account()
+            if account is not None:
+                return account
+        info = path.parent.stat()
+        return info.st_uid, info.st_gid
+
+    def _make_folders(self, path: Path) -> None:
+        """Make ``path``'s missing folders, each owned as :meth:`_owner_for` says.
+
+        A missing state root itself is only made; its owner is the installer's.
+        """
+        self.root.mkdir(parents=True, exist_ok=True)
+        missing = []
+        folder = path.parent
+        while folder != self.root and not folder.exists():
+            missing.append(folder)
+            folder = folder.parent
+        for folder in reversed(missing):
+            owner = self._owner_for(folder)
+            folder.mkdir(exist_ok=True)
+            _give(folder, owner)
+
     def import_archive(
         self,
         source: Path | str,
@@ -407,6 +466,10 @@ class PortableState:
                     destination = backup_root / path.relative_to(self.root)
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(path, destination)
+                    # copy2 keeps the mode, never the owner: the rollback
+                    # restores the owner from this copy.
+                    original = path.stat()
+                    _give(destination, (original.st_uid, original.st_gid))
         result = {
             "imported": len(manifest["files"]),
             "source_version": manifest.get("version"),
@@ -421,7 +484,7 @@ class PortableState:
                 for item in manifest["files"]:
                     relative = _safe_relative(str(item["path"]))
                     destination = self.root / relative
-                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    self._make_folders(destination)
                     temporary = destination.with_name(
                         f".{destination.name}.{uuid.uuid4().hex}.import"
                     )
@@ -433,12 +496,7 @@ class PortableState:
                     with os.fdopen(descriptor, "wb") as stream:
                         stream.write(archive.read(relative.as_posix()))
                     self._sanitize_database(temporary, relative.as_posix())
-                    owner_source = (
-                        destination if destination.exists() else destination.parent
-                    )
-                    owner = owner_source.stat()
-                    if hasattr(os, "chown"):
-                        os.chown(temporary, owner.st_uid, owner.st_gid)
+                    _give(temporary, self._owner_for(destination))
                     os.chmod(
                         temporary,
                         0o660
@@ -477,7 +535,9 @@ class PortableState:
             for suffix in ("", "-wal", "-shm"):
                 Path(str(destination) + suffix).unlink(missing_ok=True)
             if backup is not None and backup.is_file():
-                destination.parent.mkdir(parents=True, exist_ok=True)
+                self._make_folders(destination)
                 shutil.copy2(backup, destination)
+                saved = backup.stat()
+                _give(destination, (saved.st_uid, saved.st_gid))
                 restored += 1
         return {"rolled_back": True, "restored": restored}

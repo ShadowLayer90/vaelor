@@ -11,6 +11,7 @@ import urllib.request
 from typing import Any, Dict, Optional
 
 from .credential_broker import CredentialError, validate_compatible_profile
+from .hosted_providers import HOSTED_KINDS
 from .model_profiles import note_structured_rejection, profile_timeout_floor
 from .runtime_paths import env_value
 from .provider_runtime import managed_local_connection
@@ -20,6 +21,14 @@ LOGGER = logging.getLogger(__name__)
 
 MAX_PROVIDER_RESPONSE_BYTES = 2 * 1024 * 1024
 OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+#: What the shared plain-urllib inference path answers for a hosted AI Chat
+#: connection (VD-206 / VD-207); every caller turns a ValueError into its own
+#: degraded result.
+HOSTED_NOT_ON_THIS_PATH = (
+    "A hosted AI Chat connection is not used for appliance work; it is reached "
+    "only from AI Chat."
+)
 
 #: Where a normalized per-answer timing summary is stashed on a parsed response
 #: body, so a caller that discards the raw body can still surface it. See
@@ -323,6 +332,11 @@ def chat_completion(
     on LM Studio it costs a just-in-time model load before the 400, and it
     leaves the real request to run in whatever time is left.
     """
+    if str(connection.get("provider") or "") in HOSTED_KINDS:
+        # VD-206 / VD-207: a hosted AI Chat connection is reached only through
+        # `hosted_transport` (checked, pinned, no redirects). This shared path is
+        # plain urllib, so it refuses one before anything is sent.
+        raise ValueError(HOSTED_NOT_ON_THIS_PATH)
     url = "{}/chat/completions".format(connection["base_url"])
 
     def send(payload):

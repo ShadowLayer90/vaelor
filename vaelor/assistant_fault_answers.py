@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Mapping, NamedTuple, Optional
 
 from .answer_evidence import add_evidence, describe_missing
 from .assistant_answer_topics import ANSWER_TOPICS
+from .byte_units import describe_gb
 from .phrase_match import mentions
 
 
@@ -46,6 +47,13 @@ from .phrase_match import mentions
 #: whose health verdict, in the same request, said there was no warning.
 READING_BACKED_SOURCES = frozenset({
     "built-in-health", "built-in-accelerator",
+    # VD-205 item 4: the cluster answers are built from the cluster digest.
+    "built-in-cluster",
+    # VD-205 live check L1: AI Chat, LLM Server and Assistant model questions,
+    # from the serving-mode record, the AI Chat lease and the LLM Server reading.
+    "built-in-serving",
+    # Review round 2 (S4): what happened on this controller, from its records.
+    "built-in-history",
 })
 
 
@@ -118,6 +126,16 @@ def health_alert_answer(
     """
     if not asks_about_a_fault(message):
         return None
+    from .assistant_fact_access import gathered_but_unread, unread
+
+    if gathered_but_unread(facts, "health.status"):
+        # Review B1 (LESSONS 8): the verdict tool failed. That is not "nothing
+        # is wrong", and falling through let the next branch say "healthy".
+        return {
+            "answer": unread("this machine's health verdict"),
+            "evidence": [], "suggested_actions": [], "proposed_job": None,
+            "answered": False,
+        }
     health = facts.get("health.status")
     if not isinstance(health, Mapping) or not health.get("status"):
         return None
@@ -180,43 +198,57 @@ def health_alert_answer(
 def overall_verdict_line(facts: Mapping[str, Any], reading: Any = None) -> str:
     """"Overall verdict: ..." for a question about how the machine is doing.
 
-    Lives here rather than in `deployment_agent` because this module already
-    holds the rule it depends on: **the health evaluation decides what counts
-    as a concern**, against this machine's own thermal policy. Deciding again
-    beside it with a different threshold is how the Assistant said "attention
-    is needed" while the sidebar, Home and the enclosure page all said healthy
-    - LESSONS pattern 6, on one screen. Two neighbours reading one verdict are
-    now one neighbourhood.
+    **The verdict is the health evaluation's and nothing else's (review B3).**
+    It used to decide again beside it: a hard-coded 80 °C test fired when
+    ``health.status`` had no reasons, so a Z2 at 85 °C - healthy against its
+    own 97/100 °C policy - was told "attention is needed because the CPU is
+    unusually hot" (LESSONS 9: a threshold is policy, not a fact). And with
+    no verdict at all, or one that judged nothing, it said "the reported
+    hardware looks healthy" - while "is anything wrong?" in the same state
+    said nothing could be judged (LESSONS 8). Not judged is now said as not
+    judged.
 
-    ``reading`` is the single CPU temperature the caller has already resolved,
-    so this sentence cannot introduce a second sample of the same sensor.
+    Observations that are not the health evaluation's - a case fan stopped
+    with no cooling profile stopping it, an OLED detected but off - are named
+    after the verdict, as what they are, rather than folded into it.
+    ``reading`` is kept for callers and no longer decides anything.
     """
-    cooling = facts.get("cooling.status")
-    cooling = cooling if isinstance(cooling, Mapping) else {}
-    case = cooling.get("case") or {}
-    display = facts.get("display.status") or {}
-    health = facts.get("health.status")
-    concerns: List[str] = []
-    if isinstance(health, Mapping) and health.get("reasons"):
-        concerns.extend(str(item) for item in health["reasons"][:4])
-    elif isinstance(reading, (int, float)) and float(reading) >= 80:
-        concerns.append("the CPU is unusually hot")
+    from .assistant_fact_access import usable_fact
+
+    health = usable_fact(facts, "health.status")
+    checked = [str(item) for item in (health or {}).get("checked") or []]
+    reasons = [str(item) for item in (health or {}).get("reasons") or []]
+    if reasons:
+        verdict = "Overall verdict: attention is needed because {}.".format(
+            " and ".join(reasons[:4]))
+    elif health is None or not checked:
+        verdict = (
+            "Overall verdict: not judged. No processor, memory or graphics "
+            "reading in this sample could be judged, so this machine's health "
+            "is unanswered rather than clear."
+        )
+    else:
+        verdict = (
+            "Overall verdict: healthy. Vaelor judged {} against this machine's "
+            "own thresholds and every one is inside them.{}"
+        ).format(_checked_clause(checked), _unchecked_sentence(health))
+    cooling = usable_fact(facts, "cooling.status") or {}
+    case = cooling.get("case") if isinstance(cooling.get("case"), Mapping) else {}
+    display = usable_fact(facts, "display.status") or {}
+    observed: List[str] = []
     # A fan stopped *because the selected cooling profile stops it* is the
-    # product working. The tester set "02 Normal start", which holds the fans
-    # below ~60 °C, and was told their machine needed attention at 41 °C.
+    # product working, and is not named.
     if case.get("running") is False and not case.get("stopped_by_policy"):
         fan_count = int(case.get("fan_count", 0) or 0)
-        concerns.append(
-            "the {} case fan{} are stopped".format(
-                fan_count, "s" if fan_count != 1 else ""
-            ) if fan_count else "the case fans are stopped"
+        observed.append(
+            "the {} case fan{} are stopped".format(fan_count, "s" if fan_count != 1 else "")
+            if fan_count else "the case fans are stopped"
         )
-    if display and display.get("detected") and not display.get("enabled"):
-        concerns.append("the OLED is detected but disabled")
-    return "Overall verdict: {}.".format(
-        "attention is needed because " + " and ".join(concerns)
-        if concerns else "the reported hardware looks healthy"
-    )
+    if display.get("detected") and not display.get("enabled"):
+        observed.append("the OLED is detected but disabled")
+    if observed:
+        verdict += " Also needs attention: {}.".format(" and ".join(observed))
+    return verdict
 
 
 #: Words that make a question about the accelerator being slow, rather than
@@ -251,8 +283,8 @@ _ACCELERATOR_TERMS = (
 _READING_TERMS = (
     "utilisation", "utilization", "utilised", "utilized", "usage", "used",
     "using", "busy", "load", "loaded", "temperature", "temp", "temps",
-    "thermal", "hot", "warm", "heat", "degrees", "celsius",
-    "memory", "gtt", "power", "watt", "watts", "wattage", "clock", "mhz",
+    "thermal", "hot", "hotter", "hottest", "warm", "warmer", "heat", "degrees", "celsius",
+    "memory", "gtt", "vram", "power", "watt", "watts", "wattage", "clock", "mhz",
 )
 
 
@@ -363,6 +395,11 @@ def accelerator_presence_answer(
                     device.definite, ": {}".format(reason) if reason else "",
                 )
             )
+            if device.fact == "gpu.status":
+                # VD-205 item 5: the cluster's workers have GPUs of their own.
+                from .assistant_accelerator_answers import worker_gpu_lines
+
+                lines.extend(worker_gpu_lines(reading.get("cluster_machines"), evidence))
             continue
         found = [
             item for item in (reading.get(device.records) or [])
@@ -385,19 +422,49 @@ def accelerator_presence_answer(
     }
 
 
+#: One reading line, shared by every accelerator answer.
+CURRENTLY_REPORTS = "{} currently reports {}."
+
+
+def _at_the(where: str) -> str:
+    """Where a reading was taken, as the answer says it: " at the graphics engine"."""
+    return " at the {}".format(where)
+
+
+def _watts(value: float) -> str:
+    """A GPU power figure as said: an idle graphics engine draws a few hundredths of a watt."""
+    return "under 0.1 W" if value < 0.05 else "{:.1f} W".format(value)
+
+
 def _adapter_readings(adapter: Mapping[str, Any]) -> List[str]:
     stated: List[str] = []
     utilisation = adapter.get("utilisation_percent")
     if isinstance(utilisation, (int, float)) and not isinstance(utilisation, bool):
         stated.append("{:.0f}% utilisation".format(float(utilisation)))
+    power = adapter.get("power_watts")
+    if isinstance(power, (int, float)) and not isinstance(power, bool):
+        # Named by what measured it (ACC-201): the graphics engine's own draw on
+        # an integrated part, never the package's.
+        where = str(adapter.get("power_sensor") or "")
+        stated.append(_watts(float(power)) + (_at_the(where) if where else ""))
     temperature = adapter.get("temperature_c")
     if isinstance(temperature, (int, float)) and not isinstance(temperature, bool):
-        stated.append("{:.0f} °C".format(float(temperature)))
+        # The sensor is named with the figure (review B4): a graphics-engine and
+        # an edge reading are different temperatures.
+        sensor = str(adapter.get("temperature_sensor") or "")
+        stated.append("{:.0f} °C{}".format(
+            # "unlabelled sensor" already says it is one: never "sensor sensor".
+            float(temperature), _at_the(sensor if sensor.endswith("sensor") else sensor + " sensor") if sensor else "",
+        ))
     memory = adapter.get("memory") if isinstance(adapter.get("memory"), Mapping) else {}
-    for label, key in (("VRAM", "vram_used_percent"), ("GTT", "gtt_used_percent")):
+    for label, key, total in (("VRAM", "vram_used_percent", "vram_total_bytes"),
+                              ("GTT", "gtt_used_percent", "gtt_total_bytes")):
         value = memory.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            stated.append("{} at {:.0f}%".format(label, float(value)))
+            size = memory.get(total)
+            # "How much VRAM does it have" needs the size, not only the share.
+            stated.append("{} at {:.0f}%{}".format(label, float(value), " of {}".format(
+                describe_gb(size, 1)) if isinstance(size, (int, float)) and size > 0 else ""))
     return stated
 
 
@@ -446,21 +513,31 @@ def accelerator_readings_answer(
         return None
     lines: List[str] = []
     evidence: List[Dict[str, str]] = []
+    asked_power = mentions(text, ("power", "watt", "watts", "wattage"))
     for adapter in adapters:
         name = str(adapter.get("name") or "The GPU")
         stated = _adapter_readings(adapter)
         add_evidence(
             evidence, "gpu.status", dict(adapter),
-            ("utilisation_percent", "temperature_c"),
+            ("utilisation_percent", "temperature_c", "power_watts"),
         )
         if stated:
-            lines.append("{} currently reports {}.".format(name, ", ".join(stated)))
+            lines.append(CURRENTLY_REPORTS.format(name, ", ".join(stated)))
         else:
             lines.append(
                 "{} is present but reported none of the live readings - no "
                 "utilisation, temperature or memory figures were available "
                 "from its sensors.".format(name)
             )
+        if asked_power and adapter.get("power_watts") is None:
+            # The package figure is only a stand-in to refuse on an integrated
+            # part, whose hwmon power is the whole chip's (VD-040).
+            unified = (adapter.get("memory") or {}).get("unified_memory") if isinstance(adapter.get("memory"), Mapping) else False
+            lines.append("It gave no power reading, and its package figure is not the GPU's."
+                         if unified else "It gave no power reading.")
+    from .assistant_accelerator_answers import worker_gpu_lines
+
+    lines.extend(worker_gpu_lines(gpu.get("cluster_machines"), evidence, asked_power=asked_power))
     return {
         "answer": " ".join(lines),
         "evidence": evidence,
@@ -472,75 +549,14 @@ def accelerator_readings_answer(
 def accelerator_slowness_answer(
     message: str, facts: Mapping[str, Any]
 ) -> Optional[Dict[str, Any]]:
-    """Answer "why is the GPU slow" with readings, never with the question.
+    """Answer "why is it slow" with readings from the device it names.
 
-    **Low utilisation is never returned as a cause.** It was, verbatim, and it
-    is the same fact as "the GPU is slow" wearing a different noun. Where the
-    readings establish nothing, this says so and names what would settle it -
-    which is a shorter answer than the invented one and the only honest one.
+    **Low utilisation is never returned as a cause**, and high utilisation is
+    no longer described as low (review S8). The device the question names is
+    the one read: "why is the NPU slow" reads the NPU, not the GPU (review
+    B8). Lives in `assistant_accelerator_answers`; this name is kept for the
+    callers that already import it from here.
     """
-    lower = str(message or "").lower()
-    if not mentions(lower, _SLOW_TERMS):
-        return None
-    if not mentions(lower, _ACCELERATOR_TERMS):
-        return None
-    gpu = facts.get("gpu.status")
-    if not isinstance(gpu, Mapping):
-        return None
-    evidence: List[Dict[str, str]] = []
-    if not gpu.get("detected"):
-        add_evidence(evidence, "gpu.status", dict(gpu), ("detected", "reason"))
-        return {
-            "answer": (
-                "This machine reports no compute GPU{}, so nothing here is "
-                "slow because of one. Slowness on this appliance is a "
-                "processor, memory, storage or workload question, and those "
-                "are the readings to look at."
-            ).format(
-                ": {}".format(str(gpu.get("reason")).rstrip("."))
-                if gpu.get("reason") else ""
-            ),
-            "evidence": evidence,
-            "suggested_actions": [],
-            "proposed_job": None,
-        }
-    adapters = [item for item in (gpu.get("adapters") or []) if isinstance(item, Mapping)]
-    if not adapters:
-        return None
-    adapter = adapters[0]
-    stated = _adapter_readings(adapter)
-    add_evidence(
-        evidence, "gpu.status", dict(adapter),
-        ("utilisation_percent", "temperature_c", "power_watts", "clock_mhz"),
-    )
-    name = str(adapter.get("name") or "The GPU")
-    if not stated:
-        return {
-            "answer": (
-                "{} is present but reported none of the readings that would "
-                "answer this - no utilisation, no temperature, no memory "
-                "figures. I have not established a cause, and I will not name "
-                "one from an unread sensor."
-            ).format(name),
-            "evidence": evidence,
-            "suggested_actions": [],
-            "proposed_job": None,
-        }
-    return {
-        "answer": (
-            "{} currently reports {}. That is what was measured, and it does "
-            "not by itself identify a cause: low utilisation is what slowness "
-            "looks like from the outside, not why it is happening - it means "
-            "work is not reaching the accelerator, which is a question about "
-            "the workload and the backend rather than about the GPU. What "
-            "would settle it: whether the model server is offloading to the "
-            "accelerator at all, how much accelerator memory it is holding, "
-            "and whether the run is prompt-bound or generation-bound."
-        ).format(name, ", ".join(stated)),
-        "evidence": evidence,
-        "suggested_actions": [
-            "Open the local AI engines panel to see whether the model server "
-            "is accelerated or has fallen back to the CPU.",
-        ],
-        "proposed_job": None,
-    }
+    from .assistant_accelerator_answers import slowness_answer
+
+    return slowness_answer(message, facts)

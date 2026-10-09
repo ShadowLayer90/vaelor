@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import time
 import subprocess
@@ -26,10 +27,11 @@ from .assistant_memory import AssistantMemoryStore
 from .jobs import JobStore
 from .app_catalog import APP_TEMPLATES, build_install_env, media_host_dir, render_compose
 from .credential_broker import CredentialBrokerClient, CredentialError
+from .credential_use import note_credential_use
 from .docker_health import container_runtime_healthy
 from .copilot_setup import local_runtime_settings
 from .inference_tuning import RECOMMENDED_RUNTIME_MODE
-from .system_update import SystemUpdateClient
+from .system_update import SystemUpdateClient, system_update_message
 from .appliance_recovery import (
     ApplianceRecoveryClient, CONFIRMATION as RESET_CONFIRMATION,
     IMPORT_CONFIRMATION, UNINSTALL_CONFIRMATION,
@@ -37,6 +39,8 @@ from .appliance_recovery import (
 from .host_desktop import HostDesktopClient
 from .cluster_operations import ClusterOperations
 from .cluster_jobs import execute_cluster_job
+from .cluster_placement import refuse_assistant_placement
+from .gpu_model_confinement import servable_cache_relative
 from .local_model_files import model_file, model_hardware_budget, remove_model
 from .model_discovery import inspect_models, verify_inspected_selection
 from .runtime_paths import data_path
@@ -54,26 +58,36 @@ from .release_source import default_release_source
 from .application_search import SearxSearchClient
 from .application_executor import (
     application_learning_store,
+    capture_compose_images,
     condense_docker_error,
+    note_secret_uses,
     stored_application_environment,
     wait_for_application_health,
 )
 from .executor_application_jobs import ExecutorApplicationJobsMixin
+from .executor_release_model import ExecutorReleaseModelMixin
 from .executor_appliance_upgrade import ExecutorApplianceUpgradeMixin
 from .executor_compose_lifecycle import ExecutorComposeLifecycleMixin
 from .executor_gpu_deploy import ExecutorGpuDeployMixin
+from .executor_llm_server import ExecutorLlmServerMixin
 from .executor_model_deploy import ExecutorModelDeployMixin
+from .executor_phoenix import ExecutorPhoenixMixin
+from .gpu_memory_pool_nodes import HOST_GPU_MEMORY_JOB, run_controller_pool_job
+from .app_port_claims import model_port_holders, refuse_model_port
 from .executor_network import (
     available_model_port, deployment_copilot_result, ensure_extra_host_ports_available,
     ensure_host_port_available,
 )
 from .web_research import SEARCH_URL, WebResearchError, WebResearchManager
 
+LOGGER = logging.getLogger(__name__)
+
 
 class JobExecutor(
     ExecutorApplicationJobsMixin, ExecutorApplianceUpgradeMixin,
     ExecutorComposeLifecycleMixin, ExecutorModelDeployMixin,
-    ExecutorGpuDeployMixin,
+    ExecutorGpuDeployMixin, ExecutorLlmServerMixin, ExecutorPhoenixMixin,
+    ExecutorReleaseModelMixin,
 ):
     """Process one allowlisted job without invoking a shell."""
 
@@ -105,7 +119,6 @@ class JobExecutor(
         self.release_source = default_release_source()  # upgrade mixin reads via getattr
         self.web_research = web_research or WebResearchManager(
             docker_healthy=container_runtime_healthy)
-        self.cluster = ClusterOperations()
         self.application_deployments = (
             application_deployments
             or ApplicationDeploymentStore(str(
@@ -114,11 +127,23 @@ class JobExecutor(
                 / "applications.sqlite3"
             ))
         )
+        # The cluster operations share THIS executor's approved-draft store and
+        # workload root, so the researched-app cluster deploy (D4a) resolves and
+        # validates against the same drafts the single-node import path does —
+        # no second store, no path drift.
+        self.cluster = ClusterOperations.for_executor(
+            application_deployments=self.application_deployments,
+            workloads_root=self.workloads_root,
+        )
+        # B1: the switch asks THIS executor's GPU watch whether the way-back
+        # door will be fronted - the watch's own dispatch, never a copy.
+        if getattr(self.cluster, "gpu_mode_switch", None) is not None:
+            self.cluster.gpu_mode_switch.relaunch_fronted = self.gpu_chat_relaunch
         self.application_learning = application_learning or application_learning_store(self.workloads_root)
         self.credential_broker = credential_broker or CredentialBrokerClient()
         self.application_research = application_research or ApplicationResearchIntelligence(
             ApplicationResearchClient(),
-            lambda: resolve_model_connection(self.credential_broker),
+            lambda mode="": resolve_model_connection(self.credential_broker, mode=mode),
             search_client=SearxSearchClient(SEARCH_URL),
             # #247r: the same owned lifecycle the executor autostart uses, so an
             # application-research job auto-provisions guarded web research on
@@ -185,6 +210,8 @@ class JobExecutor(
                     job["id"], state="completed",
                     message="Model downloaded and verified", result=result,
                 )
+            if job["type"] in ("model.deploy", "model.install_release"):
+                refuse_assistant_placement(job["payload"])  # G5, VD-194
             if job["type"] == "model.deploy":
                 result = self._deploy_model(job["payload"])
                 if self.preference_store is not None:
@@ -206,10 +233,12 @@ class JobExecutor(
                     message="On-device NPU model installed and serving",
                     result=result,
                 )
+            if job["type"] == "llm_server.apply":
+                return self.run_llm_server_apply(job)
+            if job["type"] == "phoenix.apply":
+                return self.run_phoenix_apply(job)
             if job["type"] == "model.remove":
-                raise ValueError(
-                    "Legacy model removal is blocked. Review a managed removal plan."
-                )
+                raise ValueError("Legacy model removal is blocked. Review a managed removal plan.")
             if job["type"] == "managed.remove":
                 result = self._remove_managed(
                     job["payload"], job.get("actor", ""), job["id"]
@@ -305,7 +334,7 @@ class JobExecutor(
                     job["id"],
                     state="completed",
                     message="Updates downloaded and staged" if action == "stage"
-                    else "System updates installed",
+                    else system_update_message(result),
                     result=result,
                 )
             if job["type"] == "appliance.factory-reset":
@@ -406,6 +435,8 @@ class JobExecutor(
                     message="Memory policy applied without a reboot",
                     result=result,
                 )
+            if job["type"] == HOST_GPU_MEMORY_JOB:
+                return run_controller_pool_job(job, self.store, self._checkpoint)
             if job["type"] == "host.web-research.manage":
                 action = str(job["payload"].get("action", ""))
                 self._checkpoint(
@@ -451,6 +482,20 @@ class JobExecutor(
                 message=str(error),
                 result={"code": "job_failed"},
             )
+        except Exception as error:  # noqa: BLE001 - the job boundary
+            # A handler's own defect is THIS job's failure, not the process's:
+            # the GPU cluster mode switch's first live run raised AttributeError
+            # here, the loop died, systemd restarted it, and the job came back
+            # "interrupted" with no message of its own. The four types above
+            # carry a sentence written for the operator; anything else carries
+            # its type, and the traceback goes to the journal.
+            LOGGER.exception("Job %s (%s) failed unexpectedly", job["id"], job["type"])
+            return self.store.finish(
+                job["id"],
+                state="failed",
+                message="{}: {}".format(type(error).__name__, error),
+                result={"code": "job_failed"},
+            )
         finally:
             self._active_job_id = None
 
@@ -477,85 +522,13 @@ class JobExecutor(
     def _validate_repo_file(repo: str, filename: str):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
             raise ValueError("Choose a valid Hugging Face repository.")
-        if (
-            not filename.lower().endswith(".gguf")
-            or filename.startswith(("/", "\\"))
-            or ".." in Path(filename).parts
-            or "\\" in filename
-        ):
-            raise ValueError("Choose a safe GGUF file from the selected repository.")
-
-    def _install_release_model(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Install and serve a fine-tuned NPU model from its pinned release.
-
-        Unlike a Hugging Face GGUF (download then deploy), a fine-tune arrives as
-        a release: the job carries only the flm tag, and the catalog holds the
-        pinned source URL and sha256 - the trust anchor is the code shipped in the
-        wheel, never the job payload. The download, sha-verify and unpack into the
-        snap paths flm serves from happen as root behind the hardware bridge
-        (:meth:`HardwareBridgeClient.flm_install_release`), then the shared NPU-
-        assistant deploy the reconcile uses brings the model up and health-checks
-        it - here driven by an explicit plan built from the known tag rather than
-        the fit ladder, which does not stock release models. A long client timeout
-        covers the multi-GB download; the bridge serialises it under its flm lock.
-        """
-        from .flm_service import npu_model_present
-        from .hardware_bridge import HardwareBridgeClient
-        from .model_catalog import catalog_release_for_tag
-
-        release = catalog_release_for_tag(str(payload.get("tag") or ""))
-        if release is None:
+        # The GPU launch's own rule for the path below the cache (ACC-064): a
+        # name it would refuse to serve is refused before any byte is fetched.
+        if not servable_cache_relative(repo.replace("/", "--") + "/" + filename):
             raise ValueError(
-                "No release-installable on-device model matches this request."
-            )
-        # Report progress. The download is a single multi-GB blocking call into
-        # the root bridge, so this cannot tick byte-by-byte, but a person watching
-        # the setup screen must see that a large download is under way and roughly
-        # where it is - not a silent gap that reads as "nothing is happening"
-        # (the setup UX defect). The states are the ones UpdateJobStatus renders.
-        self._checkpoint(
-            5, "Preparing the on-device model install.", state="running")
-        # Skip the multi-GB download when the model is already installed on disk.
-        # `fetch-npu-model.sh` installs the NPU model into
-        # `/var/lib/vaelor/flm/models` on a clean box, and the first-boot
-        # auto-enable enqueues this deploy to serve+pin it. Re-downloading it
-        # would be pointless (and would fail on a box with no release source), so
-        # a present model dir goes straight to the serve+pin path below.
-        if not npu_model_present():
-            self._checkpoint(
-                10,
-                "Downloading and verifying the on-device model (about 3.4 GiB). "
-                "This can take a few minutes on a slow connection.",
-                state="downloading",
-            )
-            HardwareBridgeClient(timeout=1200).flm_install_release(
-                release["source_url"], release["sha256"]
-            )
-        else:
-            # Stay below the deploy's 45%: this is not the final progress, the
-            # serve stages below are.
-            self._checkpoint(
-                15, "The on-device model is already on disk.", state="running")
-        # The install placed OUR flm-real + model in the snap paths, so serve the
-        # known tag directly. A pathless `_deploy_model` would consult the fit
-        # ladder (`should_serve_on_npu`), which stocks only Hugging Face GGUFs and
-        # cannot pick a release model on a fresh box - it would fall through to the
-        # llama.cpp path and fail with "Choose a downloaded managed GGUF model".
-        # We know the tag, so we build the plan `_deploy_npu_assistant` needs and
-        # call it: launch flm-real, health-check, pin + activate the managed
-        # credential on the served tag - the same path the reconcile uses.
-        #
-        # No checkpoint here: `_deploy_npu_assistant` below reports "Starting the
-        # neural processor model server" at 45% and climbs to 95%, so its first
-        # step is the next thing the progress bar shows - keeping it monotonic
-        # rather than jumping to 90% and then back to 45%.
-        plan = {
-            "flm_tag": release["tag"],
-            "context_tokens": 16384,
-            "model": release["name"],
-            "context_reason": "",
-        }
-        return self._deploy_npu_assistant({"surface": "assistant"}, {"plan": plan})
+                "Choose a safe GGUF file from the selected repository: its name "
+                "may use only letters, digits, '.', '_' and '-' in '/'-separated "
+                "folders, which is all the GPU server will launch.")
 
     def _download_model(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         repo = str(payload.get("repo", "")).strip()
@@ -688,9 +661,9 @@ class JobExecutor(
                 method=request.get_method(),
             )
             try:
-                return urllib.request.urlopen(
-                    authenticated, timeout=self.timeout_seconds
-                )
+                opened = urllib.request.urlopen(authenticated, timeout=self.timeout_seconds)
+                note_credential_use(lease)
+                return opened
             except urllib.error.HTTPError as authenticated_error:
                 if authenticated_error.code in (401, 403):
                     raise ValueError(
@@ -757,7 +730,16 @@ class JobExecutor(
             raise ValueError((result.stderr or "Compose validation failed.")[:1000])
         return {"project": project.name, "compose_file": str(compose_file)}
 
-    def _compose(self, project: Path, *arguments: str, timeout: int = 120):
+    def _compose(
+        self, project: Path, *arguments: str, timeout: int = 120,
+        cancellable: bool = True,
+    ):
+        """Run one ``docker compose`` verb for ``project``.
+
+        ``cancellable=False`` is for cleanup after a cancel (W4d-D25): the
+        cancel flag stays set until the job finishes, so a cancellable rollback
+        was itself cancelled before it ran and left the project behind.
+        """
         docker = shutil.which("docker")
         if docker is None:
             raise RuntimeError("Docker is not installed.")
@@ -775,7 +757,10 @@ class JobExecutor(
             )
             deadline = time.monotonic() + timeout
             while process.poll() is None:
-                if self._active_job_id and self.store.is_cancelling(self._active_job_id):
+                if (
+                    cancellable and self._active_job_id
+                    and self.store.is_cancelling(self._active_job_id)
+                ):
                     process.terminate()
                     try:
                         process.wait(timeout=5)
@@ -790,6 +775,7 @@ class JobExecutor(
             text = output.read()[-65536:]
         if process.returncode != 0:
             raise ValueError(condense_docker_error(text, "Docker operation failed"))
+        note_secret_uses(environment)
         return {"returncode": process.returncode, "output": text}
 
     def _install_template(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -814,6 +800,11 @@ class JobExecutor(
             raise ValueError("This app already has a different managed configuration.")
         if not compose_existed:
             ensure_host_port_available(port, socket.socket)
+            # W6-D2: a port that binds is not free if a stored model comes
+            # back on it.
+            refuse_model_port(
+                port, model_port_holders(self.credential_broker), socket.socket,
+            )
             ensure_extra_host_ports_available(
                 APP_TEMPLATES[template_id]["name"],
                 APP_TEMPLATES[template_id].get("extra_ports", []),
@@ -867,7 +858,11 @@ class JobExecutor(
         """Remove a managed project this run created but could not complete."""
         if compose_file.exists():
             try:
-                self._compose(project, "down", "--remove-orphans", timeout=180)
+                # Not cancellable (W4d-D25): a cancel is a reason to clean up.
+                self._compose(
+                    project, "down", "--remove-orphans", timeout=180,
+                    cancellable=False,
+                )
             except Exception:
                 # A failed teardown must not stop us removing the orphan
                 # directory, which is the part that bricks re-install.
@@ -892,6 +887,11 @@ class JobExecutor(
         if action not in commands:
             raise ValueError("Choose a supported app action.")
         self._checkpoint(30, "{} app".format(action.capitalize()), "starting")
+        if action == "restart":
+            # W4d-D12: `compose restart` never re-reads compose.yaml, so a
+            # configuration saved from the console stayed un-applied through
+            # every Restart. `up -d` first recreates only what changed.
+            self._compose(project, "up", "-d", "--remove-orphans", timeout=180)
         if action != "update":
             self._compose(project, *commands[action], timeout=180)
             return {"project": project.name, "action": action}
@@ -923,13 +923,19 @@ class JobExecutor(
             )
             rollback_file.chmod(0o660)
             try:
-                self._checkpoint(85, "Restoring the previous application images", "starting")
+                # Not cancellable (W4d-D25): a cancelled update must still put
+                # the previous images back, and the cancel flag is still set.
+                if not self.store.is_cancelling(self._active_job_id or ""):
+                    self._checkpoint(85, "Restoring the previous application images", "starting")
                 self._compose(
                     project, "-f", str(rollback_file), "up", "-d", "--remove-orphans",
-                    timeout=180,
+                    timeout=180, cancellable=False,
                 )
                 wait_for_application_health(
-                    lambda: self._compose(project, "ps", "--format", "json", timeout=30),
+                    lambda: self._compose(
+                        project, "ps", "--format", "json", timeout=30,
+                        cancellable=False,
+                    ),
                     sorted(previous_images),
                 )
             except Exception as rollback_error:
@@ -954,39 +960,7 @@ class JobExecutor(
         }
 
     def _capture_compose_images(self, project: Path) -> Dict[str, str]:
-        """Capture immutable image IDs for every running Compose service."""
-        result = self._compose(project, "ps", "--format", "json", timeout=30)
-        raw = str(result.get("output", "")).strip()
-        if not raw:
-            return {}
-        try:
-            parsed = json.loads(raw)
-            rows = parsed if isinstance(parsed, list) else [parsed]
-        except json.JSONDecodeError:
-            try:
-                rows = [json.loads(line) for line in raw.splitlines() if line.strip()]
-            except json.JSONDecodeError:
-                return {}
-        docker = shutil.which("docker")
-        if docker is None:
-            return {}
-        captured: Dict[str, str] = {}
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            service = str(row.get("Service", row.get("service", ""))).strip()
-            container_id = str(row.get("ID", row.get("Id", row.get("id", "")))).strip()
-            if not service or not container_id:
-                continue
-            inspected = subprocess.run(
-                [docker, "inspect", "--format", "{{.Image}}", container_id],
-                capture_output=True, check=False, text=True, timeout=30,
-            )
-            image_id = inspected.stdout.strip()
-            if inspected.returncode != 0 or not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
-                return {}
-            captured[service] = image_id
-        return captured
+        return capture_compose_images(self._compose, project)
 
     @staticmethod
     def _reject_secret_lines(content: str):
@@ -997,4 +971,9 @@ class JobExecutor(
         reject_unsafe_keys(content)
 
     def _validate_normalized_compose(self, normalized: Dict[str, Any], project: Path):
-        validate_normalized(normalized, self.workloads_root)
+        # W7-2: the import path (and a researched app, an import of its draft)
+        # refuses a port a stored model comes back on, like the blueprint.
+        validate_normalized(
+            normalized, self.workloads_root,
+            model_ports=model_port_holders(self.credential_broker),
+        )

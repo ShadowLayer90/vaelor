@@ -237,6 +237,19 @@ def _validate(command: Any) -> list[str]:
         and _managed_service(command[3])
     ):
         return command
+    # D3 bulk app-state read: ONE `docker service inspect name1 name2 …` over
+    # the Vaelor app services the status list already named, so the Deployments
+    # view derives each row's honest state from a single inspect for the whole
+    # fleet instead of one call per row. Every name is re-validated as a
+    # Vaelor-managed service exactly as the single-name inspect above — this
+    # shape only widens the COUNT, never the target set, so a non-Vaelor or
+    # malformed name anywhere fails the `all(...)` and the command is refused.
+    if (
+        len(command) >= 5
+        and command[:3] == ["docker", "service", "inspect"]
+        and all(_managed_service(item) for item in command[3:])
+    ):
+        return command
     if (
         len(command) == 7
         and command[:3] == ["docker", "service", "ps"]

@@ -13,11 +13,14 @@ export interface SkillDraft {
 export function SkillEditorDialog({
   skill,
   busy,
+  error,
   onCancel,
   onSave,
 }: {
   skill: AssistantSkill | null;
   busy: boolean;
+  /** Why the save was refused (VD-189): shown inside this dialog. */
+  error?: string;
   onCancel: () => void;
   onSave: (draft: SkillDraft) => void;
 }) {
@@ -53,11 +56,12 @@ export function SkillEditorDialog({
   };
   return (
     <ModalShell
-      className="skill-editor"
+      className="skill-editor as-dialog"
+      error={error || undefined}
       initialFocusRef={nameRef}
       labelledBy="skill-editor-title"
       onClose={requestClose}
-      size="standard"
+      size="wide"
     >
       <form
         onSubmit={(event) => {
@@ -65,37 +69,51 @@ export function SkillEditorDialog({
           onSave(draft);
         }}
       >
-        <h2 id="skill-editor-title">Revise {skill.name}</h2>
-        <p>Saving creates version {skill.version + 1}. The revision stays inactive until you review and approve it again.</p>
-        <Input
-          disabled={busy}
-          label="Skill name"
-          maxLength={100}
-          onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-          ref={nameRef}
-          value={draft.name}
-        />
-        <Input
-          disabled={busy}
-          label="When should it be used?"
-          maxLength={300}
-          onChange={(event) => setDraft({ ...draft, description: event.target.value })}
-          value={draft.description}
-        />
-        <Textarea
-          disabled={busy}
-          label="Reviewed instructions"
-          maxLength={8000}
-          onChange={(event) => setDraft({ ...draft, content: event.target.value })}
-          rows={7}
-          value={draft.content}
-        />
-        <div className="dialog__actions">
-          <Button disabled={busy} onClick={requestClose} variant="quiet">
+        <div className="as-dialog__head">
+          <div>
+            <span className="as-label">Reviewed skills</span>
+            <h2 id="skill-editor-title">Revise {skill.name}</h2>
+            <p>Saving creates version {skill.version + 1}. The revision stays inactive until you review and approve it again.</p>
+          </div>
+        </div>
+        <div className="as-dialog__body">
+          <div className="as-grid2">
+            <Input
+              disabled={busy}
+              label="Skill name"
+              maxLength={100}
+              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+              ref={nameRef}
+              value={draft.name}
+            />
+            <Input
+              disabled={busy}
+              label="When should it be used?"
+              maxLength={300}
+              onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+              value={draft.description}
+            />
+          </div>
+          <Textarea
+            disabled={busy}
+            label="Reviewed instructions"
+            maxLength={8000}
+            onChange={(event) => setDraft({ ...draft, content: event.target.value })}
+            rows={7}
+            value={draft.content}
+          />
+        </div>
+        <div className="as-dialog__foot">
+          <Button disabled={busy} onClick={requestClose}>
             Cancel
           </Button>
-          <Button disabled={busy || !valid} type="submit" variant="primary">
-            {busy ? "Saving..." : "Save new version"}
+          <Button
+            disabled={busy || !valid}
+            disabledReason={!busy && !valid ? "Fill in all three fields" : undefined}
+            type="submit"
+            variant="primary"
+          >
+            {busy ? "Saving…" : "Save new version"}
           </Button>
         </div>
       </form>

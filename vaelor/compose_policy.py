@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 
 FORBIDDEN_KEYS = {
@@ -144,8 +144,18 @@ def reject_unsafe_keys(content: str) -> None:
 
 
 def validate_normalized(
-    normalized: Dict[str, Any], workloads_root: Path
+    normalized: Dict[str, Any], workloads_root: Path, *,
+    model_ports: Mapping[int, str],
 ) -> None:
+    """Refuse a normalized compose this appliance must not run.
+
+    ``model_ports`` is ``{port: holder}`` for every port a stored Vaelor model
+    comes back on (`app_port_claims.model_port_holders`). It is required, with
+    no default (W7-2, LESSONS 7): the import, researched-app, config-edit and
+    restore paths each called this without it, and an app took the port the
+    stopped AI Chat model returns on. Pass ``{}`` only where no local model can
+    hold the port, and say why at the call.
+    """
     workloads_root = workloads_root.resolve()
     for key in ("configs", "secrets", "include"):
         if normalized.get(key):
@@ -244,3 +254,7 @@ def validate_normalized(
                     name, MAX_CPU_LIMIT
                 )
             )
+    if model_ports:
+        from .app_port_claims import refuse_claimed_ports
+
+        refuse_claimed_ports(services, dict(model_ports))

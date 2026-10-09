@@ -28,6 +28,7 @@ from .application_intent_refinement import (
     validate_refinement,
 )
 from .application_learning import ApplicationLearningError
+from .model_connection import escalation_refusal
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -38,6 +39,7 @@ _RAW_COMPOSE_KEYS = frozenset({
 MAX_SOURCES = 8
 MAX_ERROR = 500
 MAX_REQUEST_BYTES = 64 * 1024
+_QUEUE_UNAVAILABLE_MESSAGE = "Durable application research is temporarily unavailable."
 
 
 def register_application_routes(context: ApiContext) -> None:
@@ -395,7 +397,7 @@ def register_application_routes(context: ApiContext) -> None:
                 job = job_store.create(
                     "application.research",
                     g.auth_session.username,
-                    {"draft_id": draft_id, "source_urls": source_urls},
+                    {"draft_id": draft_id, "mode": "", "source_urls": source_urls},
                 )
                 audit(
                     action, "queued", draft_id,
@@ -406,7 +408,7 @@ def register_application_routes(context: ApiContext) -> None:
             if not callbacks.get("application_inline_research_for_tests", False):
                 raise _RouteFailure(
                     "application_research_queue_unavailable",
-                    "Durable application research is temporarily unavailable.",
+                    _QUEUE_UNAVAILABLE_MESSAGE,
                     503,
                 )
             researcher = callbacks.get("application_research_manifest")
@@ -432,6 +434,80 @@ def register_application_routes(context: ApiContext) -> None:
             sources=len(result["manifest"].get("sources", [])),
         )
         return payload(result)
+
+    @blueprint.post("/applications/drafts/<draft_id>/research/capable")
+    @require_auth("administrator", csrf=True)
+    def application_draft_research_capable(draft_id: str):
+        """Re-run research on the capable GPU model, gated on a live lease.
+
+        Mirrors the default research route and the agent-task capable re-run: it
+        enqueues ONE ``application.research`` job with ``mode="capable"`` on the
+        draft. Idempotent - the capable payload dedupes against an in-flight
+        capable job (and never against the default one). Gated honestly: when no
+        AI-Chat lease is active the graphics model is genuinely unavailable, so it
+        returns an actionable message rather than a generic failure, and never
+        silently downshifts to the assistant.
+        """
+        action = "application.draft.research.capable"
+        try:
+            require_feature("research")
+            request_body = body({"source_urls"})
+            source_urls = _source_urls(request_body.get("source_urls"))
+            current = store().get(draft_id, g.auth_session.username)
+            if current is None:
+                raise ApplicationDeploymentError("The application draft was not found.")
+            # Carry forward the sources that produced the draft's CURRENT manifest
+            # so the graphics-model re-run is strictly additive: it re-discovers
+            # with at least the official source(s) the prior pass already
+            # verified, rather than from scratch (where it could fail to re-find
+            # an operator-supplied source and lose a working plan). The auto-
+            # escalation already passes its urls; this is the manual route's
+            # equivalent. An explicit request body wins; a draft with no cited
+            # sources keeps []. Deduped, capped, and validated the same way an
+            # operator-supplied list is.
+            if not source_urls:
+                manifest = current.get("manifest")
+                carried = list(dict.fromkeys(
+                    url for item in (manifest.get("sources", []) if isinstance(manifest, dict) else [])
+                    if isinstance(item, dict)
+                    and isinstance((url := item.get("url")), str)
+                    and url.startswith("https://")
+                ))[:MAX_SOURCES]
+                if carried:
+                    source_urls = _source_urls(carried)
+            available = callbacks.get("application_capable_available")
+            needs_approval = escalation_refusal(callbacks.get("credential_broker"))
+            if needs_approval:
+                # VD-207: an external AI Chat model is never escalated to
+                # without the owner's approval, which is not built yet.
+                raise _RouteFailure("application_capable_needs_approval", needs_approval, 409)
+            if not (callable(available) and bool(available())):
+                raise _RouteFailure(
+                    "application_capable_model_unavailable",
+                    "The graphics model is unavailable; using the assistant's "
+                    "result. Deploy or lease the AI Chat model, then retry.",
+                    409,
+                )
+            job_store = callbacks.get("job_store")
+            if job_store is None:
+                raise _RouteFailure(
+                    "application_research_queue_unavailable",
+                    _QUEUE_UNAVAILABLE_MESSAGE,
+                    503,
+                )
+            job = job_store.create(
+                "application.research",
+                g.auth_session.username,
+                {"draft_id": draft_id, "mode": "capable", "source_urls": source_urls},
+            )
+        except Exception as error:
+            return failure(action, error, draft_id)
+        audit(
+            action, "queued", draft_id,
+            job_id=job["id"],
+            deduplicated=bool(job.get("deduplicated")),
+        )
+        return payload({"draft": present(current), "job": job}, status=202)
 
     @blueprint.post("/applications/drafts/<draft_id>/configure")
     @require_auth("administrator", csrf=True)

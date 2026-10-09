@@ -8,7 +8,7 @@ reported"*.
 
 **On a machine that is serving that sentence over HTTP, the sentence is never
 true.** It was being shown on a workstation answering on ``enp193s0`` at
-192.168.4.58. An empty list is not the absence of interfaces; it is the absence
+192.0.2.58. An empty list is not the absence of interfaces; it is the absence
 of an answer, and the two were indistinguishable in the payload.
 
 The likely cause on that machine is in this repository, not on it.

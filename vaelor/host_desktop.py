@@ -20,6 +20,8 @@ from .host_desktop_tls import (
     RDP_TLS_KEY,
     rdp_certificate_fingerprint,
     install_rdp_tls,
+    rdp_service_cause,
+    remove_rdp_tls_pair,
 )
 from .host_desktop_vnc import (
     MANAGED_DESKTOP_USER,
@@ -47,6 +49,24 @@ SOCKET_PATH = env_value(
 MAX_REQUEST_BYTES = 4096
 RDP_PORT = 3389
 VNC_PORT = 5901
+#: The OS packages the browser desktop commission installs. Named once so the
+#: install and the bare-OS purge marker below agree, and so a test can compare
+#: them without retyping the strings.
+DESKTOP_PACKAGES = ("tigervnc-standalone-server", "gnome-session-flashback")
+#: The record `maintain-vaelor.sh --bare-os` reads to purge only what Vaelor
+#: added (S4 / the "nothing the installer did not add" promise). The installer
+#: writes it for the packages IT installs; the browser desktop is commissioned
+#: later, on the operator's request, so it appends the packages it installs to
+#: the SAME marker - otherwise a bare-OS teardown could not tell a Vaelor-added
+#: TigerVNC from the operator's. It sits beside the staged release scripts,
+#: outside every tree the teardown removes until last. Overridable so a test can
+#: point it at a temp file.
+INSTALLED_BY_VAELOR_MARKER = Path(
+    env_value(
+        "VAELOR_INSTALLED_MARKER", "PM_INSTALLED_MARKER",
+        "/usr/lib/vaelor/release/installed-by-vaelor",
+    )
+)
 #: How long the browser desktop gets to start accepting connections, whether
 #: it is being commissioned or restarted after a session was ended.
 #:
@@ -273,7 +293,7 @@ def _verify_rdp_configuration(expected_username: str, expected_password: str) ->
     missing = [
         name
         for name, value in (
-            ("remote login is enabled", "Status: enabled"),
+            ("the switch that turns remote login on", "Status: enabled"),
             ("the TLS certificate", f"TLS certificate: {RDP_TLS_CERT}"),
             ("the TLS key", f"TLS key: {RDP_TLS_KEY}"),
             ("the user name", f"Username: {expected_username}"),
@@ -283,9 +303,21 @@ def _verify_rdp_configuration(expected_username: str, expected_password: str) ->
         if value not in result.stdout
     ]
     if missing:
+        # W4d-D22: this was "did not retain remote login is enabled, the TLS
+        # certificate, ..." - a list that did not read, a cause it did not
+        # name, and no next step. The service's own state is the cause when it
+        # has stopped, so it is read and said.
+        listed = (
+            missing[0] if len(missing) == 1
+            else "{} and {}".format(", ".join(missing[:-1]), missing[-1])
+        )
         raise RuntimeError(
-            "GNOME Remote Login did not retain {}. No usable RDP setup was "
-            "reported.".format(", ".join(missing))
+            "GNOME Remote Login did not retain {}. {} Remote login is not set "
+            "up and nothing else was changed. Try Set up Remote Login again; if "
+            "this repeats, the service's log on the appliance says why "
+            "(journalctl -u gnome-remote-desktop).".format(
+                listed, rdp_service_cause()
+            )
         )
 
 
@@ -421,15 +453,17 @@ def disable_rdp() -> Dict[str, Any]:
     )
     _run(["/usr/bin/grdctl", "--system", "rdp", "clear-credentials"], timeout=30)
     _run(["/usr/bin/grdctl", "--system", "rdp", "disable"], timeout=30)
-    RDP_TLS_CERT.unlink(missing_ok=True)
-    RDP_TLS_KEY.unlink(missing_ok=True)
+    tls = remove_rdp_tls_pair()  # by descriptor, never by path (R2-9, VD-185)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", RDP_PORT), timeout=0.4):
                 time.sleep(0.5)
         except OSError:
-            return {"available": False, "port": RDP_PORT, "credentials_cleared": True}
+            return {
+                "available": False, "port": RDP_PORT, "credentials_cleared": True,
+                "certificate_removed": tls["removed"], "certificate_detail": tls["detail"],
+            }
     raise RuntimeError("Ubuntu RDP did not close port 3389 after being disabled.")
 
 
@@ -550,6 +584,55 @@ def end_desktop_session() -> Dict[str, Any]:
     }
 
 
+def _package_installed(package: str) -> bool:
+    """Whether dpkg reports ``package`` currently installed (Status-Abbrev ii).
+
+    Absent dpkg (or any query failure) reads as "not installed": the marker's
+    purpose is to say what Vaelor added, and a box where dpkg cannot be asked is
+    not one this teardown promise governs.
+    """
+    try:
+        result = subprocess.run(
+            ["dpkg-query", "-W", "-f=${db:Status-Abbrev}", package],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and result.stdout.strip().startswith("ii")
+
+
+def _record_installed_packages(packages) -> None:
+    """Append packages Vaelor just installed to the bare-OS purge marker.
+
+    A name already recorded is not written twice, so re-commissioning does not
+    duplicate lines. Best-effort: the desktop is commissioned whether or not the
+    marker can be written, so a marker failure never fails the commission - it
+    only means a later ``--bare-os`` teardown falls back to its full list.
+    """
+    packages = [package for package in packages if package]
+    if not packages:
+        return
+    # The installer stages the release directory; the marker is appended to, not
+    # created from here. If the directory is absent (a dev box, or a build that
+    # never ran the installer) there is nothing to record against, so skip - this
+    # never creates /usr/lib/vaelor on a machine the installer did not touch.
+    if not INSTALLED_BY_VAELOR_MARKER.parent.is_dir():
+        return
+    try:
+        existing = set()
+        if INSTALLED_BY_VAELOR_MARKER.exists():
+            existing = set(
+                INSTALLED_BY_VAELOR_MARKER.read_text(encoding="utf-8").split()
+            )
+        new = [package for package in packages if package not in existing]
+        if new:
+            with INSTALLED_BY_VAELOR_MARKER.open("a", encoding="utf-8") as handle:
+                for package in new:
+                    handle.write(package + "\n")
+    except OSError:
+        pass
+
+
 def commission_vnc() -> Dict[str, Any]:
     drivers = default_platform_drivers()
     os_info = drivers["operating_system"].snapshot()
@@ -561,9 +644,13 @@ def commission_vnc() -> Dict[str, Any]:
         )
     record = _managed_desktop_user()
     _run(package_manager.update_command())
-    _run(package_manager.install_command([
-        "tigervnc-standalone-server", "gnome-session-flashback",
-    ]))
+    # Record only the packages absent before this install, so a bare-OS teardown
+    # purges the desktop packages Vaelor added and never one the operator had.
+    newly_installed = [
+        package for package in DESKTOP_PACKAGES if not _package_installed(package)
+    ]
+    _run(package_manager.install_command(list(DESKTOP_PACKAGES)))
+    _record_installed_packages(newly_installed)
     service = f"tigervncserver@{VNC_DISPLAY}.service"
     _run(["/usr/bin/systemctl", "disable", "--now", service], timeout=30)
     _terminate_managed_desktop_session(record)

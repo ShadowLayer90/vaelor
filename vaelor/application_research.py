@@ -40,6 +40,12 @@ REGISTRY_TYPE_MARKERS = (
     "application/vnd.oci.image",
 )
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+# Compose-like content is preserved uncollapsed so the deterministic
+# compose-evidence parser can read its structure (the model interpreter still
+# reads the collapsed `text`). A `^services:` sniff on the decoded text is the
+# gate; the raw copy is bounded well under the decompression ceiling.
+_COMPOSE_SNIFF = re.compile(r"(?m)^\s*services\s*:")
+MAX_COMPOSE_RAW_TEXT = 256 * 1024
 METADATA_HOSTS = frozenset({
     "metadata.google.internal",
     "metadata.azure.internal",
@@ -708,7 +714,12 @@ def _normalize_document(payload: bytes, media_type: str) -> dict[str, object]:
             "description": _collapse_text(parser.description)[:1000],
             "text": _collapse_text(" ".join(parser.text_parts)),
         }
-    return {"format": media_type, "text": _collapse_text(text)}
+    result: dict[str, object] = {"format": media_type, "text": _collapse_text(text)}
+    if _COMPOSE_SNIFF.search(text):
+        # Keep the RAW decoded text (separate field, uncollapsed) for the
+        # compose-evidence parser. `text` is deliberately left unchanged.
+        result["raw_text"] = text[:MAX_COMPOSE_RAW_TEXT]
+    return result
 
 
 def _normalize_registry(payload: bytes) -> dict[str, object]:

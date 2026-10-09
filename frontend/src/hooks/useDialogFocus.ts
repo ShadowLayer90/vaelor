@@ -49,36 +49,79 @@ function isolationTargets(root: HTMLElement) {
   return targets;
 }
 
-function isolateBackground(root: HTMLElement) {
-  const snapshots: InertSnapshot[] = isolationTargets(root).map((element) => {
+/*
+ * How many open dialogs hide each element, and what the page had set on it
+ * before the first one did. A dialog that opens before the previous one closes
+ * (an approval inside a wizard, a confirm replacing a form) hides the same
+ * elements twice; restoring a per-dialog snapshot then put "hidden" back, or
+ * took it away while the newer dialog was still open, and the page beneath
+ * stayed inert once every dialog was gone (VD-200 merge, LESSONS 22). The
+ * element is given back only when the last dialog hiding it closes.
+ */
+const hiddenBy = new Map<HTMLElement, { count: number; snapshot: InertSnapshot }>();
+
+function hide(element: HTMLElement) {
+  const held = hiddenBy.get(element);
+  if (held) {
+    held.count += 1;
+  } else {
     const inertElement = element as HTMLElement & { inert?: boolean };
     const hasInertProperty = "inert" in inertElement;
-    const snapshot: InertSnapshot = {
-      element,
-      ariaHidden: element.getAttribute("aria-hidden"),
-      inertAttribute: element.getAttribute("inert"),
-      inertProperty: hasInertProperty ? inertElement.inert : undefined,
-      hasInertProperty,
-    };
-    element.setAttribute("aria-hidden", "true");
-    element.setAttribute("inert", "");
-    if (hasInertProperty) inertElement.inert = true;
-    return snapshot;
-  });
+    hiddenBy.set(element, {
+      count: 1,
+      snapshot: {
+        element,
+        ariaHidden: element.getAttribute("aria-hidden"),
+        inertAttribute: element.getAttribute("inert"),
+        inertProperty: hasInertProperty ? inertElement.inert : undefined,
+        hasInertProperty,
+      },
+    });
+  }
+  element.setAttribute("aria-hidden", "true");
+  element.setAttribute("inert", "");
+  if ("inert" in element) (element as HTMLElement & { inert?: boolean }).inert = true;
+}
 
+function release(element: HTMLElement) {
+  const held = hiddenBy.get(element);
+  if (!held) return;
+  held.count -= 1;
+  if (held.count > 0) return;
+  hiddenBy.delete(element);
+  const { snapshot } = held;
+  if (snapshot.ariaHidden === null) element.removeAttribute("aria-hidden");
+  else element.setAttribute("aria-hidden", snapshot.ariaHidden);
+
+  if (snapshot.inertAttribute === null) element.removeAttribute("inert");
+  else element.setAttribute("inert", snapshot.inertAttribute);
+
+  if (snapshot.hasInertProperty) {
+    (element as HTMLElement & { inert?: boolean }).inert = Boolean(snapshot.inertProperty);
+  }
+}
+
+/* The page's scroll lock, counted the same way: held while any dialog is open. */
+let scrollLocks = 0;
+let overflowBeforeLock = "";
+
+function lockScroll() {
+  if (scrollLocks === 0) overflowBeforeLock = document.body.style.overflow;
+  scrollLocks += 1;
+  document.body.style.overflow = "hidden";
+  let released = false;
   return () => {
-    for (const snapshot of snapshots) {
-      if (snapshot.ariaHidden === null) snapshot.element.removeAttribute("aria-hidden");
-      else snapshot.element.setAttribute("aria-hidden", snapshot.ariaHidden);
-
-      if (snapshot.inertAttribute === null) snapshot.element.removeAttribute("inert");
-      else snapshot.element.setAttribute("inert", snapshot.inertAttribute);
-
-      if (snapshot.hasInertProperty) {
-        (snapshot.element as HTMLElement & { inert?: boolean }).inert = Boolean(snapshot.inertProperty);
-      }
-    }
+    if (released) return;
+    released = true;
+    scrollLocks -= 1;
+    if (scrollLocks === 0) document.body.style.overflow = overflowBeforeLock;
   };
+}
+
+function isolateBackground(root: HTMLElement) {
+  const targets = isolationTargets(root);
+  targets.forEach(hide);
+  return () => targets.forEach(release);
 }
 
 function isTopmostDialog(root: HTMLElement) {
@@ -157,14 +200,13 @@ export function useDialogFocus({
       }
     };
 
-    const overflow = document.body.style.overflow;
     const restoreBackground = topmostAtMount ? isolateBackground(root) : () => undefined;
-    document.body.style.overflow = "hidden";
+    const unlockScroll = lockScroll();
     document.addEventListener("keydown", keydown);
     return () => {
       document.removeEventListener("keydown", keydown);
       restoreBackground();
-      document.body.style.overflow = overflow;
+      unlockScroll();
       if (previous?.isConnected) previous.focus();
     };
   }, [active, containerRef, initialFocusRef]);

@@ -25,6 +25,9 @@ Group=root
 # stops a missing directory from failing the unit.
 WorkingDirectory=-/opt/pironman5
 ExecStart=/opt/vaelor/venv/bin/python -m vaelor.hardware_bridge
+# The GPU model launch is confined to `$VAELOR_DATA_ROOT/models`, read the way
+# the workload executor reads it, so the two units must agree on the root.
+Environment=VAELOR_DATA_ROOT=/var/lib/vaelor
 Restart=on-failure
 RestartSec=3
 UMask=0007
@@ -49,6 +52,25 @@ ReadWritePaths=/run/vaelor /var/log/vaelor
 # abort with EROFS before flm-real starts. Optional (`-`): a non-NPU box never
 # provisions this directory, and the bridge must still start.
 ReadWritePaths=-/var/lib/vaelor/flm
+# The controller's own GPU can be a serving node in a vLLM cluster (VD-125).
+# The bridge installs that deploy's managed vLLM/Ray and model-pull units itself,
+# RENDERED from the GPU runtime's own template and typed values - never from
+# text a client sent (VD-143) - and tends the node-local weights store with
+# no-follow file operations. Under ProtectSystem=strict both paths must be
+# listed or those writes fail with EROFS. Not optional: on the controller these
+# are the deploy's own working paths, and a missing one is a deploy that
+# half-runs.
+ReadWritePaths=/etc/systemd/system /var/lib/vaelor/models
+# A pipeline split's Ray token and nftables ruleset live in /etc/vaelor-ray
+# (`gpu_ray_plane.RAY_TOKEN_ROOT`), root-only. The bridge writes both before any
+# Ray process starts on the controller and loads the ruleset with `nft -f`
+# (root, so CAP_NET_ADMIN, over AF_NETLINK below). Without this path every split
+# was refused with EROFS (ACC-185). systemd creates the folder at 0700 root
+# before the namespace is built, so the required (no "-") path always exists,
+# on a cold install and on an upgrade alike.
+ConfigurationDirectory=vaelor-ray
+ConfigurationDirectoryMode=0700
+ReadWritePaths=/etc/vaelor-ray
 # Enclosure-only paths, optional for the same reason as WorkingDirectory.
 ReadWritePaths=-/opt/pironman5 -/var/log/pironman5
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

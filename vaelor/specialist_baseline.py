@@ -13,10 +13,12 @@ saying nothing about the problem it was asked to look at is not a review.
 
 from __future__ import annotations
 
+from .assistant_console_places import APPS
+
 from typing import Any, Dict, List
 
 from .assistant_hardware_answers import cpu_temperature
-from .reported_symptoms import failing_services, symptom_findings
+from .reported_symptoms import ALL_SERVICES_ACTIVE, failing_services, symptom_findings
 
 MAX_ITEMS = 8
 
@@ -47,6 +49,8 @@ def _system_review(task: Any, facts: Dict[str, Any]) -> Dict[str, List[str]]:
         cpu_rpm=cpu.get("rpm"),
         case_running=case.get("running"),
         services_failing=failed,
+        # Review S9: this machine's own thermal policy, never fixed bands.
+        thermal_norms=telemetry.get("thermal_norms") if isinstance(telemetry, dict) else None,
     )
     # The complaint leads. A reader who has to scroll past four readings to see
     # their own problem addressed has already concluded it was ignored.
@@ -63,7 +67,7 @@ def _system_review(task: Any, facts: Dict[str, Any]) -> Dict[str, List[str]]:
         )
     )
     findings.append(
-        "All managed Vaelor services are active."
+        ALL_SERVICES_ACTIVE
         if not failed else "Services needing attention: {}.".format(", ".join(failed))
     )
     recommendations = [
@@ -110,7 +114,7 @@ def _docker_review(facts: Dict[str, Any]) -> Dict[str, List[str]]:
             "Validate ports, storage, resource limits, and health checks before deployment."
         ],
         "next_actions": [
-            "Open Workloads to inspect logs, configuration, console, and lifecycle controls."
+            "Open " + APPS + " to inspect logs, configuration, console, and lifecycle controls."
         ],
     }
 

@@ -73,7 +73,8 @@ from __future__ import annotations
 
 from typing import Dict, NamedTuple, Optional, Tuple
 
-from .assistant_vocabulary import literal_phrases
+from .assistant_intents import SWEEP_PHRASES
+from .assistant_vocabulary import MODEL_PHRASES, UPTIME_PHRASES, literal_phrases
 from .phrase_match import mentions
 from .telemetry_trend import TREND_PHRASES
 
@@ -135,7 +136,7 @@ class Topic(NamedTuple):
     extra: Tuple[str, ...] = ()
 
 
-_FALLBACK = "vaelor.deployment_agent:DeploymentAgent._fallback_answer"
+_FALLBACK = "vaelor.assistant_builtin_answer:builtin_reply"
 
 
 #: Topics whose branch spends no *reading*, so the gather relation cannot
@@ -180,36 +181,18 @@ ANSWER_ONLY_WORDS: Dict[Tuple[str, str], str] = {
         "own `status` row is declared local for the same reason."
     ),
     ("health-verdict", "working correctly"): (
-        "Fetches no reading at all, so the verdict line runs only when "
-        "another word in the same sentence gathered the cooling reading it "
-        "is gated on. Not repaired here: the fix is to widen "
-        "`_fallback_answer`'s gate from `cooling` to the health reading, "
-        "which changes the most-read sentence this product writes and is the "
-        "owner's call - VD-090's reconciliation records that verdict "
-        "disagreeing across surfaces once already."
-    ),
-    ("health-verdict", "healthy"): (
-        "Gathers `services.status` and not `cooling.status`, so the verdict "
-        "is gated out while a services reading sits in hand unspent - which "
-        "is LESSONS pattern 4, live. The cheap repair is to give the "
-        "`services` topic the words its own gather list already owns "
-        "(`healthy`, `broken`, `failing`, `degraded`, `daemon`), and that is "
-        "a widening of what the built-in path answers, filed for the owner "
-        "rather than taken in a pre-hardware correction batch."
+        "Fetches no reading at all, so the verdict line can run only when "
+        "another word in the same sentence gathered the health verdict it "
+        "reads. Adding it to the gather table is a widening of what the "
+        "scope gate counts as this machine's business, and that is measured "
+        "against the world-question battery before it is taken."
     ),
     ("health-verdict", "what is wrong"): (
-        "Gathers `services.status` through `wrong`, not `cooling.status`. "
-        "The `services` topic already carries `wrong`, so this phrase is "
-        "redundant with a row that does gather, and the sentence is answered "
-        "- by the services branch rather than the verdict branch. Kept so "
-        "the two rows are not silently reordered into disagreement."
-    ),
-    ("health-verdict", "needs attention"): (
-        "Gathers `health.status` through `attention`, which no topic in this "
-        "table reads: the verdict branch is gated on `cooling.status` and "
-        "`faults` matches a shape rather than a vocabulary. The reading is "
-        "fetched and no worded branch can spend it, which is the same "
-        "LESSONS pattern 4 shape as `healthy` above and is filed with it."
+        "Gathers `services.status` through `wrong`, not `health.status`. "
+        "The `services` topic already carries `wrong`, so the sentence is "
+        "answered - by the services branch, and by the verdict when another "
+        "word in it gathered the verdict. Kept so the two rows are not "
+        "silently reordered into disagreement."
     ),
 }
 
@@ -239,14 +222,15 @@ def _topic(
 #: vocabularies overlap: `services` and `workloads` both hold "running".
 ANSWER_TOPICS: Tuple[Topic, ...] = (
     _topic(
-        # `_fallback_answer` gates this line on a cooling reading being in
-        # hand. Four more words reach this row from `ANSWER_ONLY_WORDS`, each
-        # of which fetches no cooling reading and says there why.
+        # Review B3/B4: the verdict reads `health.status` - the one evaluation
+        # every screen shows - and nothing else decides it. The whole-machine
+        # phrases are here too: "how is my machine doing" gathered twelve
+        # readings and then had no branch to spend them on.
         "health-verdict",
-        ("is everything", "overall", "anything wrong"),
+        ("anything wrong", "needs attention", "healthy") + SWEEP_PHRASES,
         "the overall health verdict",
         _FALLBACK,
-        reads=("cooling.status",),
+        reads=("health.status",),
     ),
     # **This row is not the whole vocabulary for temperature, and a second
     # reader had to find that out.** It carries no `hot`, `warm` or `hotter`,
@@ -260,7 +244,11 @@ ANSWER_TOPICS: Tuple[Topic, ...] = (
     _topic(
         "cooling",
         ("fan", "fans", "cool", "cools", "cooled", "cooling",
-         "temperature", "temperatures", "thermal", "thermals"),
+         "temperature", "temperatures", "thermal", "thermals",
+         # Review S5: "is my machine running hot" gathered the cooling
+         # reading and no word here could spend it.
+         "hot", "hotter", "warm", "warmer", "heat", "overheat",
+         "overheating"),
         "cooling and temperature",
         _FALLBACK,
         reads=("cooling.status",),
@@ -332,10 +320,48 @@ ANSWER_TOPICS: Tuple[Topic, ...] = (
     _topic(
         "network",
         ("network", "networks", "ip", "ips", "ip address", "ethernet",
-         "wifi", "wi-fi", "dns", "internet", "hostname"),
+         "wifi", "wi-fi", "dns", "internet", "hostname",
+         # Review S5: "is the machine online" was refused over a reading in hand.
+         "online", "offline", "connection", "connectivity"),
         "the network",
         _FALLBACK,
         reads=("network.status",),
+    ),
+    # Review S5: whether a restart is pending is read from the update record,
+    # and "when did it last reboot" must not land here - so this row carries
+    # only phrases that ask whether one is *needed*.
+    _topic(
+        "reboot-required",
+        ("reboot required", "need a reboot", "needs a reboot", "reboot needed"),
+        "whether a restart is pending",
+        _FALLBACK,
+        reads=("updates.status",),
+    ),
+    # Review S5: `boot_time` rides on every telemetry sample and nothing read it.
+    _topic(
+        "uptime",
+        UPTIME_PHRASES + ("last reboot", "last rebooted", "last boot",
+                          "last booted", "last restarted"),
+        "how long this machine has been up",
+        _FALLBACK,
+        reads=("system.telemetry",),
+    ),
+    # Review S6: "which model is loaded" was answered with the app inventory
+    # while `inference.status` sat unread. Ordered before `workloads`.
+    _topic(
+        "inference",
+        MODEL_PHRASES + ("local model",),
+        "which model each engine runs",
+        _FALLBACK,
+        reads=("inference.status",),
+    ),
+    # Review S7: the journal of one managed service.
+    _topic(
+        "logs",
+        literal_phrases("logs.service"),
+        "a managed service's recent log",
+        "vaelor.assistant_log_answers:logs_line",
+        reads=("logs.service",),
     ),
     _topic(
         "workloads",
@@ -373,6 +399,10 @@ ANSWER_TOPICS: Tuple[Topic, ...] = (
     _topic(
         "accelerator", (), "the GPU and neural accelerator",
         "vaelor.assistant_fault_answers:accelerator_presence_answer",
+    ),
+    _topic(
+        "hardware", (), "what hardware this machine is",
+        "vaelor.assistant_builtin_answer:hardware_line",
     ),
     _topic(
         "identity", (), "this appliance's software version",

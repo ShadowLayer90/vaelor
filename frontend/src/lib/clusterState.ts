@@ -1,3 +1,9 @@
+import type {
+  ClusterCapacityLedger,
+  GpuCapacity,
+  NodeCapacity,
+} from "../components/fleetTypes";
+
 /**
  * One authoritative cluster state, derived from the three separate flags the
  * API reports.
@@ -41,6 +47,7 @@ export interface ClusterEnrollmentFact {
 }
 
 export type ClusterStateId =
+  | "not-read"
   | "runtime-unavailable"
   | "not-initialized"
   | "control-unavailable"
@@ -99,9 +106,108 @@ function engineCopy(runtime: ClusterRuntimeFlags): { summary: string; nextStep: 
   };
 }
 
+const number = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+function readGpu(raw: unknown): GpuCapacity {
+  const gpu = (raw ?? {}) as Partial<GpuCapacity>;
+  return {
+    present: gpu.present === true,
+    reason: typeof gpu.reason === "string" ? gpu.reason : "",
+    gfx_target_version:
+      typeof gpu.gfx_target_version === "string" ? gpu.gfx_target_version : "",
+    device_count: number(gpu.device_count),
+    vram_total_bytes: number(gpu.vram_total_bytes),
+    vram_used_bytes: number(gpu.vram_used_bytes),
+    gtt_total_bytes: number(gpu.gtt_total_bytes),
+    gtt_used_bytes: number(gpu.gtt_used_bytes),
+    system_ram_bytes:
+      typeof gpu.system_ram_bytes === "number" ? gpu.system_ram_bytes : null,
+    addressable_bytes: number(gpu.addressable_bytes),
+  };
+}
+
+/**
+ * A defensive reader for `GET /api/v2/cluster/capacity`, in the same role
+ * `clusterState` plays for the fleet summary: it turns the raw API payload into
+ * a fully-shaped ledger with every numeric field defaulted, so a Phase-2
+ * consumer (app placement, distributed-GPU LLM sizing) never has to guard an
+ * absent field itself. It derives nothing new — the arithmetic is the
+ * backend's; this only makes the shape safe to read.
+ */
+export function readCapacityLedger(
+  raw: Partial<ClusterCapacityLedger> | undefined,
+): ClusterCapacityLedger {
+  const cluster = raw?.cluster;
+  const clusterGpu = cluster?.capacity?.gpu;
+  const nodes: NodeCapacity[] = (raw?.nodes ?? []).map((node) => ({
+    node_id: node.node_id,
+    name: node.name,
+    role: node.role,
+    capacity: {
+      cpu: typeof node.capacity?.cpu === "number" ? node.capacity.cpu : null,
+      cpu_threads: number(node.capacity?.cpu_threads),
+      memory_bytes: number(node.capacity?.memory_bytes),
+      gpu: readGpu(node.capacity?.gpu),
+    },
+    reserved: {
+      memory_bytes: number(node.reserved?.memory_bytes),
+      gpu_memory_bytes: number(node.reserved?.gpu_memory_bytes),
+      from: node.reserved?.from ?? [],
+    },
+    free: {
+      memory_bytes: number(node.free?.memory_bytes),
+      gpu_memory_bytes: number(node.free?.gpu_memory_bytes),
+    },
+    // Contract 3 (ACC-091): the node's usable state, carried as the ledger
+    // wrote it. A row without one is "unknown" and not schedulable - never
+    // assumed ready.
+    state: typeof node.state === "string" && node.state ? node.state : "unknown",
+    schedulable: node.schedulable === true,
+    state_reason: typeof node.state_reason === "string" ? node.state_reason : "",
+  }));
+  return {
+    nodes,
+    cluster: {
+      node_count: number(cluster?.node_count),
+      capacity: {
+        cpu: number(cluster?.capacity?.cpu),
+        cpu_threads: number(cluster?.capacity?.cpu_threads),
+        memory_bytes: number(cluster?.capacity?.memory_bytes),
+        gpu: {
+          present_nodes: number(clusterGpu?.present_nodes),
+          vram_total_bytes: number(clusterGpu?.vram_total_bytes),
+          gtt_total_bytes: number(clusterGpu?.gtt_total_bytes),
+          addressable_bytes: number(clusterGpu?.addressable_bytes),
+        },
+      },
+      reserved: {
+        memory_bytes: number(cluster?.reserved?.memory_bytes),
+        gpu_memory_bytes: number(cluster?.reserved?.gpu_memory_bytes),
+        from: cluster?.reserved?.from ?? [],
+      },
+      free: {
+        memory_bytes: number(cluster?.free?.memory_bytes),
+        gpu_memory_bytes: number(cluster?.free?.gpu_memory_bytes),
+      },
+      schedulable_node_count: number(cluster?.schedulable_node_count),
+      schedulable_memory_bytes: number(cluster?.schedulable_memory_bytes),
+    },
+    unattributed_reservations: raw?.unattributed_reservations ?? [],
+    notes: raw?.notes ?? {},
+  };
+}
+
 export function clusterState(
   runtime: ClusterRuntimeFlags | undefined,
   enrollment?: ClusterEnrollmentFact,
+  /**
+   * Why the cluster summary could not be read, when the newest read failed or
+   * was refused and none is in hand. Without it a refused read stayed
+   * "Checking cluster" for ever, and the title row's actions were enabled with
+   * no reason beside them (VD-200 review C1).
+   */
+  readError?: string,
 ): ClusterState {
   /*
    * Written once, at the end of every branch, from the state that branch just
@@ -124,6 +230,22 @@ export function clusterState(
       ? { actionable: false, reason: enrollment.reason || "This controller cannot enrol a worker right now." }
       : { actionable: true, reason: "" };
   };
+
+  if (!runtime && readError) {
+    const reason = readError.replace(/\.$/, "");
+    return {
+      id: "not-read",
+      label: "Not read",
+      tone: "neutral",
+      summary: `The cluster state could not be read: ${reason}.`,
+      // The reason itself is in the page's notice and the pill's description;
+      // the sentence beside a disabled action stays short.
+      unavailable: "The cluster state could not be read, so nothing can be placed on it.",
+      nextStep: "Reload this page to read it again.",
+      operatingAsController: false,
+      enrollment: { actionable: false, reason: `The cluster state could not be read (${reason}).` },
+    };
+  }
 
   if (!runtime) {
     return {

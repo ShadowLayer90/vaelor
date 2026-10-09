@@ -8,9 +8,9 @@ export function AssistantApplicationHandoff({ intent }: { intent: ApplicationRes
     window.dispatchEvent(new CustomEvent("pironman:navigate", { detail: "workloads" }));
   };
 
-  return <div className="assistant-next-actions assistant-application-handoff">
+  return <div className="as-extra as-extra--column assistant-application-handoff">
     <strong>Research before deployment</strong>
-    <p>Vaelor will verify the official image, architecture, ports, storage, license, and memory requirements before proposing anything executable.</p>
+    <span className="as-small as-muted">Vaelor will verify the official image, architecture, ports, storage, license, and memory requirements before proposing anything executable.</span>
     <Button onClick={continueResearch} type="button" variant="primary">
       Research and deploy {intent.application_query}
     </Button>

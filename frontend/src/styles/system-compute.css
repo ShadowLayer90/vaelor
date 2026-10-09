@@ -1,0 +1,350 @@
+/*
+ * System › Compute, built to the SystemCompute board (VD-200): the page title,
+ * This machine, Live readings, and the Power menu the top bar opens. The cards
+ * and tiles are the shared primitives (page-primitives.css).
+ */
+
+/* The page's title on the board: large and light, the descriptor beside it
+   in grey at the same size. */
+.system-page-heading h1 {
+  font-size: var(--font-size-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.system-page-heading p {
+  margin-top: 0;
+  color: var(--text-faint-label);
+  font-size: var(--font-size-display);
+  line-height: 1.2;
+}
+
+.system-compute {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* This machine: facts and chips on the left, the drawing on the right. The
+   card also carries `.device-hero`, the drawing's own rules; these undo the
+   old hero's frame so the card is the board's. */
+.this-machine.device-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  min-height: 0;
+  margin-top: 0;
+  overflow: hidden;
+}
+
+.this-machine > .ui-card__header {
+  justify-content: space-between;
+}
+
+.this-machine__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+}
+
+.this-machine .device-hero__content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+}
+
+.this-machine .ui-card__actions,
+.hardware-card .ui-card__actions {
+  color: var(--text-muted);
+}
+
+/* The facts as the board's key-value grid: hairline cells on the card. */
+.this-machine .system-strip__facts {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--border-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.this-machine .system-strip__facts div,
+.this-machine .system-strip__facts div:first-child {
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--bg-kv);
+  border-left: 0;
+}
+
+.this-machine .system-strip__facts dt {
+  font-size: var(--font-size-ui-xs);
+}
+
+.this-machine .system-strip__facts dd {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+/* The hardware chips as the board's outline pills. */
+.this-machine .device-capabilities {
+  margin-top: 0;
+}
+
+.this-machine .device-capabilities span {
+  padding: 3px 9px;
+  background: transparent;
+  border: 1px solid var(--border-row-active);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-xs);
+}
+
+.this-machine .device-hero__visual {
+  min-height: 220px;
+  border-left: 1px solid var(--border-row);
+}
+
+/* The health pill in This machine's header: a StatusPill whose sentence may wrap. */
+.this-machine .health-pill {
+  max-width: 100%;
+  white-space: normal;
+}
+
+
+/* The Pi appliance's enclosure panels, under This machine. */
+.system-compute__pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 14px;
+}
+
+/* Live readings */
+.live-readings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.live-readings__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.live-readings__heading h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.live-readings__heading h2 span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+.live-readings__grid {
+  display: grid;
+  /* One row of four at a desktop width (the board), two by two below that:
+     auto-fit left a 3 + 1 orphan at 1024 px. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.reading-card {
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.reading-card__value {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.reading-card__unit {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+}
+
+.reading-card__action {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.reading-card__action .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+/* A reading taken while telemetry is not live is old: grey, and its trend dims. */
+.live-readings--stale .ui-trend {
+  opacity: 0.45;
+}
+
+.live-readings--stale .ui-stat-tile__value,
+.live-readings--stale .reading-card__unit {
+  color: var(--text-unread);
+}
+
+/* The Power menu (opened from the top bar on System). */
+.power-menu {
+  position: relative;
+}
+
+.topbar .power-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.power-menu__list {
+  position: absolute;
+  z-index: var(--layer-raised);
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  gap: 2px;
+  width: min(360px, calc(100vw - 32px));
+  padding: 6px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge), var(--shadow-modal);
+}
+
+/*
+ * A phone (polish audit, cause 11): Power sits mid-row, so a menu anchored to
+ * its right edge ran 73 px off the left of a 390 px screen. The menu box
+ * dissolves, so the list takes the sticky top bar as its frame and spans it
+ * inside the page's 16 px gutters. Held by styles/topbarPolish.test.ts.
+ */
+@media (max-width: 720px) {
+  .topbar .power-menu {
+    display: contents;
+  }
+
+  /* The box that carried row two's `order` (topbar.css) is gone; its trigger carries it. */
+  .topbar .power-menu > * {
+    order: 4;
+  }
+
+  .topbar .power-menu__list {
+    top: calc(100% + 6px);
+    right: 16px;
+    left: 16px;
+    width: auto;
+  }
+}
+
+.power-menu__list .ui-button-wrap {
+  display: grid;
+}
+
+/* A menu row, not a pill: the danger word over its consequence. */
+.power-menu__list .power-menu__item {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  min-height: 52px;
+  padding: 8px 12px;
+  color: var(--danger-text);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.power-menu__list .power-menu__item:hover:not(:disabled),
+.power-menu__list .power-menu__item:focus-visible {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+}
+
+.power-menu__item strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.power-menu__item small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+/* Refresh now, beside the paused telemetry pill. */
+.topbar .connection-state__refresh {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+/* A power request's or an enclosure choice's outcome, on the page it came from. */
+.shell-notice {
+  margin: 0 0 20px;
+}
+
+/* The header's pill and the machine's name shrink and wrap inside the card
+   rather than running past its edge. */
+.this-machine .ui-card__actions {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  /* The board's 16 px page gutter is the only side inset on a phone; the
+     shared tab panel's own 12 px would leave This machine's facts one column. */
+  .ui-tab-set__panel:has(> .system-compute) {
+    padding: 8px 0 0;
+  }
+
+  .this-machine .ui-card__actions {
+    justify-content: flex-start;
+  }
+
+  .this-machine .device-hero__visual {
+    border-left: 0;
+    border-top: 1px solid var(--border-row);
+  }
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .topbar .power-menu__trigger,
+  .topbar .connection-state__refresh,
+  .reading-card__action .ui-button {
+    min-height: 44px;
+  }
+}
+
+/* The drawing's caption repeats the card header's name; it stays only where
+   it carries the appliance's Change enclosure. */
+.this-machine .device-hero__visual figcaption:not(:has(.ui-button)) {
+  display: none;
+}
+
+@media (max-width: 1200px) {
+  .live-readings__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .live-readings__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

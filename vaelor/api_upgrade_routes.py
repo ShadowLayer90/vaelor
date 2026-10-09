@@ -25,6 +25,7 @@ from flask import g, request
 
 from .api_common import ApiContext, payload as _payload
 from .appliance_upgrade import CONFIRMATION, UpgradeApplyPlans, last_result
+from .build_provenance import installed_build
 from .release_source import (
     ReleaseError,
     StubReleaseSource,
@@ -61,16 +62,27 @@ def register_upgrade_routes(context: ApiContext) -> None:
             details=details,
         )
 
-    def _offered() -> tuple[Optional[Any], Optional[dict]]:
-        """The offered manifest and its eligibility for the running version."""
+    def _installed() -> dict:
+        reader = callbacks.get("installed_build")
+        return reader() if callable(reader) else installed_build()
+
+    def _offered(installed: dict) -> tuple[Optional[Any], Optional[dict]]:
+        """The offered manifest and its eligibility for the installed build.
+
+        W4d-D8: eligibility is judged against the installed *build* (wheel
+        digest, build date), not the version string alone.
+        """
         source = _release_source(callbacks)
         try:
             manifest = source.latest_manifest()
         except ReleaseError as error:
-            return None, {"eligible": False, "reason": str(error)}
+            return None, {"eligible": False, "kind": "unparseable", "reason": str(error)}
         if manifest is None:
             return None, None
-        return manifest, upgrade_eligibility(__version__, manifest)
+        return manifest, upgrade_eligibility(
+            __version__, manifest, installed,
+            signature_required=bool(getattr(source, "signatures_required", False)),
+        )
 
     @blueprint.get("/upgrade/running-version")
     def running_version():
@@ -89,9 +101,12 @@ def register_upgrade_routes(context: ApiContext) -> None:
     @require_auth("viewer")
     def upgrade_status():
         source = _release_source(callbacks)
-        manifest, eligibility = _offered()
+        installed = _installed()
+        manifest, eligibility = _offered(installed)
         return _payload({
             "running_version": __version__,
+            "installed_build": installed,
+            "signatures_required": bool(getattr(source, "signatures_required", False)),
             "source": getattr(source, "name", "unknown"),
             "manifest": manifest.public() if manifest is not None else None,
             "eligibility": eligibility,
@@ -113,7 +128,7 @@ def register_upgrade_routes(context: ApiContext) -> None:
             )
         body = request.get_json(silent=True) or {}
         job_payload = body.get("payload", {})
-        manifest, eligibility = _offered()
+        manifest, eligibility = _offered(_installed())
         if manifest is None:
             return _payload(
                 error={

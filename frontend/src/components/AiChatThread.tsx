@@ -1,10 +1,12 @@
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import type { AiChatCitation, AiChatMessage } from "./aiChatTypes";
 import { modelDisplayName } from "../lib/modelIdentity";
+import { modelThatWrote, writtenByVaelor } from "../lib/aiChatExport";
 import { performanceLine } from "../lib/performanceLine";
 import { AiChatMarkdown } from "./AiChatMarkdown";
-import { Icon } from "./Icon";
+import { AiChatThought } from "./AiChatThinking";
+import { Icon, ICON_SIZE } from "./Icon";
 import { Button, Textarea } from "./ui";
 
 /**
@@ -50,8 +52,18 @@ export function unansweredQuestionIndex(messages: AiChatThreadMessage[]): number
   const last = messages.length - 1;
   if (last < 0) return -1;
   if (messages[last].role === "user") return last;
-  if (messages[last].failed && messages[last - 1]?.role === "user") return last - 1;
+  if (isFailedTurn(messages[last]) && messages[last - 1]?.role === "user") return last - 1;
   return -1;
+}
+
+/**
+ * Whether a turn is a failure notice rather than an answer: marked by the
+ * client that wrote it (`failed`), or by the appliance on the stored turn
+ * (`metadata.failed`). Only the first was read, so after a reload a stored
+ * failure lost its Retry and read as an answer (ACC-112).
+ */
+export function isFailedTurn(message: AiChatThreadMessage): boolean {
+  return message.failed === true || message.metadata?.failed === true;
 }
 
 function plural(count: number, noun: string) {
@@ -101,6 +113,7 @@ export function AiChatThread({
   onNotice,
   onSuggestion,
   onStop,
+  children,
 }: {
   messages: AiChatThreadMessage[];
   /** A request is in flight somewhere, so no turn here may be re-run. */
@@ -134,6 +147,8 @@ export function AiChatThread({
   onNotice: (message: string) => void;
   onSuggestion: (message: string) => void;
   onStop?: () => void;
+  /** What follows the transcript in the same column: an agent proposal card. */
+  children?: ReactNode;
 }) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
@@ -175,23 +190,30 @@ export function AiChatThread({
   return (
     <>
     <div className="ai-chat-messages" role="log" aria-live="polite" ref={threadRef}>
+      <div className="ai-chat-column">
       {messages.length ? messages.map((message, index) => {
         const key = message.id ?? `${message.role}-${index}`;
         const isEditing = message.id === editingId;
+        const isUser = message.role === "user";
         /*
          * The byline names the model that produced THIS answer. It used to
          * render the model picker's current value, so changing the dropdown
          * silently relabelled every past reply - and the relabelling survived
          * a reload, because it was never the stored value being shown.
          */
-        const byline = message.role === "assistant"
-          ? modelDisplayName(message.model || model)
-          : "Prompt";
-        const retrieval = message.role === "assistant" ? retrievalLabel(message.retrieval) : "";
-        const performance = message.role === "assistant" ? performanceLine(message.metadata?.performance) : "";
-        const cited = message.role === "assistant"
-          ? citedSources(message.content, message.citations)
-          : [];
+        // A decline or an agent proposal was written by Vaelor, not a model,
+        // and its stored author is an internal id that must not be shown.
+        const author = message.metadata?.proposed_agent_task
+          ? "Agent proposal"
+          : writtenByVaelor(message.model)
+            ? "Vaelor"
+            : modelDisplayName(modelThatWrote(message.model) || model);
+        const cited = isUser ? [] : citedSources(message.content, message.citations);
+        // The trailing turn while an answer is still arriving. Its final-state
+        // controls and byline facts are withheld until the turn actually completes.
+        const pendingTail = answerPending && index === messages.length - 1;
+        const retrieval = !isUser && !pendingTail ? retrievalLabel(message.retrieval) : "";
+        const performance = !isUser && !pendingTail ? performanceLine(message.metadata?.performance) : "";
         /*
          * A question whose answer never arrived is the one turn that most
          * needs a retry, and it was the one turn with no action on it. The
@@ -199,121 +221,104 @@ export function AiChatThread({
          * which excluded both states the app actually produces: Stop leaves an
          * unsaved turn, and a first failed send has no conversation yet.
          */
-        // The trailing turn while an answer is still arriving. Its final-state
-        // controls and footer are withheld until the turn actually completes.
-        const pendingTail = answerPending && index === messages.length - 1;
         const canRetry = index === retryIndex && !pendingTail;
         return (
-          <article className={`ai-chat-turn ai-chat-turn--${message.role}`} key={key}>
-            <div className="ai-chat-turn__node" aria-hidden="true">
-              {message.role === "user" ? "U" : <Icon name="memory" size={15} />}
-            </div>
-            <div className="ai-chat-turn__body">
-              <header>
-                <strong>{message.role === "user" ? "You" : "Vaelor AI"}</strong>
-                <span>{byline}</span>
+          <article className={`ai-chat-turn ai-chat-turn--${message.role}${isFailedTurn(message) ? " is-failed" : ""}`} key={key}>
+            {isUser ? <h3 className="sr-only">You</h3> : (
+              <header className="ai-chat-turn__byline">
+                <span aria-hidden="true" className="ai-chat-turn__mark">V</span>
+                <strong>Vaelor AI</strong>
+                <span>{[author, retrieval, performance].filter(Boolean).join(" · ")}</span>
               </header>
-              {isEditing ? (
-                <div className="ai-chat-turn__edit">
-                  <Textarea
-                    autoFocus
-                    label={<span className="sr-only">Edit message</span>}
-                    maxLength={8000}
-                    onChange={(event) => setDraft(event.target.value)}
-                    rows={5}
-                    value={draft}
-                  />
-                  <div>
-                    <Button onClick={() => setEditingId(null)} type="button" variant="quiet">Cancel</Button>
-                    <Button
-                      disabled={!draft.trim() || busy}
-                      onClick={() => void onRegenerate(message, draft).then(() => setEditingId(null))}
-                      type="button"
-                      variant="primary"
-                    >
-                      Save and regenerate
-                    </Button>
-                  </div>
+            )}
+            {isEditing ? (
+              <div className="ai-chat-turn__edit">
+                <Textarea
+                  autoFocus
+                  label={<span className="sr-only">Edit message</span>}
+                  maxLength={8000}
+                  onChange={(event) => setDraft(event.target.value)}
+                  rows={5}
+                  value={draft}
+                />
+                <div>
+                  <Button onClick={() => setEditingId(null)} type="button" variant="quiet">Cancel</Button>
+                  <Button
+                    disabled={!draft.trim() || busy}
+                    onClick={() => void onRegenerate(message, draft).then(() => setEditingId(null))}
+                    type="button"
+                    variant="primary"
+                  >
+                    Save and regenerate
+                  </Button>
                 </div>
-              ) : message.role === "assistant" ? (
-                <AiChatMarkdown content={message.content} />
-              ) : <p>{message.content}</p>}
-              {retrieval && !pendingTail && (
-                <p className="ai-chat-turn__retrieval">
-                  <small>{retrieval}</small>
-                </p>
-              )}
-              {performance && !pendingTail && (
-                <p className="ai-chat-turn__performance">
-                  <small>{performance}</small>
-                </p>
-              )}
-              {cited.length && !pendingTail ? (
-                <details className="ai-chat-citations">
-                  <summary>{plural(cited.length, "cited source")}</summary>
-                  {cited.map((citation) => (
-                    <blockquote key={citation.id}>
-                      <strong>{citation.document} · chunk {citation.chunk}</strong>
-                      <span>{citation.collection}</span>
-                      <p>{citation.excerpt}</p>
-                    </blockquote>
-                  ))}
-                </details>
-              ) : null}
-              {!isEditing && !pendingTail && (
-                <div className="ai-chat-turn__actions">
-                  <Button onClick={() => void copy(message.content)} type="button" variant="quiet">Copy</Button>
-                  {canModify && message.id && message.role === "user" && (
-                    <Button onClick={() => { setEditingId(message.id!); setDraft(message.content); }} type="button" variant="quiet">Edit</Button>
-                  )}
-                  {canRetry && (
-                    <Button disabled={busy} onClick={() => void onRetry(message)} type="button" variant="quiet">Retry answer</Button>
-                  )}
-                  {canModify && message.id && message.role === "assistant" && (
-                    <Button disabled={busy} onClick={() => void onRegenerate(message)} type="button" variant="quiet">Regenerate</Button>
-                  )}
-                  {canModify && message.id && (
-                    <Button disabled={busy} onClick={() => void onFork(message)} type="button" variant="quiet">Branch here</Button>
-                  )}
-                </div>
-              )}
-            </div>
+              </div>
+            ) : (
+              <>
+              {!isUser && !pendingTail && <AiChatThought thinking={message.metadata?.thinking} />}
+              <div className="ai-chat-turn__bubble">
+                {isUser ? <p>{message.content}</p> : <AiChatMarkdown content={message.content} />}
+              </div>
+              </>
+            )}
+            {!isEditing && !pendingTail && (
+              <div className={canRetry ? "ai-chat-turn__actions has-retry" : "ai-chat-turn__actions"}>
+                {cited.length ? (
+                  <details className="ai-chat-citations">
+                    <summary>{plural(cited.length, "cited source")}</summary>
+                    {cited.map((citation) => (
+                      <blockquote key={citation.id}>
+                        <strong>{citation.document} · chunk {citation.chunk}</strong>
+                        <span>{citation.collection}</span>
+                        <p>{citation.excerpt}</p>
+                      </blockquote>
+                    ))}
+                  </details>
+                ) : null}
+                <Button className="ai-chat-ghost" onClick={() => void copy(message.content)} type="button" variant="quiet">Copy</Button>
+                {canModify && message.id && isUser && (
+                  <Button className="ai-chat-ghost" onClick={() => { setEditingId(message.id!); setDraft(message.content); }} type="button" variant="quiet">Edit</Button>
+                )}
+                {canRetry && (
+                  <Button className="ai-chat-ghost" disabled={busy} onClick={() => void onRetry(message)} type="button" variant="quiet">Retry answer</Button>
+                )}
+                {canModify && message.id && !isUser && (
+                  <Button className="ai-chat-ghost" disabled={busy} onClick={() => void onRegenerate(message)} type="button" variant="quiet">Regenerate</Button>
+                )}
+                {canModify && message.id && (
+                  <Button className="ai-chat-ghost" disabled={busy} onClick={() => void onFork(message)} type="button" variant="quiet">Branch here</Button>
+                )}
+              </div>
+            )}
           </article>
         );
       }) : (
         <div className="ai-chat-empty">
           <div className="ai-chat-empty__intro">
-            <span className="ai-chat-empty__glyph"><Icon name="memory" size={28} /></span>
+            <span className="ai-chat-empty__glyph"><Icon name="chat" size={ICON_SIZE.standalone} /></span>
             <div>
-              <p className="page-eyebrow">General AI + cited knowledge</p>
+              <p className="ai-chat-eyebrow">General AI + cited knowledge</p>
               <h2>What are you working on?</h2>
               <p>Ask directly, or start with one of these common workflows.</p>
             </div>
           </div>
           <div className="ai-chat-empty__starters">
-            <Button onClick={() => onSuggestion("Explain this technical concept in plain language: ")} type="button" variant="quiet">
-              <span>01</span><strong>Explain something</strong><small>Turn a technical topic into a clear answer.</small>
-            </Button>
-            <Button onClick={() => onSuggestion("Summarize the key points and action items from my selected knowledge: ")} type="button" variant="quiet">
-              <span>02</span><strong>Summarize knowledge</strong><small>Use an attached runbook, log, or document.</small>
-            </Button>
-            <Button onClick={() => onSuggestion("Help me plan this deployment step by step: ")} type="button" variant="quiet">
-              <span>03</span><strong>Plan a deployment</strong><small>Map prerequisites, risks, and next actions.</small>
-            </Button>
-            <Button onClick={() => onSuggestion("Compare these options and recommend one for this Vaelor node: ")} type="button" variant="quiet">
-              <span>04</span><strong>Compare options</strong><small>Evaluate tradeoffs for this appliance.</small>
-            </Button>
+            {STARTERS.map(([number, title, line, prompt]) => (
+              <Button className="ai-chat-starter" key={number} onClick={() => onSuggestion(prompt)} type="button" variant="quiet">
+                <span>{number}</span><strong>{title}</strong><small>{line}</small>
+              </Button>
+            ))}
           </div>
         </div>
       )}
       {!generating && resumed?.awaiting && (
-        <p className="assistant-resumed-wait" role="status">
+        <p className="assistant-resumed-wait ai-chat-banner ai-chat-banner--info" role="status">
           Your last question is still being answered on this appliance. The reply appears
           here as soon as it lands — you do not need to ask again.
         </p>
       )}
       {!generating && resumed?.lost && (
-        <p className="assistant-resumed-wait assistant-resumed-wait--lost" role="status">
+        <p className="assistant-resumed-wait assistant-resumed-wait--lost ai-chat-banner" role="status">
           No answer arrived for your last question, and Vaelor has stopped waiting for it.
           Nothing was changed. Ask it again when you are ready.
         </p>
@@ -322,10 +327,12 @@ export function AiChatThread({
         <div className="assistant-thinking ai-chat-thinking">
           <span className="assistant-thinking__dot" /><span className="assistant-thinking__dot" /><span className="assistant-thinking__dot" /><strong>Generating with {modelDisplayName(generating.model || model)}</strong>
           {onStop && (
-            <Button onClick={onStop} type="button" variant="quiet">Stop</Button>
+            <Button className="ai-chat-ghost" onClick={onStop} type="button" variant="quiet">Stop</Button>
           )}
         </div>
       )}
+      {children}
+      </div>
     </div>
       {/* Outside the live region: toggling this on scroll must not be
           announced as new conversation content. */}
@@ -339,3 +346,11 @@ export function AiChatThread({
     </>
   );
 }
+
+/** The four starters the empty thread offers: number, title, line, and the prompt it fills in. */
+const STARTERS = [
+  ["01", "Explain something", "Turn a technical topic into a clear answer.", "Explain this technical concept in plain language: "],
+  ["02", "Summarize knowledge", "Use an attached runbook, log, or document.", "Summarize the key points and action items from my selected knowledge: "],
+  ["03", "Plan a deployment", "Map prerequisites, risks, and next actions.", "Help me plan this deployment step by step: "],
+  ["04", "Compare options", "Evaluate tradeoffs for this appliance.", "Compare these options and recommend one for this Vaelor node: "],
+] as const;

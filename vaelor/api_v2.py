@@ -14,14 +14,26 @@ from .api_application_routes import register_application_routes
 from .api_auth_routes import register_auth_routes
 from .api_common import ApiContext
 from .api_chat_routes import register_chat_routes
+from .api_chat_thinking_routes import register_chat_thinking_routes
 from .api_cluster_routes import register_cluster_routes
+from .api_cluster_performance_routes import register_cluster_performance_routes
+from .performance_dashboard_wiring import register_dashboard
 from .chat_turn_dedupe import ChatTurnDedupe
 from .api_custom_connector_routes import register_custom_connector_routes
 from .api_enclosure_routes import register_enclosure_routes
 from .api_hardware_routes import register_hardware_routes
+from .api_host_settings_routes import register_host_settings_routes
 from .api_integration_routes import register_integration_routes
+from .api_llm_server_routes import register_llm_server_routes
+from .api_phoenix_routes import register_phoenix_routes
 from .api_mcp_routes import register_mcp_routes
+from .api_mcp_catalog_routes import register_mcp_catalog_routes
+from .api_skills_routes import register_skills_routes
 from .api_operation_routes import register_operation_routes
+from .api_telemetry_history_routes import register_telemetry_history_routes
+from .api_telemetry_ingest_routes import register_telemetry_ingest_routes
+from .api_agents_memory_routes import register_agents_memory_routes
+from .api_cluster_agent_routes import register_cluster_agent_routes
 from .api_upgrade_routes import register_upgrade_routes
 from .api_workload_routes import register_workload_routes
 from .api_web_research_routes import register_web_research_routes
@@ -41,6 +53,10 @@ def create_api_v2_blueprint(
     context = ApiContext(callbacks, store)
     register_auth_routes(context)
     register_hardware_routes(context)
+    register_telemetry_history_routes(context)
+    register_telemetry_ingest_routes(context)
+    register_agents_memory_routes(context)
+    register_cluster_agent_routes(context)
     register_enclosure_routes(context)
     register_assistant_setup_routes(context)
     register_assistant_routes(context)
@@ -50,12 +66,20 @@ def create_api_v2_blueprint(
     register_workload_act_routes(context)
     register_custom_connector_routes(context)
     register_integration_routes(context)
+    register_llm_server_routes(context)
+    register_phoenix_routes(context)
     register_application_routes(context)
     register_web_research_routes(context)
     register_chat_routes(context)
+    register_chat_thinking_routes(context)
     register_cluster_routes(context)
+    register_cluster_performance_routes(context)
+    register_host_settings_routes(context)
+    register_dashboard(context)
     register_workload_routes(context)
     register_operation_routes(context)
     register_upgrade_routes(context)
     register_mcp_routes(context)
+    register_mcp_catalog_routes(context)
+    register_skills_routes(context)
     return context.blueprint

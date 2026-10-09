@@ -76,6 +76,27 @@ BUSY_MESSAGE = (
 )
 
 
+#: What a refused cluster chat shows. Not `BUSY_MESSAGE`: the cluster does not
+#: run one request at a time, and saying so would be false; what is full is
+#: this appliance's own allowance of concurrent cluster chats.
+CLUSTER_BUSY_MESSAGE = (
+    "The GPU cluster is already answering as many AI Chat requests as this "
+    "appliance takes at once. Wait a moment and try again."
+)
+
+#: How many AI Chat requests may wait on the GPU cluster at once (ACC-105).
+#: vLLM batches, so the one-at-a-time slot is wrong for it - but each request
+#: still holds a control-plane worker for its whole generation, and waitress
+#: keeps only `wsgi_server.REQUEST_HEADROOM_THREADS` (16) for every other API
+#: call. Unbounded, 16 concurrent chats starved the dashboard: #223/VD-085
+#: again, one layer up. The default leaves most of the headroom free, and
+#: `VAELOR_CLUSTER_CHAT_SLOTS` can raise it only to the ceiling below.
+CLUSTER_CHAT_SLOTS = 4
+#: The most `VAELOR_CLUSTER_CHAT_SLOTS` may ask for: half the request headroom,
+#: so chats can never take the workers dashboard calls need.
+CLUSTER_CHAT_SLOTS_CEILING = 8
+
+
 class LocalModelBusy(RuntimeError):
     """A local model endpoint is already generating for another caller.
 
@@ -95,6 +116,15 @@ def _configured_slots() -> int:
         return max(1, int(raw))
     except (TypeError, ValueError):
         return 1
+
+
+def _configured_cluster_slots() -> int:
+    raw = os.environ.get("VAELOR_CLUSTER_CHAT_SLOTS")
+    try:
+        wanted = int(raw) if raw else CLUSTER_CHAT_SLOTS
+    except (TypeError, ValueError):
+        wanted = CLUSTER_CHAT_SLOTS
+    return max(1, min(wanted, CLUSTER_CHAT_SLOTS_CEILING))
 
 
 class _Hold:
@@ -117,6 +147,9 @@ _SLOTS: int = _configured_slots()
 _GATES: Dict[str, threading.BoundedSemaphore] = {}
 #: endpoint identity -> the permits currently held there, for the refusal log.
 _HOLDERS: Dict[str, List[_Hold]] = {}
+#: The cluster path's own bound: one gate for AI Chat's requests to the GPU
+#: cluster, whichever balancer port it is on.
+_CLUSTER_GATE = threading.BoundedSemaphore(_configured_cluster_slots())
 
 
 def _endpoint_key(connection: Dict[str, str]) -> str:
@@ -155,6 +188,34 @@ def configure(slots: Optional[int] = None) -> None:
         _SLOTS = slots if slots and slots > 0 else _configured_slots()
         _GATES.clear()
         _HOLDERS.clear()
+
+
+def configure_cluster(slots: Optional[int] = None) -> None:
+    """Resize the cluster-chat bound; tests use it, the app never needs to."""
+    global _CLUSTER_GATE
+    with _LOCK:
+        _CLUSTER_GATE = threading.BoundedSemaphore(
+            max(1, min(slots, CLUSTER_CHAT_SLOTS_CEILING)) if slots
+            else _configured_cluster_slots()
+        )
+
+
+@contextmanager
+def cluster_inference_slot() -> Iterator[None]:
+    """Hold one of the bounded cluster-chat permits, or refuse fast.
+
+    The engine batches, so several are admitted at once; past the bound the
+    caller is refused with :data:`CLUSTER_BUSY_MESSAGE` rather than holding a
+    worker in a queue. Always released, including when the body raises.
+    """
+    gate = _CLUSTER_GATE
+    if not gate.acquire(blocking=False):
+        _LOGGER.warning("cluster AI Chat slot refused: all permits are held")
+        raise LocalModelBusy(CLUSTER_BUSY_MESSAGE)
+    try:
+        yield
+    finally:
+        gate.release()
 
 
 def _record_hold(key: str, hold: _Hold) -> None:

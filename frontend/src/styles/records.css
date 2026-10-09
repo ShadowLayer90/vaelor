@@ -1,0 +1,344 @@
+/*
+ * The Activity and Settings boards' own pieces (VD-200, DialogsRecords and
+ * its pages): the dialog with an eyebrow, the key/value grid, the pager, the
+ * outline danger button and the ghost button. RecordKit.tsx draws them.
+ */
+
+.record-eyebrow {
+  display: block;
+  color: var(--text-unread);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.record-eyebrow--danger {
+  color: var(--danger-text);
+}
+
+.record-eyebrow--warning {
+  color: var(--warning-text);
+}
+
+.record-mono,
+.record-mono code {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* Dialog */
+.record-dialog {
+  width: min(100%, 460px);
+  max-height: calc(100dvh - (2 * var(--space-5)));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge), var(--shadow-modal);
+}
+
+.record-dialog--wide {
+  width: min(100%, 880px);
+}
+
+.record-dialog__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.record-dialog__head h2 {
+  margin: 6px 0 0;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.record-dialog__body {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 22px;
+  overflow-y: auto;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui);
+  line-height: 1.6;
+}
+
+.record-dialog__body p {
+  margin: 0;
+}
+
+.record-dialog__description {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.record-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 22px;
+  border-top: 1px solid var(--border-row);
+}
+
+.record-dialog__actions--split {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.record-dialog__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* A disabled confirm says why beneath itself, right-aligned under the button. */
+.record-dialog__buttons .ui-button-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.record-dialog .ui-button,
+.record-card-button .ui-button,
+.record-pager .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+/* A card row's own buttons sit beside its compact controls (an account row's
+   role select): one token, so the select and its buttons are one height on a
+   desktop and the full touch target on a phone or touch screen. */
+.record-card-button .ui-button {
+  min-height: var(--control-height-compact);
+}
+
+.record-dialog .ui-button--primary,
+.record-dialog .ui-button--danger {
+  font-weight: 600;
+}
+
+.record-dialog .ui-button__disabled-reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* Evidence rows inside the evidence dialog */
+.record-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-row);
+  border-radius: var(--radius-lg);
+}
+
+.record-evidence__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.record-evidence__heading h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.record-evidence__technical summary,
+.record-disclosure summary {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+  cursor: pointer;
+}
+
+.record-evidence__technical p {
+  margin: 8px 0 4px;
+}
+
+.record-evidence__technical pre {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  background: var(--bg-control);
+  border: 1px solid var(--border-row);
+  border-radius: var(--radius-md);
+}
+
+/* Key/value grid */
+.record-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--border-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.record-facts > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--bg-kv);
+}
+
+.record-facts dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.record-facts dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Pager */
+.record-pager {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.record-pager__nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.record-pager__nav > span {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.record-pager .ui-button--quiet,
+.record-ghost.ui-button--quiet {
+  color: var(--text-primary);
+  background: none;
+  border-color: transparent;
+}
+
+.record-ghost.ui-button--quiet:disabled,
+.record-pager .ui-button--quiet:disabled {
+  color: var(--text-faint-label);
+  background: none;
+  border-color: transparent;
+}
+
+/* An outline danger action on a row (End session, Delete, Revoke): the solid
+   danger fill is kept for the confirm that actually removes. */
+.ui-button.record-danger-outline {
+  color: var(--danger-text);
+  background: var(--bg-button);
+  border-color: var(--danger-border);
+}
+
+.ui-button.record-danger-outline:hover:not(:disabled) {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .record-dialog .ui-button,
+  .record-card-button .ui-button,
+  .record-pager .ui-button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 720px) {
+  .record-dialog__head,
+  .record-dialog__body,
+  .record-dialog__actions {
+    padding-inline: var(--space-4);
+  }
+
+  .record-pager {
+    justify-content: center;
+  }
+}
+
+/* An icon beside a button's word (Reload) on the Activity and Settings pages. */
+.acty-page .ui-button,
+.stg-page .ui-button,
+.record-dialog .ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* A disabled primary or danger action keeps its colour, dimmed (the boards'
+   disabled confirm), and says why beneath it in grey. */
+:is(.acty-page, .stg-page, .record-dialog, .sgn-shell) .ui-button--primary:disabled {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+  opacity: 0.5;
+}
+
+:is(.acty-page, .stg-page, .record-dialog, .sgn-shell) .ui-button--danger:disabled {
+  color: var(--text-on-danger);
+  background: var(--danger-strong);
+  border-color: var(--danger-strong);
+  opacity: 0.5;
+}
+
+:is(.acty-page, .stg-page, .record-dialog, .sgn-shell) .ui-button.record-danger-outline:disabled {
+  color: var(--danger-text);
+  background: var(--bg-button);
+  border-color: var(--danger-border);
+  opacity: 0.5;
+}
+
+:is(.acty-page, .stg-page, .record-dialog) .ui-button__disabled-reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* The Activity and Settings page header: the name is the level-one heading, the grey
+   sentence under it a paragraph in the same light type. */
+.record-page-title {
+  min-width: 0;
+}
+
+.record-page-title > .ui-page-header__title {
+  margin: 0;
+}
+
+.record-page-title__line.ui-page-header__title {
+  color: var(--text-faint-label);
+}

@@ -1,0 +1,295 @@
+/*
+ * Apps and AI area pieces (VD-200, the Apps* and Manage* boards): the area's
+ * one dialog, its chips, icon tiles, label/value lists and insets. Colours are
+ * tokens only (tokens-auth.css); the boards' values map 1:1 (DESIGN_TOKENS).
+ */
+
+/* ---- The dialog ---- */
+
+.apps-dialog-backdrop .apps-dialog {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge), var(--shadow-modal);
+}
+
+.apps-dialog--narrow { width: min(100%, 520px); }
+.apps-dialog--standard { width: min(100%, 720px); }
+.apps-dialog--wide { width: min(100%, 1040px); }
+
+.apps-dialog__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.apps-dialog__titles {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.apps-dialog__titles h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.3;
+  overflow-wrap: break-word;
+}
+
+.apps-eyebrow {
+  color: var(--text-unread);
+  font-size: var(--font-size-ui-xs);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.apps-eyebrow--danger { color: var(--danger-text); }
+
+.apps-dialog__header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+/* The boards draw the header's Close as quiet text, not a pill. */
+.apps-dialog .apps-dialog__close.ui-button--quiet {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+}
+
+.apps-dialog .apps-dialog__close.ui-button--quiet:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: transparent;
+  border-color: transparent;
+}
+
+/* A disabled control's reason in a dialog is the boards' grey small line. */
+.apps-dialog .ui-button__disabled-reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: 20px 22px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.apps-dialog__body > p { margin: 0; }
+
+.apps-dialog__footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 16px 22px;
+  border-top: 1px solid var(--border-row);
+}
+
+.apps-dialog__footer-start {
+  min-width: 0;
+  flex: 1 1 240px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-dialog__footer-actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* A disabled primary's reason sits under it, right-aligned with it. */
+.apps-dialog__footer-actions .ui-button-wrap { align-items: flex-end; text-align: right; }
+
+/* ---- Chips, tiles, lists ---- */
+
+.apps-tags {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.apps-tag {
+  padding: 3px 8px;
+  color: var(--text-secondary);
+  background: var(--bg-row-active);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-ui-xs);
+  white-space: nowrap;
+}
+
+.apps-ico {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  background: var(--bg-icon);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-md);
+}
+
+.apps-ico--accent {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-deep);
+}
+
+.apps-facts {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-facts__row {
+  display: grid;
+  grid-template-columns: minmax(84px, max-content) minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+.apps-facts dt { color: var(--text-muted); }
+
+.apps-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-primary);
+  overflow-wrap: break-word;
+}
+
+.apps-mono {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.apps-kv {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  background: var(--border-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.apps-kv > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--bg-kv);
+}
+
+.apps-kv dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-kv dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: break-word;
+}
+
+.apps-inset {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.apps-inset--accent { border-color: var(--accent-deep); }
+.apps-inset--danger { border-color: var(--danger-border); }
+
+.apps-inset__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text-muted);
+}
+
+.apps-inset__head > svg { margin-top: 2px; flex: 0 0 auto; }
+
+.apps-inset__text {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.apps-inset__text > strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.apps-progress {
+  height: 6px;
+  overflow: hidden;
+  background: var(--meter-track);
+  border-radius: var(--radius-pill);
+}
+
+.apps-progress > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+.apps-progress--stale > i { background: var(--border-strong); }
+
+@media (max-width: 720px) {
+  .apps-dialog__header,
+  .apps-dialog__body,
+  .apps-dialog__footer { padding-inline: var(--space-4); }
+
+  .apps-dialog--narrow,
+  .apps-dialog--standard,
+  .apps-dialog--wide { width: 100%; }
+
+  .apps-dialog__footer-actions { width: 100%; }
+}

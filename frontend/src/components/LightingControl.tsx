@@ -4,8 +4,10 @@ import { isMulticolourStyle, normalizeHex } from "../lib/colorValue";
 import type { Session } from "../types";
 import { ColorField } from "./ColorField";
 import { Icon } from "./Icon";
+import type { SectionStatus } from "./FanControl";
 import { StatusPill } from "./StatusPill";
-import { Button, Notice, UnavailableValue } from "./ui";
+import { KvGrid, SectionCard, useVisiblePoll } from "./systemUi";
+import { Button, Notice } from "./ui";
 import { useMachineProfile } from "../hooks/useMachineProfile";
 import { unknownMachine } from "../lib/machine";
 
@@ -37,7 +39,22 @@ const colorPresets = [
   { name: "Warm white", value: "#ffd7a8" },
 ];
 
-export function LightingControl({ session }: { session: Session }) {
+/**
+ * System › Case lighting (VD-200, the SystemLighting board): the live preview
+ * with what the enclosure holds, the lights and their colour beside the effect
+ * and its sliders, and one save bar. Nothing reaches the lights until Save.
+ */
+export function LightingControl({
+  onStatus,
+  reloadToken = 0,
+  session,
+}: {
+  /** The page header's pill ("4 RGB lights ready"), reported up to the System page. */
+  onStatus?: (status: SectionStatus | null) => void;
+  /** Bumped by the System page's Reload. */
+  reloadToken?: number;
+  session: Session;
+}) {
   const [state, setState] = useState<LightingState | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [color, setColor] = useState("#ff6a00");
@@ -114,10 +131,13 @@ export function LightingControl({ session }: { session: Session }) {
 
   useEffect(() => {
     if (!lighting.available) return;
-    void refresh();
-    const interval = window.setInterval(() => void refresh(), 5_000);
-    return () => window.clearInterval(interval);
+    void refresh().catch(() => undefined);
   }, [lighting.available, refresh]);
+  useVisiblePoll(() => void refresh().catch(() => undefined), 5_000, lighting.available);
+
+  useEffect(() => {
+    if (reloadToken > 0 && lighting.available) void refresh().catch(() => undefined);
+  }, [lighting.available, refresh, reloadToken]);
 
   const apply = async () => {
     // Flush any valid colour the reader typed but has not blurred, so the first
@@ -249,132 +269,173 @@ export function LightingControl({ session }: { session: Session }) {
      */
   }, [color, brightness, speed, enabled, lighting.available]);
 
+
+  const ledCount = state?.detected ? state.led_count : null;
   /*
-   * Not one control here was gated on anything. On a machine with no LEDs the
-   * page rendered a live animated preview, a colour swatch, three effects, two
-   * sliders and a Save that returned 200 and audited `lighting.update` as a
-   * success against target `ws2812`. `led_count: 4` is a server-side literal,
-   * so "the four built-in lights" was asserted on every host.
+   * The page header's pill. `led_count: 4` is a server-side literal, so it is
+   * stated only once the controller has answered as detected.
+   */
+  const status: SectionStatus = !lighting.available
+    ? { label: machine ? "No lighting controller" : "Detecting lighting", tone: "neutral" }
+    : ledCount !== null
+      ? { label: `${ledCount} RGB lights ready`, tone: "success" }
+      : { label: "Detecting lighting", tone: "neutral", reading: "unread" };
+  const statusKey = `${status.label}|${status.tone}|${status.reading ?? ""}`;
+  useEffect(() => {
+    onStatus?.(status);
+    // The key carries every field the pill shows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onStatus, statusKey]);
+  useEffect(() => () => onStatus?.(null), [onStatus]);
+
+  /*
+   * Not one control here was gated on anything once: on a machine with no
+   * LEDs the page rendered a live preview, a swatch, three effects, two
+   * sliders and a Save that audited `lighting.update` as a success.
    */
   if (!lighting.available) {
     return (
-      <section className="lighting-section" aria-labelledby="lighting-title">
-        <div className="section-heading lighting-section__heading">
-          <div>
-            <span className="page-eyebrow">System / Case lighting</span>
-            <h2 id="lighting-title">Case lighting</h2>
+      <div className="sys-section">
+        <SectionCard
+          actions={<StatusPill label={machine ? "No lighting controller" : "Detecting lighting"} tone="neutral" />}
+          title="Case lighting"
+          titleId="lighting-title"
+        >
+          <div className="sys-absent">
+            <span aria-hidden="true" className="sys-absent__dash">—</span>
             <p>{machine ? lighting.reason : "Checking what lighting hardware this machine has."}</p>
+            {machine && <p>There are no lights here to set a colour, effect or brightness on, so no controls are offered.</p>}
           </div>
-          <StatusPill
-            label={machine ? "No lighting controller" : "Detecting lighting"}
-            status="neutral"
-          />
-        </div>
-        <p className="lighting-unavailable">
-          <UnavailableValue label="Case lighting unavailable" reason={lighting.reason ?? "Not reported by this device"} />
-          <span>There are no lights here to set a colour, effect or brightness on, so no controls are offered.</span>
-        </p>
-      </section>
+        </SectionCard>
+      </div>
     );
   }
 
+  const savedStyleName = state ? state.styles.find((item) => item.id === state.style)?.name ?? state.style : null;
+  const changes = state ? [
+    enabled !== state.enabled,
+    normalizeHex(effectiveColor) !== normalizeHex(state.color),
+    brightness !== state.brightness,
+    speed !== state.speed,
+    lightingStyle !== state.style,
+  ].filter(Boolean).length : 0;
+
   return (
-    <section className="lighting-section" aria-labelledby="lighting-title">
-      <div className="section-heading lighting-section__heading">
-        <div>
-          <span className="page-eyebrow">System / Case lighting</span>
-          <h2 id="lighting-title">Case lighting</h2>
-          <p>Choose how the {state?.led_count ?? "built-in"} case lights look. Changes are applied when you select Save lighting.</p>
+    <div className="sys-section sys-lighting">
+      <section aria-label="Live preview" className="card ui-card sys-hero">
+        <div aria-hidden="true" className={`sys-lights sys-lights--${lightingStyle}`} ref={previewRef}>
+          <div className="sys-lights__case"><span /><span /><span /><span /></div>
         </div>
-        <StatusPill
-          label={state?.detected ? `${state.led_count} RGB lights ready` : "Detecting lighting"}
-          status={state?.detected ? "healthy" : "neutral"}
+        <div className="sys-hero__reading">
+          <small>Live preview</small>
+          <strong>{enabled ? styleName : "Lights off"}</strong>
+          {/* The chosen colour is shown here as well as in the hex field, so
+              it is never readable in only one place. */}
+          <p>{brightness}% brightness · <span className="sys-mono">{color.toUpperCase()}</span>{colorIgnored ? " · multicolour effect" : ""}</p>
+        </div>
+        <KvGrid
+          className="sys-hero__facts"
+          items={[
+            {
+              label: "Case lights",
+              value: !state ? "Not read" : `${state.enabled ? "On" : "Off"}${ledCount !== null ? ` · ${ledCount} lights` : ""}`,
+            },
+            { label: "Controller", value: state?.hardware || "Not read" },
+            {
+              label: "Saved on the enclosure",
+              value: !state ? "Not read" : state.enabled ? `${savedStyleName} · ${state.brightness}%` : "Lights off",
+            },
+          ]}
+          label="Case lighting on the enclosure"
         />
-      </div>
+      </section>
 
-      {message && <Notice severity={messageSeverity}><Icon name="bolt" />{message}</Notice>}
-
-      <div className="lighting-console">
-        <div className={`lighting-preview lighting-preview--${lightingStyle}`} ref={previewRef}>
-          <div className="lighting-preview__case" aria-hidden="true">
-            <span /><span /><span /><span />
-          </div>
-          <div className="lighting-preview__copy">
-            <small>Live preview</small>
-            <strong>{enabled ? state?.styles.find((item) => item.id === lightingStyle)?.name ?? lightingStyle : "Lights off"}</strong>
-            {/* The chosen colour is shown here as well as in the hex field, so
-                it is never readable in only one place. */}
-            <span>{brightness}% brightness · {color.toUpperCase()}{colorIgnored ? " · multicolour effect" : ""}</span>
-          </div>
-        </div>
-
-        <div className="lighting-controls">
-          <div className="lighting-power-row">
-            <div><strong>Case lights</strong><span>Switch {state?.led_count ? `all ${state.led_count}` : "the"} RGB lights on or off.</span></div>
+      <div className="sys-grid-2">
+        <SectionCard
+          actions={(
             <Button
               aria-checked={enabled}
-              className="switch-control"
+              aria-label="Case lights"
+              className="sys-switch"
               disabled={!canControl}
               onClick={() => { touched.current = true; setEnabled((current) => !current); }}
               role="switch"
+              variant="quiet"
             >
-              <span />
+              <span aria-hidden="true" className="sys-switch__track"><i /></span>
               {enabled ? "On" : "Off"}
             </Button>
-          </div>
-
+          )}
+          description={`Switch ${ledCount !== null ? `all ${ledCount}` : "the"} RGB lights on or off.`}
+          title="Lights and colour"
+          titleId="lighting-title"
+        >
           <fieldset
             aria-describedby={colorNote ? "lighting-color-note" : undefined}
+            className="sys-fieldset"
             disabled={colorDisabled}
           >
-            <legend>Color</legend>
-            {/* One visible explanation, associated with the group, rather than
-                repeating itself under all four inputs. */}
-            {colorNote && (
-              <p className="lighting-color-note" id="lighting-color-note">{colorNote}</p>
-            )}
-            <div className="color-picker-row">
-              <ColorField
-                disabled={colorDisabled}
-                key={colorRevision}
-                onChange={edited(setColor)}
-                // A valid draft the reader typed protects itself from the
-                // seeding poll while it stands, and lifts that protection when
-                // it is withdrawn - unlike the monotonic `touched`, which a
-                // withdrawn draft used to stick (#154 regression).
-                onPendingChange={notePending}
-                onValidityChange={setColorValid}
-                value={color}
-              />
-              <div className="color-presets">
-                {colorPresets.map((preset) => (
-                  /* An ancestor `fieldset[disabled]` alone leaves
-                     `disabled === false` and no `aria-disabled` on the button
-                     itself, so the state is stated here rather than inferred. */
-                  <Button aria-label={preset.name} aria-pressed={color === preset.value} className="color-preset" disabled={colorDisabled} key={preset.value} onClick={() => edited(setColor)(preset.value)} title={preset.name} type="button"><span aria-hidden="true" ref={(element) => element?.style.setProperty("background", preset.value)} /></Button>
-                ))}
-              </div>
-            </div>
-          </fieldset>
-
-          <fieldset disabled={!canControl || !enabled}>
-            <legend>Effect</legend>
-            <div className="lighting-effects">
-              {state?.styles.map((item) => (
-                <Button aria-pressed={lightingStyle === item.id} className="lighting-effect" key={item.id} onClick={() => edited(setLightingStyle)(item.id)} type="button">
-                  <span className={`effect-glyph effect-glyph--${item.id}`} />
-                  {item.name}
+            <legend className="sys-field__label">Colour</legend>
+            {/* One visible explanation, associated with the group. */}
+            {colorNote && <p className="sys-note" id="lighting-color-note">{colorNote}</p>}
+            <ColorField
+              disabled={colorDisabled}
+              key={colorRevision}
+              onChange={edited(setColor)}
+              // A valid draft protects itself from the seeding poll while it
+              // stands, and lifts that protection when withdrawn (#154).
+              onPendingChange={notePending}
+              onValidityChange={setColorValid}
+              value={color}
+            />
+            <span className="sys-field__label">Presets</span>
+            <div className="sys-presets">
+              {colorPresets.map((preset) => (
+                /* An ancestor `fieldset[disabled]` alone leaves `disabled ===
+                   false` on the button itself, so the state is stated here. */
+                <Button
+                  aria-pressed={color === preset.value}
+                  className="sys-preset"
+                  disabled={colorDisabled}
+                  key={preset.value}
+                  onClick={() => edited(setColor)(preset.value)}
+                  type="button"
+                  variant="secondary"
+                >
+                  <span aria-hidden="true" className="sys-preset__dot" ref={(element) => element?.style.setProperty("background", preset.value)} />
+                  {preset.name}
                 </Button>
               ))}
             </div>
           </fieldset>
+        </SectionCard>
 
-          <div className="lighting-sliders">
-            <label>
-              <span><strong>Brightness</strong><output>{brightness}%</output></span>
+        <SectionCard description="How the lights move." title="Effect">
+          <div className="sys-stack">
+            <fieldset className="sys-fieldset" disabled={!canControl || !enabled}>
+              <legend className="sr-only">Effect</legend>
+              <div className="sys-effects">
+                {state?.styles.map((item) => (
+                  <Button
+                    aria-pressed={lightingStyle === item.id}
+                    className="sys-effect"
+                    key={item.id}
+                    onClick={() => edited(setLightingStyle)(item.id)}
+                    type="button"
+                    variant="secondary"
+                  >
+                    {item.name}
+                  </Button>
+                ))}
+              </div>
+            </fieldset>
+            <label className="sys-slider">
+              <span><span>Brightness</span><output>{brightness}%</output></span>
               <input
                 aria-label="RGB brightness"
-                aria-valuetext={`${brightness} percent`} className="lighting-slider" disabled={!canControl || !enabled}
+                aria-valuetext={`${brightness} percent`}
+                className="lighting-slider"
+                disabled={!canControl || !enabled}
                 max="100"
                 min="0"
                 onChange={(event) => edited(setBrightness)(Number(event.target.value))}
@@ -382,11 +443,13 @@ export function LightingControl({ session }: { session: Session }) {
                 value={brightness}
               />
             </label>
-            <label>
-              <span><strong>Animation speed</strong><output>{speed}%</output></span>
+            <label className="sys-slider">
+              <span><span>Animation speed</span><output>{speed}%</output></span>
               <input
                 aria-label="RGB animation speed"
-                aria-valuetext={`${speed} percent`} className="lighting-slider" disabled={!canControl || !enabled || lightingStyle === "solid"}
+                aria-valuetext={`${speed} percent`}
+                className="lighting-slider"
+                disabled={!canControl || !enabled || lightingStyle === "solid"}
                 max="100"
                 min="0"
                 onChange={(event) => edited(setSpeed)(Number(event.target.value))}
@@ -394,36 +457,48 @@ export function LightingControl({ session }: { session: Session }) {
                 value={speed}
               />
             </label>
+            <p className="sys-muted">Solid does not animate, so speed is locked while Solid is chosen.</p>
           </div>
-
-          <div className="lighting-actions">
-            {/*
-              * Three states, not two. `dirty` was `Boolean(state) && …`, so
-              * before the first `/lighting` response it was false and this line
-              * claimed "All changes saved" — a settled verdict about settings
-              * Vaelor had not yet read, on a panel the reader can already type
-              * into. Not knowing is its own answer and says so.
-              */}
-            <p aria-live="polite" className="lighting-actions__state">
-              {!state ? "Reading the current settings" : dirty ? "Unsaved changes" : "All changes saved"}
-            </p>
-            <div className="lighting-actions__buttons">
-              <Button
-                disabled={!canControl || busy || !state || (!dirty && colorValid)}
-                disabledReason={!state ? "Vaelor has not read this enclosure's current lighting yet." : undefined}
-                onClick={revert}
-                type="button"
-                variant="quiet"
-              >
-                Revert
-              </Button>
-              <Button className="lighting-apply" variant="primary" disabled={!canControl || busy || !dirty || !colorValid} disabledReason={!colorValid && dirty ? "Correct the colour value before saving." : undefined} onClick={() => void apply()}>
-                {busy ? "Saving…" : canControl ? "Save lighting" : "Operator access required"}
-              </Button>
-            </div>
-          </div>
-        </div>
+        </SectionCard>
       </div>
-    </section>
+
+      <section aria-labelledby="lighting-save-title" className="card ui-card sys-savebar">
+        <div className="sys-savebar__text">
+          <span className="sys-eyebrow">Case lighting · {changes === 0 ? "no changes" : `${changes} change${changes === 1 ? "" : "s"}`}</span>
+          {/*
+            * Three states, not two: before the first `/lighting` answer this
+            * once claimed "All changes saved" about settings Vaelor had not read.
+            */}
+          <h2 aria-live="polite" id="lighting-save-title">
+            {!state ? "Reading the current settings" : dirty ? "Unsaved changes" : "All changes saved"}
+          </h2>
+          <p>{messageSeverity === "danger" && message
+            ? "Unsaved changes stay in the form, so you can try again."
+            : "Nothing reaches the lights until you save. Leaving the page asks first."}</p>
+        </div>
+        <div className="sys-savebar__actions">
+          <Button
+            disabled={!canControl || busy || !state || (!dirty && colorValid)}
+            disabledReason={!state ? "Vaelor has not read this enclosure's current lighting yet." : undefined}
+            onClick={revert}
+            type="button"
+            variant="secondary"
+          >
+            Revert
+          </Button>
+          <Button
+                        disabled={!canControl || busy || !dirty || !colorValid}
+            disabledReason={!canControl
+              ? "Operator access is required to change case lighting."
+              : !colorValid && dirty ? "Correct the colour value before saving." : undefined}
+            onClick={() => void apply()}
+            variant="primary"
+          >
+            {busy ? "Saving…" : canControl ? "Save lighting" : "Operator access required"}
+          </Button>
+        </div>
+        {message && <Notice className="sys-savebar__outcome" severity={messageSeverity}>{message}</Notice>}
+      </section>
+    </div>
   );
 }

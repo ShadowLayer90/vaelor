@@ -50,6 +50,81 @@ _RECOVERABLE_MARKERS = (
 )
 
 
+#: Why an upgradable package was not installed, keyed by the apt section that
+#: names it. apt-get before 3.0 and after word these differently; both are read.
+HELD_KEPT_BACK = (
+    "It needs a package that is not installed yet - for a kernel, the new "
+    "kernel itself - and a plain upgrade never adds packages. Installing it "
+    "takes a full upgrade (apt full-upgrade), which can also remove packages, "
+    "so Vaelor does not run that for you."
+)
+HELD_PHASED = (
+    "Ubuntu is releasing this update to machines in stages (a phased update) "
+    "and this one is not in the current stage; it will be offered later."
+)
+HELD_UNEXPLAINED = (
+    "It was still waiting after the install, and the package manager did not "
+    "say why."
+)
+_HELD_SECTIONS = (
+    ("the following packages have been kept back:", HELD_KEPT_BACK),
+    ("not upgrading:", HELD_KEPT_BACK),
+    ("the following upgrades have been deferred due to phasing:", HELD_PHASED),
+    ("not upgrading yet due to phasing:", HELD_PHASED),
+)
+
+
+def held_back(output: str, remaining: list[str]) -> list[Dict[str, str]]:
+    """Every package still upgradable after an install, each with its reason.
+
+    W4d-D31: the console said "System updates installed" while 4 of 67 - the
+    new kernel among them - were still waiting, and nothing said so or why.
+    apt names them in its own output ("kept back" / "Not upgrading", and the
+    phased-update section); a package apt did not explain is still listed, as
+    unexplained, because the list is what is still waiting, not what apt chose
+    to mention (LESSONS 5: the label must cover what was measured).
+    """
+    reasons: Dict[str, str] = {}
+    current = None
+    for line in str(output).splitlines():
+        header = line.strip().lower()
+        matched = next((why for title, why in _HELD_SECTIONS if header == title), None)
+        if matched is not None:
+            current = matched
+            continue
+        if current is None:
+            continue
+        if not line[:1].isspace() or not line.strip():
+            current = None
+            continue
+        for token in line.split():
+            name = token.strip().split(":", 1)[0]
+            if name and not name.startswith(("(", ")")) and "=>" not in name:
+                reasons.setdefault(name, current)
+    return [
+        {"name": name, "reason": reasons.get(name, HELD_UNEXPLAINED)}
+        for name in remaining
+    ]
+
+
+def system_update_message(result: Dict[str, Any]) -> str:
+    """The install job's one line, which must not call a partial install whole.
+
+    W4d-D31: "System updates installed" stood over four held-back updates.
+    """
+    held = [
+        item.get("name", "") for item in (result or {}).get("held_back") or []
+        if isinstance(item, dict)
+    ]
+    if not held:
+        return "System updates installed"
+    names = ", ".join(held[:4]) + (" and {} more".format(len(held) - 4) if len(held) > 4 else "")
+    return (
+        "System updates installed, except {} held back: {}. Software updates "
+        "says why for each.".format(len(held), names)
+    )
+
+
 def _looks_recoverable(output: str) -> bool:
     text = str(output).lower()
     return any(marker in text for marker in _RECOVERABLE_MARKERS)
@@ -135,6 +210,7 @@ def perform_update(
         else package_manager.apply_upgrade_commands()
     )
     output = ""
+    full_stdout = ""
     for command in commands:
         result = runner(
             command,
@@ -145,6 +221,9 @@ def perform_update(
             env=environment,
         )
         output = (result.stdout + "\n" + result.stderr)[-8192:]
+        # Kept whole: apt names held packages near the top, which the 8 KiB
+        # tail above loses on any real install (W4d-D31).
+        full_stdout = result.stdout or ""
         if result.returncode != 0:
             # A dpkg run left half-finished by a trigger-ordering race heals
             # with one repair pass; retry the command once and keep going if
@@ -163,6 +242,7 @@ def perform_update(
                     env=environment,
                 )
                 output = (result.stdout + "\n" + result.stderr)[-8192:]
+                full_stdout = result.stdout or ""
             if result.returncode != 0:
                 raise RuntimeError(output.strip() or "The package manager failed.")
     after = _packages(package_manager, runner)
@@ -171,6 +251,7 @@ def perform_update(
         "completed_at": int(time.time() * 1000),
         "packages_before": before,
         "packages_remaining": after,
+        "held_back": held_back(full_stdout, after) if action == "apply" else [],
         "reboot_required": Path("/var/run/reboot-required").exists(),
     }
     _write_state(state)

@@ -8,6 +8,12 @@ export type NoticeProps = {
   children: ReactNode;
   heading?: ReactNode;
   className?: string;
+  /**
+   * A state that stands while the page is open (a warning about how something
+   * is set up), not an event that just happened: announced politely as a
+   * status, never as an alert, whatever its severity.
+   */
+  standing?: boolean;
 } & Omit<HTMLAttributes<HTMLDivElement>, "role" | "aria-live" | "children">;
 
 export function Notice({
@@ -15,9 +21,10 @@ export function Notice({
   children,
   heading,
   className,
+  standing = false,
   ...props
 }: NoticeProps) {
-  const urgent = severity === "warning" || severity === "danger";
+  const urgent = !standing && (severity === "warning" || severity === "danger");
   return (
     <div
       {...props}

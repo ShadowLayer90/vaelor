@@ -12,6 +12,8 @@ import uuid
 from contextlib import closing
 from typing import Any, Dict, Optional, Sequence
 
+from .chat_appliance_scope import APPLIANCE_SCOPE_PROVIDER
+from .chat_thinking_store import stored_thinking
 from .conversation_titles import conversation_title
 from .document_text import DocumentExtractionError, extract_text
 from .runtime_paths import env_value, state_path
@@ -23,6 +25,9 @@ MAX_DOCUMENTS_PER_COLLECTION = 200
 MAX_CHUNKS_PER_DOCUMENT = 4000
 # One request may search at most this many collections.
 MAX_SELECTED_COLLECTIONS = 10
+#: The most turns one export carries. Bounded so one request cannot read an
+#: unbounded table into memory; an export past it says so in the file.
+EXPORT_TURN_LIMIT = 5000
 
 
 class RagChatError(ValueError):
@@ -36,6 +41,25 @@ class RagChatError(ValueError):
 # the message text was considered and rejected - a model may legitimately write
 # "this request failed" - so it is recorded, bounded, and nothing else.
 MESSAGE_METADATA_KEYS = ("failed", "error_code", "failed_model")
+
+#: The author a custom-agent proposal turn is stored under. No model wrote it.
+AGENT_ROUTER_AUTHOR = "agent-router"
+
+#: Which model a conversation shows in the chat list is derived, never stored:
+#: the most recent turn a model actually wrote. The conversation row's own
+#: `model` column used to be written by the picker and when a chat was created,
+#: so a chat nothing had answered was listed under whichever model happened to
+#: be selected (ACC-116), and a reopened chat put that phantom back in the
+#: picker (ACC-095). A recorded failure, a boundary decline and an agent
+#: proposal are turns, but no model wrote them, so none of them names one. The
+#: failure marker is matched on the exact bytes `json.dumps` writes for it.
+_ANSWERED_MODEL = (
+    "(SELECT m.model FROM ai_chat_messages m "
+    "WHERE m.conversation_id = c.id AND m.role = 'assistant' AND m.model != '' "
+    "AND m.model NOT IN ('{}', '{}') "
+    "AND m.metadata_json NOT LIKE '%\"failed\": true%' "
+    "ORDER BY m.id DESC LIMIT 1) AS answered_model"
+).format(AGENT_ROUTER_AUTHOR, APPLIANCE_SCOPE_PROVIDER)
 
 
 def _stored_json(raw: Any, default: Any) -> Any:
@@ -88,6 +112,9 @@ def _message_metadata(value: Any) -> Dict[str, Any]:
     performance = _performance_view(value.get("performance"))
     if performance:
         metadata["performance"] = performance
+    thinking = stored_thinking(value.get("thinking"))  # VD-209, bounded
+    if thinking:
+        metadata["thinking"] = thinking
     return metadata
 
 
@@ -181,6 +208,11 @@ class RagChatStore:
                     actor TEXT PRIMARY KEY, model TEXT NOT NULL,
                     collection_ids_json TEXT NOT NULL, updated_at REAL NOT NULL
                 );
+                -- The chat list derives each row's model from its newest
+                -- answered turn (`_ANSWERED_MODEL`); without this that
+                -- subquery scans every message of every listed chat.
+                CREATE INDEX IF NOT EXISTS ai_chat_messages_by_conversation
+                    ON ai_chat_messages(conversation_id, id);
                 """
             )
             # Whether a search ran is part of the answer, so a chat that was
@@ -561,12 +593,18 @@ class RagChatStore:
 
     def ensure_conversation(
         self, actor: str, conversation_id: str = "", *,
-        title: str = "", model: str = "", collections: Optional[list[str]] = None,
+        title: str = "", collections: Optional[list[str]] = None,
     ):
+        """Return one conversation, creating it when no id is given.
+
+        A new conversation records no model: nothing has answered in it yet,
+        and which model has is derived from its turns (`_ANSWERED_MODEL`).
+        """
         if conversation_id:
             with closing(self._connect()) as connection:
                 row = connection.execute(
-                    "SELECT * FROM ai_chat_conversations WHERE id=? AND actor=?",
+                    "SELECT c.*, {} FROM ai_chat_conversations c "
+                    "WHERE c.id=? AND c.actor=?".format(_ANSWERED_MODEL),
                     (conversation_id, actor),
                 ).fetchone()
             if row is None:
@@ -583,7 +621,7 @@ class RagChatStore:
                 """,
                 (item_id, actor,
                  conversation_title(title, limit=100, fallback="New AI chat"),
-                 str(model)[:200], json.dumps(collections or []), now, now),
+                 "", json.dumps(collections or []), now, now),
             )
             connection.commit()
         return self.ensure_conversation(actor, item_id)
@@ -591,6 +629,8 @@ class RagChatStore:
     @staticmethod
     def _conversation_row(row):
         item = dict(row)
+        # The stored column is never read: see `_ANSWERED_MODEL`.
+        item["model"] = str(item.pop("answered_model", "") or "")
         item["collections"] = json.loads(item.pop("collections_json"))
         item["archived"] = bool(item["archived"])
         return item
@@ -682,15 +722,38 @@ class RagChatStore:
             "metadata": {},
         }
 
-    def messages(self, actor: str, conversation_id: str, limit: int = 100):
+    def export_messages(self, actor: str, conversation_id: str) -> Dict[str, Any]:
+        """Every turn for an export, up to :data:`EXPORT_TURN_LIMIT`, and whether cut.
+
+        A file that says it is the conversation must be all of it, or say it
+        is not (ACC-112): the export used to be silently the last hundred.
+        """
         self.ensure_conversation(actor, conversation_id)
+        with closing(self._connect()) as connection:
+            total = int(connection.execute(
+                "SELECT COUNT(*) FROM ai_chat_messages WHERE conversation_id=?",
+                (conversation_id,),
+            ).fetchone()[0])
+        return {
+            "messages": self._recent(conversation_id, EXPORT_TURN_LIMIT),
+            "total": total,
+            "limit": EXPORT_TURN_LIMIT,
+            "truncated": total > EXPORT_TURN_LIMIT,
+        }
+
+    def messages(self, actor: str, conversation_id: str, limit: int = 100):
+        """The most recent ``limit`` turns (at most 200), oldest first."""
+        self.ensure_conversation(actor, conversation_id)
+        return self._recent(conversation_id, max(1, min(limit, 200)))
+
+    def _recent(self, conversation_id: str, bound: int):
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM ai_chat_messages WHERE conversation_id=?
                 ORDER BY id DESC LIMIT ?
                 """,
-                (conversation_id, max(1, min(limit, 200))),
+                (conversation_id, bound),
             ).fetchall()
         return [
             {
@@ -712,20 +775,23 @@ class RagChatStore:
             if query:
                 rows = connection.execute(
                     """
-                    SELECT DISTINCT c.* FROM ai_chat_conversations c
-                    LEFT JOIN ai_chat_messages m ON m.conversation_id=c.id
-                    WHERE c.actor=? AND c.archived=?
-                      AND (LOWER(c.title) LIKE ? OR LOWER(m.content) LIKE ?)
+                    SELECT c.*, {} FROM ai_chat_conversations c
+                    WHERE c.actor=? AND c.archived=? AND (
+                      LOWER(c.title) LIKE ? OR EXISTS (
+                        SELECT 1 FROM ai_chat_messages t
+                        WHERE t.conversation_id=c.id AND LOWER(t.content) LIKE ?
+                      )
+                    )
                     ORDER BY c.updated_at DESC LIMIT 100
-                    """,
+                    """.format(_ANSWERED_MODEL),
                     (actor, int(archived), f"%{query.lower()}%", f"%{query.lower()}%"),
                 ).fetchall()
             else:
                 rows = connection.execute(
                     """
-                    SELECT * FROM ai_chat_conversations
-                    WHERE actor=? AND archived=? ORDER BY updated_at DESC LIMIT 100
-                    """,
+                    SELECT c.*, {} FROM ai_chat_conversations c
+                    WHERE c.actor=? AND c.archived=? ORDER BY c.updated_at DESC LIMIT 100
+                    """.format(_ANSWERED_MODEL),
                     (actor, int(archived)),
                 ).fetchall()
         return [self._conversation_row(row) for row in rows]
@@ -734,7 +800,8 @@ class RagChatStore:
         current = self.ensure_conversation(actor, conversation_id)
         title = str(patch.get("title", current["title"])).strip()[:100]
         archived = patch.get("archived", current["archived"])
-        model = str(patch.get("model", current["model"])).strip()[:200]
+        # No `model`: which model answered here is derived from the turns, so a
+        # client cannot relabel a chat with a model that never spoke in it.
         requested = patch.get("collections", current["collections"])
         if not title or not isinstance(archived, bool):
             raise RagChatError("Enter a title and valid archived state.")
@@ -751,11 +818,11 @@ class RagChatStore:
             connection.execute(
                 """
                 UPDATE ai_chat_conversations
-                SET title=?,archived=?,model=?,collections_json=?,updated_at=?
+                SET title=?,archived=?,collections_json=?,updated_at=?
                 WHERE id=? AND actor=?
                 """,
                 (
-                    title, int(archived), model, json.dumps(collections),
+                    title, int(archived), json.dumps(collections),
                     time.time(), conversation_id, actor,
                 ),
             )
@@ -774,7 +841,7 @@ class RagChatStore:
             messages = messages[:ids.index(through_message_id) + 1]
         branch = self.ensure_conversation(
             actor, title=f"{source['title']} (branch)",
-            model=source["model"], collections=source["collections"],
+            collections=source["collections"],
         )
         for message in messages:
             self.add_message(

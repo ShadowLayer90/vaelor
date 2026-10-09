@@ -106,8 +106,11 @@ _SCALAR_GAUGES: Tuple[Tuple[str, str, float, str], ...] = (
      "Physical memory available to allocate in bytes."),
     ("vaelor_gpu_utilization_ratio", "gpu_busy_percent", _PERCENT_TO_RATIO,
      "Graphics processor load as a fraction from 0 to 1."),
+    # The name is kept for compatibility; it has always been the edge sensor.
     ("vaelor_gpu_temperature_celsius", "gpu_temperature_c", 1.0,
-     "Graphics processor temperature in degrees Celsius."),
+     "Graphics processor temperature from its kernel hwmon sensor (usually edge), in degrees Celsius."),
+    ("vaelor_gpu_gfx_temperature_celsius", "gpu_gfx_temperature_c", 1.0,
+     "Graphics-engine temperature in degrees Celsius, as amd-smi reports it."),
     ("vaelor_gpu_vram_used_bytes", "gpu_vram_used_bytes", 1.0,
      "Graphics memory in use in bytes."),
     ("vaelor_gpu_vram_total_bytes", "gpu_vram_total_bytes", 1.0,

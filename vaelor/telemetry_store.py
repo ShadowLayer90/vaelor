@@ -22,6 +22,11 @@ This module exists so they cannot recur independently.
   equally unreportable.
 * `history_samples` returns rows oldest to newest, which is what the note handed
   to the model already claimed while the query said `ORDER BY time DESC`.
+* Every history read names ONE node. The store holds the controller's rows and
+  every enrolled worker's in the same measurement, so a read that names no node
+  must not mean "all of them": `resolve_history_node` turns a missing node into
+  the controller, and the controller trends, the Assistant's machine history and
+  the freshness check can no longer average the fleet (ACC-082).
 
 Readiness deliberately does **not** live here. "Can this database be read" is
 the store's own question, so it is `Database.unavailable_reason()`: the old
@@ -66,6 +71,8 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
+
+from .cluster_placement import CONTROLLER_PLACEMENT_ID
 
 LOGGER = logging.getLogger(__name__)
 
@@ -122,6 +129,33 @@ MAX_HISTORY_WINDOW_SECONDS = DEFAULT_RETENTION_DAYS * 24 * 60 * 60
 #: The measurement the data logger writes and the history reader reads. One
 #: name, because two spellings of it is how a read path silently finds nothing.
 HISTORY_MEASUREMENT = "history"
+
+#: THE answer to "is this machine reporting?" (ACC-128). A worker pushes a
+#: sample every second (``worker_telemetry_config`` sets Telegraf's interval and
+#: flush to 1s), so a newest sample older than this is a machine that has gone
+#: quiet. The Fleet card, the alert engine and the telemetry-agent reconcile
+#: each used their own window (45, 300 and 180 seconds), so an alert could fire
+#: on a reading the card already called "not reporting". All three now read
+#: :func:`is_reporting`, and the history payload carries its verdict so the
+#: browser never holds a second copy of the number. For a worker the age asked
+#: about is the controller's receive age first (ACC-126):
+#: ``telemetry_ingest_status.node_is_reporting`` chooses it and asks this.
+REPORTING_WINDOW_SECONDS = 60
+
+#: The label a screen shows for a machine that fails :func:`is_reporting`. One
+#: spelling: the automation status and the Performance dashboard both show it.
+NOT_REPORTING_LABEL = "Not reporting"
+
+
+def is_reporting(age_seconds: Any) -> bool:
+    """Whether a newest-sample age is inside :data:`REPORTING_WINDOW_SECONDS`.
+
+    An unknown age (``None``: nothing stored, or a reader that could not say)
+    is not reporting - absence is never read as fresh.
+    """
+    if isinstance(age_seconds, bool) or not isinstance(age_seconds, (int, float)):
+        return False
+    return 0 <= age_seconds <= REPORTING_WINDOW_SECONDS
 
 #: The retention policy this store manages. InfluxDB's own `autogen` policy is
 #: created with `create_database` and never expires, so a named policy of our
@@ -609,7 +643,9 @@ def _prove_the_writer_can_write(
         )
         return
     try:
-        accepted, detail = database.set(HISTORY_MEASUREMENT, sample)
+        accepted, detail = database.set_tagged(
+            HISTORY_MEASUREMENT, {"node": CONTROLLER_PLACEMENT_ID}, sample
+        )
     except Exception as error:  # converted, never discarded: reported to the caller
         # `Database.set` is not total: its `InfluxDBClientError` handler does
         # `json.loads(e.content)`, which raises again when the server's body is
@@ -673,12 +709,28 @@ def _on_but_unreadable_error(reason: Any) -> TelemetryStoreError:
     )
 
 
-def history_samples(database: Any, limit: int = 30) -> List[Dict[str, Any]]:
+def resolve_history_node(node: Optional[str]) -> str:
+    """The node a history read is about: the one named, else the controller.
+
+    The history measurement holds every node's rows side by side - the
+    controller's own (tagged `node=controller`, plus legacy untagged rows) and
+    each enrolled worker's ingested ones. A read that named no node used to run
+    with no node predicate at all, so the controller's trends were the mean of
+    every machine (ACC-082). "No node" means this controller, the only machine
+    such a caller has ever been describing.
+    """
+    return node or CONTROLLER_PLACEMENT_ID
+
+
+def history_samples(
+    database: Any, limit: int = 30, node: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """Recent retained telemetry rows, **oldest to newest**, or a stated reason.
 
     The ordering is the contract `metrics_history` hands the model in its note.
     It is satisfied here rather than left to the caller, because a caller that
-    forgets reads every trend backwards and nothing looks wrong.
+    forgets reads every trend backwards and nothing looks wrong. The rows are
+    one node's - the controller's when `node` is omitted - never a mix.
 
     Every way this can fail raises `TelemetryStoreError`, including retention
     being switched off, so the caller has one thing to catch and always has a
@@ -690,7 +742,11 @@ def history_samples(database: Any, limit: int = 30) -> List[Dict[str, Any]]:
     try:
         reason = database.unavailable_reason()
         if reason is None:
-            rows = database.get(HISTORY_MEASUREMENT, n=_row_count(limit))
+            rows = database.get(
+                HISTORY_MEASUREMENT,
+                n=_row_count(limit),
+                node=resolve_history_node(node),
+            )
     except Exception as error:  # converted, never discarded: the caller reports it
         raise _store_read_error(error) from error
     if reason is not None:
@@ -743,8 +799,13 @@ def history_range(
     since_seconds: Any,
     max_points: Optional[int] = None,
     function: str = "mean",
+    node: Optional[str] = None,
+    until_seconds: int = 0,
 ) -> Dict[str, Any]:
     """Downsampled telemetry over a *time window*, oldest to newest, or a reason.
+
+    ``until_seconds`` ends the window that many seconds before now (review S1:
+    "last night" ended this morning); 0 runs it to now, as before.
 
     The count-based `history_samples` answers "the newest N rows"; this answers
     "the last H hours", which is the question a trend actually is. A window is
@@ -762,26 +823,69 @@ def history_range(
     Returns the buckets alongside the window and bucket size actually used, so
     the caller can tell the model the resolution it is reading ("hourly means
     over the last 24 hours") rather than leaving it to guess from row spacing.
+
+    **One node, always.** A missing `node` is the controller
+    (`resolve_history_node`), never every node averaged together (ACC-082).
+    `latest` is that node's newest RAW row - its current reading as measured,
+    which a bucket mean over a partly elapsed bucket is not - read by the same
+    single query that dates `last_sample_at`.
     """
     if database is None:
         raise _switched_off_error()
+    resolved = resolve_history_node(node)
     window = clamp_window_seconds(since_seconds)
+    until = max(0, min(int(until_seconds or 0), window - 1))
     points = MAX_HISTORY_BUCKETS if max_points is None else max_points
-    bucket = _bucket_seconds(window, points)
+    bucket = _bucket_seconds(max(1, window - until), points)
     rows: Any = []
+    latest: Any = None
     try:
         reason = database.unavailable_reason()
         if reason is None:
             rows = database.get_trend(
-                HISTORY_MEASUREMENT, window, bucket, function=function
+                HISTORY_MEASUREMENT, window, bucket, function=function, node=resolved,
+                **({"until_seconds": until} if until else {}),
             )
+            latest = database.latest_sample(HISTORY_MEASUREMENT, node=resolved)
     except Exception as error:  # converted, never discarded: the caller reports it
         raise _store_read_error(error) from error
     if reason is not None:
         raise _on_but_unreadable_error(reason)
+    latest = latest if isinstance(latest, dict) else None
+    last_at = None if latest is None else latest.get("time")
     return {
         "window_seconds": window,
+        "until_seconds": until,
         "bucket_seconds": bucket,
         "function": function,
+        "node": resolved,
         "buckets": [] if rows is None else list(rows),
+        # The node's newest stored row, fields as written (not aggregated), with
+        # `time` in epoch seconds; None when nothing is stored for it yet.
+        "latest": latest,
+        # The moment this node last reported and how long ago, so E2c can show
+        # "not reporting since X" rather than a flat, undated line. Both None
+        # when nothing has been stored for the node yet. The time is the row's
+        # own stamp - the worker's clock for an ingested row - so a skewed
+        # worker clock skews this age; the ingest status carries the controller
+        # clock's receipt time for that case.
+        "last_sample_at": last_at,
+        "last_sample_age_seconds": (
+            None if last_at is None else max(0, int(time.time()) - int(last_at))
+        ),
     }
+
+
+# Moved to `serving_store` in the VD-147 S1a split; the old import path still
+# answers (review S-27) - lazily (PEP 562), so the worker emitter's bundle,
+# which imports this module, does not carry `serving_store` and a change to it
+# does not make every worker's agent drift (pass-2 review nit).
+_MOVED_TO_SERVING_STORE = ("SERVING_MEASUREMENT", "latest_serving", "record_serving", "row_time_seconds")
+
+
+def __getattr__(name: str) -> Any:
+    if name in _MOVED_TO_SERVING_STORE:
+        from . import serving_store
+
+        return getattr(serving_store, name)
+    raise AttributeError(name)

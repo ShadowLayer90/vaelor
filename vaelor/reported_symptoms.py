@@ -18,6 +18,8 @@ finding and pretending otherwise is not.
 
 from __future__ import annotations
 
+from .assistant_console_places import HARDWARE_PLACE
+
 import re
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -98,13 +100,24 @@ def symptom_findings(
     cpu_rpm: Any = None,
     case_running: Any = None,
     services_failing: Sequence[str] = (),
+    thermal_norms: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, List[str]]:
     """State the reported symptoms, and where the readings disagree with them.
 
     Returns ``{"findings": [...], "recommendations": [...], "next_actions": [...]}``
     with empty lists when the request describes no symptom at all, so a review
     with nothing to say adds nothing.
+
+    **Review S9 (LESSONS 9).** The temperature was judged against fixed
+    70/80 °C bands, which are the Raspberry Pi's policy: "my machine keeps
+    freezing" at 85 °C was told its CPU was "hot enough to throttle or shut
+    down" on a Z2 whose own policy is 97/100 °C. ``thermal_norms`` is this
+    machine's published policy (``system.telemetry``'s ``thermal_norms``:
+    ``investigate_above_c``); with none published, a temperature is reported
+    but not judged.
     """
+    investigate = _number((thermal_norms or {}).get("investigate_above_c")) if (
+        thermal_norms or {}).get("available", True) else None
     symptoms = reported_symptoms(task)
     if not symptoms:
         return {"findings": [], "recommendations": [], "next_actions": []}
@@ -147,10 +160,10 @@ def symptom_findings(
             "you can hear."
         )
 
-    if "hot" in keys and temperature is not None and temperature < 70:
+    if "hot" in keys and temperature is not None and investigate is not None and temperature <= investigate:
         findings.append(
             "You report the machine running hot, but the CPU is reading "
-            "{:.1f}°C, which is a normal working temperature. If the case "
+            "{:.1f}°C, inside this machine's normal range. If the case "
             "feels hot, the heat may be coming from a drive or the power "
             "supply rather than the processor.".format(temperature)
         )
@@ -158,10 +171,10 @@ def symptom_findings(
     unexplained = keys & {"freezing", "restarting", "crashing", "slow"}
     if unexplained:
         explained = []
-        if temperature is not None and temperature >= 80:
+        if temperature is not None and investigate is not None and temperature > investigate:
             explained.append(
-                "the CPU is at {:.1f}°C, hot enough to throttle or shut "
-                "down".format(temperature)
+                "the CPU is at {:.1f}°C, above this machine's {:.0f}°C "
+                "investigate threshold, hot enough to throttle".format(temperature, investigate)
             )
         if services_failing:
             explained.append(
@@ -197,7 +210,7 @@ def symptom_findings(
                 )
             )
             next_actions.append(
-                "Open System > Hardware & services and read the system log "
+                "Open " + HARDWARE_PLACE + " and read the system log "
                 "around the time of the last freeze; that is where power, "
                 "storage and memory faults are recorded."
             )
@@ -219,6 +232,11 @@ def _join(items: Sequence[str]) -> str:
     if len(values) == 1:
         return values[0]
     return "{} and {}".format(", ".join(values[:-1]), values[-1])
+
+
+#: The sentence for a service list with nothing failing. One home: the
+#: built-in answer and the specialist baseline both say it.
+ALL_SERVICES_ACTIVE = "All managed Vaelor services are active."
 
 
 def failing_services(services: Any) -> List[str]:

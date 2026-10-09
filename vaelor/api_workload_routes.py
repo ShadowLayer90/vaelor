@@ -11,12 +11,24 @@ from urllib.parse import quote, urlsplit
 
 from flask import Response, g, request, stream_with_context
 
-from .appliance_recovery import CONFIRMATION as RESET_CONFIRMATION, UNINSTALL_CONFIRMATION
+from .job_vocabulary import (
+    RECOVERY_ROUTE_REQUIRED, REPLAN_REQUIRED_JOB_TYPES, administrator_only,
+)
 from .app_catalog import public_catalog
 from .api_common import ApiContext, payload as _payload
+from .api_power_routes import register_power_routes
 from .api_workload_app_config_routes import register_workload_app_config_routes
-from .application_features import application_features
-from .model_connection import assistant_model_configured
+from .agent_deploy_keys import (
+    AGENT_DEPLOY_RETRY_REFUSED, FIRST_KEY_MINT_FAILED, agent_deploy_retry_refused,
+    mint_first_agent_key, revoke_cancelled_deploy_key, revoke_unqueued_key, stamp_agent_deploy,
+)
+from .application_job_admission import application_job_refusal
+from .cluster_job_confirmations import CLUSTER_JOB_CONFIRMATIONS, confirmation_accepted
+from .gpu_memory_pool_nodes import (
+    CONFIRMATION_REQUIRED, HOST_GPU_MEMORY_JOB, controller_job_confirmed,
+)
+from .app_port_claims import model_port_holders
+from .credential_broker_client import CredentialError
 from .workload_dependencies import DependencyError
 
 
@@ -68,7 +80,18 @@ def _bind_checkpoint_restore(inventory: Any, payload: Any) -> Dict[str, Any]:
     return {**binding, "confirm": confirmation}
 
 
-def _port_preflight(inventory: Any, port: int) -> Dict[str, Any]:
+def _catalog_with_ports(broker: Any) -> list:
+    """The catalog, each card carrying the port an install would get (W7-D2)."""
+    from . import app_port_claims
+
+    try:
+        holders = app_port_claims.model_port_holders(broker)
+    except Exception:  # noqa: BLE001 - the install re-checks and refuses itself
+        holders = {}
+    return app_port_claims.catalog_port_offers(public_catalog(), holders)
+
+
+def _port_preflight(inventory: Any, port: int, broker: Any = None) -> Dict[str, Any]:
     """Check a requested host port against inventory and the live socket table."""
     if isinstance(port, bool) or not isinstance(port, int):
         raise ValueError("Choose a whole-number application port.")
@@ -106,6 +129,15 @@ def _port_preflight(inventory: Any, port: int) -> Dict[str, Any]:
                 occupied_ports.add(reserved)
                 if reserved == port:
                     owners.append(identity)
+
+    # W6-D2: the same claims the install refuses on - a stored model's port.
+    try:
+        model_holders = model_port_holders(broker)
+    except Exception:  # noqa: BLE001 - the install re-checks and refuses itself
+        model_holders = {}
+    occupied_ports.update(model_holders)
+    if port in model_holders:
+        owners.append(model_holders[port])
 
     socket_busy = False
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -157,6 +189,8 @@ def register_workload_routes(context: ApiContext) -> None:
     # Administrator-only secret reveal and config-file editing, kept in a
     # focused module so this one stays under the line ceiling.
     register_workload_app_config_routes(context)
+    # Restart, reboot and shut down, in their own module (W4d-D29).
+    register_power_routes(context)
 
     @blueprint.get("/managed")
     @require_auth("viewer")
@@ -172,7 +206,9 @@ def register_workload_routes(context: ApiContext) -> None:
         inventory = callbacks.get("workload_inventory")
         try:
             port = int(request.args.get("port", ""))
-            return _payload(_port_preflight(inventory, port))
+            return _payload(_port_preflight(
+                inventory, port, callbacks.get("credential_broker"),
+            ))
         except (TypeError, ValueError) as error:
             return _payload(error={"code": "port_preflight_invalid", "message": str(error)}, status=400)
 
@@ -204,7 +240,7 @@ def register_workload_routes(context: ApiContext) -> None:
     @blueprint.get("/apps/catalog")
     @require_auth("viewer")
     def app_catalog():
-        return _payload(public_catalog())
+        return _payload(_catalog_with_ports(callbacks.get("credential_broker")))
 
     @blueprint.get("/managed/apps/<app_id>/logs")
     @require_auth("operator")
@@ -577,6 +613,16 @@ def register_workload_routes(context: ApiContext) -> None:
             return _payload(job_store.ledger(limit, actor=actor))
         return _payload(job_store.list(limit, actor=actor))
 
+    def _administrator_required():
+        """The one refusal for a job only an administrator may create or retry."""
+        return _payload(
+            error={
+                "code": "administrator_required",
+                "message": "Administrator access is required for destructive recovery actions.",
+            },
+            status=403,
+        )
+
     @blueprint.post("/jobs")
     @require_auth("operator", csrf=True)
     def create_job():
@@ -621,34 +667,9 @@ def register_workload_routes(context: ApiContext) -> None:
                     error={"code": "invalid_removal_plan", "message": str(error)},
                     status=409,
                 )
-        if job_type in {"application.research", "compose.draft"}:
-            features = application_features(
-                assistant_model_configured(callbacks.get("credential_broker"))
-            )
-            required = "research" if job_type == "application.research" else "drafts"
-            if not features[required]:
-                return _payload(
-                    error={
-                        "code": "application_feature_disabled",
-                        "message": "This staged application capability is not enabled.",
-                    },
-                    status=409,
-                )
-            if not isinstance(job_payload, dict) or set(job_payload) - {
-                "draft_id", "source_urls"
-            } or not str(job_payload.get("draft_id", "")).startswith("appdraft_"):
-                return _payload(
-                    error={
-                        "code": "invalid_application_job",
-                        "message": "Choose a server-owned application draft.",
-                    },
-                    status=400,
-                )
-            if job_type == "compose.draft" and "source_urls" in job_payload:
-                return _payload(
-                    error={"code": "invalid_application_job", "message": "Compose drafts accept only a draft ID."},
-                    status=400,
-                )
+        _refusal = application_job_refusal(job_type, job_payload, callbacks)
+        if _refusal is not None:
+            return _payload(error={"code": _refusal[0], "message": _refusal[1]}, status=_refusal[2])
         if (
             job_type == "system.update.apply"
             and (
@@ -663,26 +684,14 @@ def register_workload_routes(context: ApiContext) -> None:
                 },
                 status=400,
             )
-        # appliance.remove-vaelor is validated exactly like appliance.factory-reset: both need a currently-staged one-use plan and the exact typed confirmation, so the two share this lookup and cannot drift.
-        _staged_recovery = {
-            "appliance.factory-reset": ("factory_reset_plans", RESET_CONFIRMATION, "factory_reset_confirmation_required", "Stage a current reset plan and type the exact confirmation first."),
-            "appliance.remove-vaelor": ("uninstall_plans", UNINSTALL_CONFIRMATION, "remove_vaelor_confirmation_required", "Stage a current removal plan and type the exact confirmation first."),
-        }.get(job_type)
-        if _staged_recovery is not None:
-            _callback, _expected, _code, _message = _staged_recovery
-            plans = callbacks.get(_callback)
-            status = plans.status() if plans is not None else {"plan": None}
-            plan = status.get("plan")
-            if (
-                not isinstance(job_payload, dict)
-                or job_payload.get("confirmation") != _expected
-                or not plan
-                or job_payload.get("plan_id") != plan.get("id")
-            ):
-                return _payload(
-                    error={"code": _code, "message": _message},
-                    status=400,
-                )
+        # The recovery jobs run a one-use plan: only their Settings > Recovery
+        # routes create them, after staging/approving that plan, so this
+        # generic door refuses them for every account (w2-creds review).
+        if job_type in REPLAN_REQUIRED_JOB_TYPES:
+            return _payload(
+                error={"code": "recovery_route_required", "message": RECOVERY_ROUTE_REQUIRED},
+                status=403,
+            )
         if (
             job_type == "host.vnc.enable"
             and (
@@ -697,43 +706,17 @@ def register_workload_routes(context: ApiContext) -> None:
                 },
                 status=400,
             )
-        if (
-            job_type in {
-                "compose.remove",
-                "managed.remove",
-                "compose.import",
-                "compose.draft",
-                "application.research",
-                "checkpoint.restore",
-                "system.update.apply",
-                "appliance.factory-reset",
-                "appliance.remove-vaelor",
-                "host.vnc.enable",
-                "host.docker.install",
-                "host.docker.repair",
-                "host.memory.optimize",
-                "host.web-research.manage",
-                "cluster.initialize",
-                "cluster.node.join",
-                "cluster.node.availability",
-                "cluster.node.remove",
-                "cluster.app.deploy",
-                "cluster.llm.deploy",
-                "cluster.service.backup",
-                "cluster.service.configure",
-                "cluster.service.manage",
-                "cluster.service.remove",
-                "cluster.service.restore",
-                "cluster.pooled.remove",
-            }
-            and g.auth_session.role != "administrator"
-        ):
+        # Every cluster job is administrator-gated (fleet initialize/join/remove,
+        # app and model deploy, service lifecycle, and the model-cache pull and
+        # remove), so the whole `cluster.*` namespace is matched by prefix rather
+        # than re-listed here - a new cluster job type is administrator-only by
+        # default, which is the safe direction.
+        if administrator_only(job_type) and g.auth_session.role != "administrator":
+            return _administrator_required()
+        if job_type == HOST_GPU_MEMORY_JOB and not controller_job_confirmed(job_payload):
             return _payload(
-                error={
-                    "code": "administrator_required",
-                    "message": "Administrator access is required for destructive recovery actions.",
-                },
-                status=403,
+                error={"code": "gpu_memory_confirmation_required", "message": CONFIRMATION_REQUIRED},
+                status=400,
             )
         if job_type == "checkpoint.restore":
             inventory = callbacks.get("checkpoints")
@@ -755,18 +738,7 @@ def register_workload_routes(context: ApiContext) -> None:
                     },
                     status=400,
                 )
-        cluster_confirmations = {
-            "cluster.initialize": "initialize-head-controller",
-            "cluster.node.join": "join-worker-node",
-            "cluster.node.remove": "remove-worker-node",
-            "cluster.app.deploy": "deploy-cluster-app",
-            "cluster.llm.deploy": "deploy-cluster-llm",
-            "cluster.service.backup": "backup-cluster-service",
-            "cluster.service.configure": "configure-cluster-service",
-            "cluster.service.remove": "remove-cluster-service",
-            "cluster.service.restore": "restore-cluster-service",
-            "cluster.pooled.remove": "remove-pooled-inference",
-        }
+        cluster_confirmations = CLUSTER_JOB_CONFIRMATIONS
         if job_type == "cluster.node.availability":
             availability = (
                 str(job_payload.get("availability", "")).strip().lower()
@@ -802,9 +774,11 @@ def register_workload_routes(context: ApiContext) -> None:
                     },
                     status=400,
                 )
-        if job_type in cluster_confirmations and (
-            not isinstance(job_payload, dict)
-            or job_payload.get("confirm") != cluster_confirmations[job_type]
+        _agent_deploy = job_type == "cluster.agent.deploy" and isinstance(job_payload, dict)
+        if _agent_deploy:
+            stamp_agent_deploy(job_payload, callbacks, g.auth_session.username)
+        if job_type in cluster_confirmations and not confirmation_accepted(
+            job_type, job_payload
         ):
             return _payload(
                 error={
@@ -813,13 +787,25 @@ def register_workload_routes(context: ApiContext) -> None:
                 },
                 status=400,
             )
+        _key_reveal = None
+        if _agent_deploy:
+            # GG14: the agent's first key, minted here and shown once in this reply.
+            try:
+                _key_reveal = mint_first_agent_key(job_payload, callbacks.get("credential_broker"))
+            except (AttributeError, CredentialError):
+                return _payload(error={"code": "agent_key_mint_failed", "message": FIRST_KEY_MINT_FAILED}, status=503)
         try:
             job = job_store.create(
                 job_type,
                 g.auth_session.username,
                 job_payload,
             )
-        except ValueError as error:
+        except Exception as error:
+            # Whatever refused the queueing, the first key minted for it opens
+            # nothing and must not stay live (S2).
+            revoke_unqueued_key(callbacks.get("credential_broker"), _key_reveal)
+            if not isinstance(error, ValueError):
+                raise
             return _payload(
                 error={"code": "invalid_job_request", "message": str(error)},
                 status=400,
@@ -837,7 +823,7 @@ def register_workload_routes(context: ApiContext) -> None:
                 "display_identity": job.get("display_identity"),
             },
         )
-        return _payload(job, status=202)
+        return _payload({**job, "key_reveal": _key_reveal} if _key_reveal else job, status=202)
 
     @blueprint.get("/jobs/<job_id>")
     @require_auth("operator")
@@ -860,6 +846,7 @@ def register_workload_routes(context: ApiContext) -> None:
         try:
             actor = None if g.auth_session.role == "administrator" else g.auth_session.username
             job = job_store.request_cancel(job_id, actor=actor)
+            revoke_cancelled_deploy_key(callbacks.get("credential_broker"), job)
         except KeyError:
             return _payload(error={"code": "job_not_found", "message": "Job was not found."}, status=404)
         except (AttributeError, ValueError) as error:
@@ -874,6 +861,17 @@ def register_workload_routes(context: ApiContext) -> None:
     @require_auth("operator", csrf=True)
     def retry_job(job_id):
         job_store = callbacks.get("job_store")
+        # Review B1: a retry creates a job, so it takes the role the create
+        # route takes. The store's own actor filter is not that gate - it lets
+        # anyone retry a job in their own name, whatever they may create now.
+        original = job_store.get(job_id) if job_store is not None else None
+        if (
+            original is not None and administrator_only(original.get("type"))
+            and g.auth_session.role != "administrator"
+        ):
+            return _administrator_required()
+        if agent_deploy_retry_refused(job_store, job_id):
+            return _payload(error={"code": "job_retry_rejected", "message": AGENT_DEPLOY_RETRY_REFUSED}, status=400)
         try:
             job = job_store.retry(
                 job_id,
@@ -916,84 +914,3 @@ def register_workload_routes(context: ApiContext) -> None:
             generate(), mimetype="text/event-stream",
             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
         )
-
-    @blueprint.get("/power/capabilities")
-    @require_auth("viewer")
-    def power_capabilities():
-        provider = callbacks.get("power_capabilities")
-        if provider is None:
-            actions = {
-                name: {"available": True, "reason": ""}
-                for name in ("restart_service", "reboot", "shutdown")
-            }
-            return _payload({"id": "legacy-callback", "actions": actions})
-        return _payload(provider())
-
-    @blueprint.post("/power/actions")
-    @require_auth("operator", csrf=True)
-    def power_action():
-        body = request.get_json(silent=True) or {}
-        action = str(body.get("action", "")).strip().lower()
-        confirmations = {
-            "restart_service": "restart-service",
-            "reboot": "reboot-device",
-            "shutdown": "shutdown-device",
-        }
-        if action not in confirmations:
-            return _payload(
-                error={
-                    "code": "invalid_power_action",
-                    "message": "Choose restart_service, reboot, or shutdown.",
-                },
-                status=400,
-            )
-        if body.get("confirmation") != confirmations[action]:
-            return _payload(
-                error={
-                    "code": "power_confirmation_required",
-                    "message": "Review and confirm this power action before continuing.",
-                },
-                status=400,
-            )
-        provider = callbacks.get("power_capabilities")
-        capabilities = provider() if provider is not None else {
-            "actions": {
-                name: {"available": True, "reason": ""}
-                for name in confirmations
-            }
-        }
-        action_capability = capabilities.get("actions", {}).get(action, {})
-        if not action_capability.get("available"):
-            return _payload(
-                error={
-                    "code": "power_action_unavailable",
-                    "message": (
-                        action_capability.get("reason")
-                        or "This power action is unavailable on the current platform."
-                    ),
-                },
-                status=409,
-            )
-        def audit(outcome: str) -> None:
-            security.audit(
-                g.auth_session.username, "power.{}".format(action), outcome,
-                target="local-host", remote_addr=request.remote_addr or "",
-            )
-        # #208 / LESSONS #191: audit what actually happened. The power path now
-        # raises when a command fails immediately (e.g. sudo blocked by
-        # NoNewPrivileges), so a failure is recorded as `failure` and its reason
-        # returned to the operator — never audited as success while the box
-        # stays up.
-        try:
-            callbacks["power_action"](action)
-        except Exception as error:
-            audit("failure")
-            return _payload(
-                error={
-                    "code": "power_action_failed",
-                    "message": str(error) or "The power action failed before it could take effect.",
-                },
-                status=502,
-            )
-        audit("success")
-        return _payload({"accepted": True, "action": action}, status=202)

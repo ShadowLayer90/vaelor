@@ -1,4 +1,4 @@
-"""Revocable token store and OpenAI-compatible Vaelor Assistant API."""
+"""Revocable token store gating Vaelor's inference API access."""
 
 from __future__ import annotations
 
@@ -13,14 +13,9 @@ from contextlib import closing
 from pathlib import Path
 from typing import Optional
 
-from flask import Blueprint, jsonify, request
-
 from .runtime_paths import env_value, state_path
-from .local_inference_gate import BUSY_MESSAGE, LocalModelBusy
 
-TOKEN_SCOPES = {"assistant", "inference"}
-ASSISTANT_MODEL_ID = "vaelor-assistant"
-LEGACY_ASSISTANT_MODEL_ID = "pironman-copilot"
+TOKEN_SCOPES = {"inference"}
 
 
 class AgentApiTokenStore:
@@ -37,7 +32,7 @@ class AgentApiTokenStore:
                     id TEXT PRIMARY KEY, label TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
                     prefix TEXT NOT NULL, enabled INTEGER NOT NULL,
                     created_at REAL NOT NULL, last_used_at REAL,
-                    scopes TEXT NOT NULL DEFAULT '["assistant"]'
+                    scopes TEXT NOT NULL DEFAULT '["inference"]'
                 )
                 """
             )
@@ -47,8 +42,14 @@ class AgentApiTokenStore:
             if "scopes" not in columns:
                 connection.execute(
                     """ALTER TABLE api_tokens
-                       ADD COLUMN scopes TEXT NOT NULL DEFAULT '["assistant"]'"""
+                       ADD COLUMN scopes TEXT NOT NULL DEFAULT '["inference"]'"""
                 )
+            if "revoked_at" not in columns:
+                # ACC-115: a revoke flipped `enabled` and recorded no time, so
+                # the console could not say when a key stopped working. Keys
+                # revoked before this column existed keep NULL ("date not
+                # recorded"), never a guessed date.
+                connection.execute("ALTER TABLE api_tokens ADD COLUMN revoked_at REAL")
             connection.commit()
         try:
             os.chmod(self.database_path, 0o600)
@@ -61,13 +62,13 @@ class AgentApiTokenStore:
 
     @staticmethod
     def _normalize_scopes(scopes=None):
-        values = scopes if isinstance(scopes, list) else ["assistant"]
+        values = scopes if isinstance(scopes, list) else ["inference"]
         normalized = sorted({
             str(scope).strip().lower() for scope in values
             if str(scope).strip()
         })
         if not normalized or any(scope not in TOKEN_SCOPES for scope in normalized):
-            raise ValueError("Choose Assistant access, inference access, or both.")
+            raise ValueError("Choose inference access.")
         return normalized
 
     def create(self, label: str, scopes=None):
@@ -95,7 +96,7 @@ class AgentApiTokenStore:
         with closing(sqlite3.connect(self.database_path)) as connection:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
-                "SELECT id,label,prefix,enabled,created_at,last_used_at,scopes FROM api_tokens WHERE id=?",
+                "SELECT id,label,prefix,enabled,created_at,last_used_at,scopes,revoked_at FROM api_tokens WHERE id=?",
                 (item_id,),
             ).fetchone()
         if row is None:
@@ -109,7 +110,7 @@ class AgentApiTokenStore:
         with closing(sqlite3.connect(self.database_path)) as connection:
             connection.row_factory = sqlite3.Row
             rows = connection.execute(
-                "SELECT id,label,prefix,enabled,created_at,last_used_at,scopes FROM api_tokens ORDER BY created_at DESC"
+                "SELECT id,label,prefix,enabled,created_at,last_used_at,scopes,revoked_at FROM api_tokens ORDER BY created_at DESC"
             ).fetchall()
         return [{
             **dict(row),
@@ -119,13 +120,38 @@ class AgentApiTokenStore:
 
     def revoke(self, item_id: str):
         with closing(sqlite3.connect(self.database_path)) as connection:
+            # The first revoke's time is kept: revoking again is not a new event.
             cursor = connection.execute(
-                "UPDATE api_tokens SET enabled=0 WHERE id=?", (item_id,)
+                "UPDATE api_tokens SET enabled=0, revoked_at=COALESCE(revoked_at, ?) WHERE id=?",
+                (time.time(), item_id),
             )
             connection.commit()
         if not cursor.rowcount:
             raise KeyError(item_id)
         return self.get(item_id)
+
+    def delete(self, item_id: str):
+        """Remove a REVOKED key's record (ACC-115); a working key is refused.
+
+        Revoked keys otherwise piled up for ever. Only the row goes: the audit
+        log keeps the create, revoke and this delete, and the usage meter keeps
+        its per-key totals. A key that still works must be revoked first, so a
+        delete can never be the thing that silently cuts a client off.
+        """
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            row = connection.execute(
+                "SELECT enabled FROM api_tokens WHERE id=?", (item_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(item_id)
+            if row[0]:
+                raise ValueError(
+                    "This key still works. Revoke it first; its record can be "
+                    "removed once it is revoked."
+                )
+            connection.execute("DELETE FROM api_tokens WHERE id=? AND enabled=0", (item_id,))
+            connection.commit()
+        return {"deleted": True, "id": item_id}
 
     def authenticate(self, token: str, required_scope: Optional[str] = None):
         if (
@@ -149,81 +175,3 @@ class AgentApiTokenStore:
                 connection.commit()
                 return {"id": row["id"], "label": row["label"], "scopes": scopes}
         return None
-
-
-def create_agent_api_blueprint(tokens, agent, context_provider):
-    blueprint = Blueprint("agent_api", __name__, url_prefix="/v1")
-
-    def authenticated():
-        header = request.headers.get("Authorization", "")
-        token = header[7:] if header.startswith("Bearer ") else ""
-        return tokens.authenticate(token, "assistant")
-
-    @blueprint.get("/models")
-    def models():
-        identity = authenticated()
-        if identity is None:
-            return jsonify({"error": {"message": "Invalid or revoked API token.", "type": "authentication_error"}}), 401
-        return jsonify({"object": "list", "data": [
-            {
-                "id": ASSISTANT_MODEL_ID, "object": "model",
-                "created": 0, "owned_by": "vaelor",
-            },
-            {
-                "id": LEGACY_ASSISTANT_MODEL_ID, "object": "model",
-                "created": 0, "owned_by": "vaelor",
-                "deprecated": True,
-            },
-        ]})
-
-    @blueprint.post("/chat/completions")
-    def chat_completions():
-        identity = authenticated()
-        if identity is None:
-            return jsonify({"error": {"message": "Invalid or revoked API token.", "type": "authentication_error"}}), 401
-        body = request.get_json(silent=True) or {}
-        if body.get("stream"):
-            return jsonify({"error": {"message": "Streaming is not enabled for this appliance endpoint.", "type": "invalid_request_error"}}), 400
-        messages = body.get("messages", [])
-        if not isinstance(messages, list) or len(messages) > 50:
-            return jsonify({"error": {"message": "Provide up to 50 messages.", "type": "invalid_request_error"}}), 400
-        user_messages = [
-            str(item.get("content", "")) for item in messages
-            if isinstance(item, dict) and item.get("role") == "user"
-        ]
-        prompt = user_messages[-1].strip() if user_messages else ""
-        if not prompt or len(prompt) > 4000:
-            return jsonify({"error": {"message": "The final user message must contain 1-4,000 characters.", "type": "invalid_request_error"}}), 400
-        try:
-            answer = agent.answer(prompt, context=context_provider())
-        except LocalModelBusy as error:
-            # The single-endpoint model is generating for another caller. Return
-            # a truthful 503 an OpenAI-compatible client can read, not an opaque
-            # 500 that reads as an outage (#223) - the v2 assistant route does
-            # the same. Caught by exact type so real model errors are not masked.
-            return jsonify({"error": {
-                "message": str(error) or BUSY_MESSAGE,
-                "type": "server_error", "code": "model_busy",
-            }}), 503
-        requested_model = str(body.get("model", ASSISTANT_MODEL_ID))
-        response_model = (
-            requested_model
-            if requested_model in {
-                ASSISTANT_MODEL_ID, LEGACY_ASSISTANT_MODEL_ID
-            }
-            else ASSISTANT_MODEL_ID
-        )
-        content = str(answer.get("answer", "")).strip()
-        if answer.get("proposed_job"):
-            content += "\n\nA protected action is available in the Vaelor UI for operator review and approval."
-        created = int(time.time())
-        return jsonify({
-            "id": "chatcmpl_{}".format(uuid.uuid4().hex),
-            "object": "chat.completion",
-            "created": created,
-            "model": response_model,
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": max(1, len(prompt) // 4), "completion_tokens": max(1, len(content) // 4), "total_tokens": max(2, (len(prompt) + len(content)) // 4)},
-        })
-
-    return blueprint

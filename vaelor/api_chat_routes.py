@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import base64
 import binascii
-import re
 import sqlite3
-from collections.abc import Mapping
 
 from flask import g, request
 
 from .api_common import ApiContext, payload as _payload
-from .chat_connections import describe_connections, local_tier_map
-from .copilot_setup import copilot_setup_status, hardware_inventory
-from .inference_status import inference_status
-from .local_endpoint_discovery import discover_cached as discover_local_endpoints
+from .chat_connections import LOCAL_BY_ADDRESS, LOCALITY_UNKNOWN, describe_connections
+from .copilot_setup import hardware_inventory
+from .credential_listing import redact_inference_status_for_role
+from .gpu_cluster_mode_state import ClusterModeStore
+from .gpu_serving_target import deployment_unload_cause
+from .inference_status import cluster_on_this_adapter, inference_status
 from .model_reachability import probe_connection
 from .chat_appliance_scope import (
     APPLIANCE_SCOPE_PROVIDER,
@@ -30,11 +30,21 @@ from .chat_grounding import (
     searchable_collections,
     wants_whole_document,
 )
+from .chat_agent_proposals import agent_proposal, proposal_text
+from .api_chat_thinking_routes import thinking_choice
 from .chat_inference import ChatInferenceError
 from .chat_turn_dedupe import IN_FLIGHT_STATUS, in_flight_error
-from .custom_agent_routing import custom_agent_proposal
 from .document_text import SUPPORTED_EXTENSIONS
-from .rag_chat import MAX_DOCUMENT_BYTES, RagChatError
+from .rag_chat import AGENT_ROUTER_AUTHOR, MAX_DOCUMENT_BYTES, RagChatError
+from .session_affinity import conversation_session_key, opening_session_key
+
+
+#: What the active connection says about where prompts go while the GPU
+#: cluster serves AI Chat (its address is the controller's balancer).
+CLUSTER_ACTIVE_LOCALITY = (
+    "The GPU cluster answers this connection; its replicas can run on other "
+    "machines in the cluster, so prompts may leave this appliance for them."
+)
 
 
 def register_chat_routes(context: ApiContext) -> None:
@@ -90,7 +100,7 @@ def register_chat_routes(context: ApiContext) -> None:
             summary["memory_unavailable"] = True
         return summary
 
-    def conversation_patch(model, collection_ids, collections_chosen):
+    def conversation_patch(collection_ids, collections_chosen):
         """Only write the knowledge selection back when the client chose it.
 
         Sending a request used to overwrite the conversation's collections with
@@ -99,18 +109,11 @@ def register_chat_routes(context: ApiContext) -> None:
         setting permanent. An unspecified selection now leaves the stored one
         untouched.
 
-        The model is a claim about what answered in this conversation, so an
-        empty ``model`` leaves the stored one alone. Writing it before the
-        request was sent meant a model that produced nothing still relabelled
-        the chat, and the sidebar faithfully showed a conversation as belonging
-        to a model that never spoke in it.
+        The model is not written at all: which model answered in a
+        conversation is derived from its turns by the store (ACC-116), so a
+        model that produced nothing cannot relabel the chat.
         """
-        patch = {}
-        if model:
-            patch["model"] = model
-        if collections_chosen:
-            patch["collections"] = collection_ids
-        return patch
+        return {"collections": collection_ids} if collections_chosen else {}
 
     def apply_patch(store, actor, conversation, patch):
         return store.update_conversation(actor, conversation["id"], patch) if patch else conversation
@@ -118,6 +121,10 @@ def register_chat_routes(context: ApiContext) -> None:
     def chat_failure(
         error, fallback_code: str, fallback_status: int, **details,
     ):
+        # The model the request actually went to, when inference got that far,
+        # so the client blames that model and not whatever its picker shows.
+        if getattr(error, "model", ""):
+            details.setdefault("model", error.model)
         return _payload(
             error={
                 "code": getattr(error, "code", fallback_code),
@@ -126,6 +133,22 @@ def register_chat_routes(context: ApiContext) -> None:
             },
             status=getattr(error, "status", fallback_status),
         )
+
+    def turn_metadata(result):
+        """What a stored answer says about itself: its timing and, when the
+        provider returned one, its thinking summary (VD-209 item 4)."""
+        metadata = {"performance": result.get("performance") or {}}
+        if result.get("thinking"):
+            metadata["thinking"] = result["thinking"]
+        return metadata
+
+    def cluster_credential_id():
+        """The credential the GPU cluster serves through, from the mode file; ""."""
+        modes = callbacks.get("cluster_mode_store") or ClusterModeStore()
+        try:
+            return str(getattr(modes.read(), "cluster_credential_id", "") or "")
+        except Exception:  # noqa: BLE001 - absence-ok: no cluster credential, no relabel
+            return ""
 
     def citations_for(retrieved):
         return [
@@ -140,147 +163,6 @@ def register_chat_routes(context: ApiContext) -> None:
             for item in retrieved
         ]
 
-    def custom_profiles(actor):
-        """Return only enabled, actor-owned custom profiles from server stores."""
-        task_store = callbacks.get("agent_tasks")
-        profiles = []
-        try:
-            profiles = task_store.profiles(actor) if task_store is not None else []
-        except (AttributeError, TypeError, ValueError):
-            profiles = []
-        if not profiles:
-            store = callbacks.get("custom_agents")
-            try:
-                profiles = store.list(actor, include_disabled=True) if store is not None else []
-            except (AttributeError, TypeError, ValueError):
-                profiles = []
-        return [
-            profile for profile in profiles
-            if isinstance(profile, Mapping)
-            and bool(profile.get("custom"))
-            and bool(profile.get("enabled", True))
-        ]
-
-    def named_profile_match(message, profiles):
-        """Require a name token before the shared matcher can select a profile."""
-        message_tokens = set(re.findall(r"[a-z0-9]+", str(message).lower()))
-        stopwords = {"agent", "assistant", "custom", "my", "the", "a", "an"}
-        for profile in profiles:
-            name_tokens = {
-                token for token in re.findall(r"[a-z0-9]+", str(profile.get("name", "")).lower())
-                if token not in stopwords and len(token) > 1
-            }
-            if name_tokens.intersection(message_tokens):
-                return True
-        return False
-
-    def grant_summaries(actor, profile):
-        """Decorate a proposal with bounded, non-secret current app access."""
-        grants = callbacks.get("agent_app_grants")
-        registry = callbacks.get("app_capability_registry")
-        if grants is None:
-            return []
-        try:
-            rows = grants.list(actor, agent_id=str(profile.get("id", "")), limit=50)
-        except (AttributeError, TypeError, ValueError):
-            return []
-        try:
-            selected_version = int(profile.get("version", 0))
-        except (TypeError, ValueError):
-            selected_version = 0
-        summaries = []
-        for grant in rows:
-            if not isinstance(grant, Mapping) or bool(grant.get("revoked")):
-                continue
-            try:
-                if int(grant.get("agent_version", -1)) != selected_version:
-                    continue
-            except (TypeError, ValueError):
-                continue
-            app = None
-            manifest = None
-            try:
-                if registry is not None:
-                    app = registry.get_app_instance(str(grant.get("app_instance_id", "")))
-                    manifest = registry.get_manifest(str(grant.get("manifest_digest", "")))
-            except (AttributeError, TypeError, ValueError):
-                app = None
-                manifest = None
-            operations_by_id = {}
-            if manifest is not None:
-                operations_by_id = {
-                    str(operation.operation_id): operation
-                    for operation in getattr(manifest, "operations", ())
-                }
-            operations = []
-            for operation_id in list(grant.get("operation_ids", []))[:20]:
-                operation = operations_by_id.get(str(operation_id))
-                mode = str(getattr(operation, "mode", "read"))
-                operations.append({
-                    "id": str(operation_id)[:80],
-                    "name": str(getattr(operation, "label", operation_id))[:100],
-                    "access": mode if mode in {"read", "write"} else "read",
-                    "risk": str(getattr(operation, "risk", "low"))[:40],
-                })
-            summaries.append({
-                "grant_id": str(grant.get("id", ""))[:96],
-                "app_instance_id": str(grant.get("app_instance_id", ""))[:160],
-                "app_name": str((app or {}).get("app_label", "Installed app"))[:100],
-                "manifest_version": str(getattr(manifest, "manifest_version", ""))[:40],
-                "manifest_digest": str(grant.get("manifest_digest", ""))[:64],
-                "operations": operations,
-            })
-        return summaries
-
-    def agent_proposal(actor, message, requested_profile_id=""):
-        profiles = custom_profiles(actor)
-        requested_profile_id = str(requested_profile_id or "").strip()
-        if requested_profile_id:
-            selected_profiles = [
-                profile for profile in profiles
-                if str(profile.get("id", "")) == requested_profile_id
-            ]
-            if not selected_profiles:
-                return None
-            profiles = selected_profiles
-        elif not profiles or not named_profile_match(message, profiles):
-            return None
-        proposal = custom_agent_proposal(message, profiles, explicit=bool(requested_profile_id))
-        if proposal is None:
-            return None
-        selected = next(
-            profile for profile in profiles
-            if str(profile.get("id")) == proposal["profile_id"]
-        )
-        proposal["app_grants"] = grant_summaries(actor, selected)
-        proposal["approval_required"] = True
-        return proposal
-
-    def proposal_text(proposal):
-        capabilities = ", ".join(proposal.get("capabilities", [])) or "none listed"
-        integrations = ", ".join(proposal.get("integrations", [])) or "none"
-        app_access = []
-        for grant in proposal.get("app_grants", []):
-            operations = ", ".join(
-                "{} ({})".format(item.get("name", item.get("id", "")), item.get("access", "read"))
-                for item in grant.get("operations", [])
-            ) or "no operations listed"
-            app_access.append("{}: {}".format(grant.get("app_name", "Installed app"), operations))
-        # The internal profile id belongs in the structured proposal the
-        # client already receives, not in prose. Reading a raw
-        # "custom_c4f7dc80..." GUID back to the user names nothing they can
-        # act on and looks like a leak.
-        return (
-            "I matched this request to the enabled custom agent '{}' (version {}). "
-            "No work has started. The bounded task is: {}. Capabilities: {}. "
-            "App access: {}. Integrations: {}. Approval required: yes. Review this exact "
-            "run, then approve it under Assistant > Agents, in this agent's run history."
-        ).format(
-            proposal["profile_name"], proposal["profile_version"],
-            proposal["task"], capabilities, "; ".join(app_access) or "none granted",
-            integrations,
-        )
-
     @blueprint.get("/ai-chat/setup")
     @require_auth("operator")
     def chat_setup():
@@ -288,7 +170,10 @@ def register_chat_routes(context: ApiContext) -> None:
         if store is None or inference is None:
             return _payload(error={"code": "ai_chat_unavailable", "message": "AI Chat is unavailable."}, status=503)
         try:
-            connections = inference.connections()
+            # VD-210 owner rule: AI Chat's choices, never the Assistant's NPU
+            # model (`ChatInference.choices`). A Pi's shared CPU model and the
+            # Z2's GPU model carry no NPU marker and stay listed.
+            connections = inference.choices()
         except ChatInferenceError as error:
             return chat_failure(error, "chat_connection_unavailable", 503)
         active = next(
@@ -299,65 +184,62 @@ def register_chat_routes(context: ApiContext) -> None:
             unavailable_models = inference.known_bad_models()
         except (AttributeError, ChatInferenceError):
             unavailable_models = {}
-        plan = {}
         try:
-            probe = callbacks.get("hardware_inventory")
-            plan = copilot_setup_status(
-                probe() if probe is not None else hardware_inventory()
-            ).get("inference_plan", {})
-        except (OSError, RuntimeError, ValueError):
-            plan = {}
-
-        def loaded_for(connection):
-            """Which models this server is holding, or None if it does not say.
-
-            None is not "none loaded". A server that publishes no load state
-            gets a picker warning, not a false claim that nothing is resident.
-            """
-            base_url = str(connection.get("base_url") or "")
-            if not base_url:
-                return None
-            result = probe_connection(dict(connection))
-            if not result.get("reachable"):
-                return None
-            return result.get("loaded_models")
-
-        described = describe_connections(
-            connections,
-            loaded_for=loaded_for,
-            failures_for=lambda _connection: unavailable_models,
-        )
-        # Only endpoints not already registered: an owner who has accepted one
-        # should not keep being offered it.
-        known = {
-            str(item.get("base_url") or "").rstrip("/") for item in described
-        }
-        # The cached form, never the blocking sweep: this is a page-load
-        # endpoint. Calling `discover()` here made it wait on twelve serial
-        # probes - eighteen seconds on a host that drops rather than refuses -
-        # and browsers aborted it mid-flight.
-        discovered = discover_local_endpoints()
-        discovered["endpoints"] = [
-            item for item in discovered["endpoints"]
-            if str(item.get("base_url") or "").rstrip("/") not in known
-        ]
+            assignment_refusal = inference.assignment_refusal()
+            # VD-210: per connection - only this machine's own GPU model is
+            # refused while the cluster holds the GPU; the picker greys that
+            # one row, with this sentence beside it, and nothing else.
+            connection_refusals = {
+                str(item.get("id")): refusal for item in connections
+                for refusal in [inference.assignment_refusal(str(item.get("id") or ""))]
+                if refusal
+            }
+        except (AttributeError, TypeError):
+            assignment_refusal, connection_refusals = "", {}
+        # Only the connections the owner added, and Vaelor's own managed
+        # serving. Nothing here looks for AI servers on this machine or the
+        # network: a server enters Vaelor only when the owner adds it (VD-137).
+        described = describe_connections(connections)
+        # ACC-101: the active connection is the DESCRIBED one, so it carries the
+        # locality `describe_connections` decided (`local`, `local_source`,
+        # `local_reason`). It was the raw broker row, which carries none, so the
+        # Details panel's "prompts never leave the machine" note - keyed on
+        # `local_source` - could never appear. One answer, read by both.
+        cluster_credential = cluster_credential_id()
+        if active is not None:
+            active = next(
+                (item for item in described if item.get("id") == active.get("id")),
+                active,
+            )
+            # When AI Chat's connection IS the cluster's (the mode file's
+            # credential), its loopback address is the controller's balancer,
+            # which forwards to replicas on other machines: a loopback address
+            # does not make it local, so it is not called that (w2-creds
+            # review). Asked of the mode file, not of a refusal: since VD-210
+            # the owner may pick any other connection while clustered.
+            if (active.get("id") and active.get("id") == cluster_credential
+                    and active.get("local_source") == LOCAL_BY_ADDRESS):
+                active.update(
+                    local=None, local_source=LOCALITY_UNKNOWN,
+                    local_reason=CLUSTER_ACTIVE_LOCALITY,
+                )
         return _payload({
-            # Every connection, each with `local`, its models, and per-model
-            # load state. The privacy grouping the picker draws is a
-            # presentation of `local`, not a second code path: `model.deploy`
-            # already registers the appliance's own server as a connection.
+            # Every connection, each with `local` and how that was decided.
+            # The privacy grouping the picker draws is a presentation of
+            # `local`, not a second code path: `model.deploy` already
+            # registers the appliance's own server as a connection.
             "connections": described,
             "active_connection": active,
-            # Which locally-served model runs on which engine, so a local model
-            # is identifiable as local *and* placeable.
-            "local_tiers": local_tier_map(plan),
-            # Model servers already running on this machine that Vaelor did not
-            # start. Offered, never adopted: a machine running the recommended
-            # two-tier setup reported MODEL REQUIRED because the only path that
-            # could register a local model was the one where Vaelor deployed it
-            # itself. `discovered` is what the picker offers; nothing here is
-            # connected until an owner accepts it.
-            "discovered_endpoints": discovered,
+            # Why AI Chat's connection cannot be changed at all right now, or
+            # "". Since VD-210 nothing refuses the whole picker (it is "" in
+            # Mode B too); the per-connection refusals below say which row.
+            "assignment_refusal": assignment_refusal,
+            # VD-210: the connections AI Chat cannot take right now, each with
+            # its sentence (this machine's own GPU model while clustered).
+            "connection_refusals": connection_refusals,
+            # The connection the GPU cluster serves through (the mode file's), or
+            # "": the picker groups that one under "Cluster" (VD-210).
+            "cluster_credential_id": cluster_credential,
             "preference": store.preference(g.auth_session.username),
             "collections": store.collections(g.auth_session.username),
             "limits": {
@@ -390,10 +272,36 @@ def register_chat_routes(context: ApiContext) -> None:
         connections = []
         if inference is not None:
             try:
+                # Every connection, NPU model included: this describes what each
+                # engine holds, not what AI Chat may pick (`choices`, VD-210).
                 connections = inference.connections()
             except ChatInferenceError:
                 connections = []
-        return _payload(inference_status(
+        # Which GPU cluster deployments run a server here, so a clustered GPU
+        # is described as the cluster's and never as llama.cpp's (ACC-114).
+        # An unreadable store leaves the mode file to say the GPU is clustered.
+        operations = callbacks.get("cluster_operations")
+        try:
+            cluster_records = operations.store.list_pooled_deployments()
+        except (AttributeError, OSError, ValueError, sqlite3.Error):
+            cluster_records = None
+        cluster_mode = bool(
+            inference is not None and getattr(inference, "cluster_mode_active", None)
+            and inference.cluster_mode_active()
+        )
+        # Who unloaded the cluster deployment on this adapter, asked of the one
+        # unload-cause rule (VD-136) rather than decided here: it says whether
+        # the next AI Chat request loads it again.
+        unload_cause = ""
+        placed = cluster_on_this_adapter(cluster_records)
+        if placed is not None and str(placed.get("state") or "") == "unloaded":
+            unload_cause = deployment_unload_cause(
+                getattr(inference, "broker", None), ClusterModeStore().read(),
+                str(placed.get("name") or ""),
+            )
+        # VD-204: an engine's failure sentence can name a connection or its
+        # address; a viewer gets the fixed sentence (`credential_listing`).
+        return _payload(redact_inference_status_for_role(inference_status(
             hardware,
             connections=connections,
             probe=lambda connection: probe_connection(dict(connection)),
@@ -403,7 +311,10 @@ def register_chat_routes(context: ApiContext) -> None:
             resolve_local=(
                 inference.active_local_connection if inference is not None else None
             ),
-        ))
+            cluster_deployments=cluster_records,
+            cluster_mode=cluster_mode,
+            cluster_unload_cause=unload_cause,
+        ), g.auth_session.role))
 
     @blueprint.post("/ai-chat/connections/<credential_id>/activate")
     @require_auth("operator", csrf=True)
@@ -544,12 +455,37 @@ def register_chat_routes(context: ApiContext) -> None:
             query=request.args.get("q", ""),
         ))
 
+    @blueprint.get("/ai-chat/conversations/<conversation_id>")
+    @require_auth("operator")
+    def chat_conversation(conversation_id):
+        """One conversation by id, archived or not (ACC-108).
+
+        The list holds the newest hundred unarchived chats, so an address
+        naming an archived or older one could not be reopened from it, and the
+        screen said "New chat" while sends went on into the hidden one.
+        """
+        store, _ = services()
+        try:
+            return _payload(store.ensure_conversation(g.auth_session.username, conversation_id))
+        except (AttributeError, RagChatError) as error:
+            return _payload(error={"code": "chat_not_found", "message": str(error)}, status=404)
+
     @blueprint.get("/ai-chat/conversations/<conversation_id>/messages")
     @require_auth("operator")
     def chat_messages(conversation_id):
         store, _ = services()
         try:
             return _payload(store.messages(g.auth_session.username, conversation_id))
+        except (AttributeError, RagChatError) as error:
+            return _payload(error={"code": "chat_not_found", "message": str(error)}, status=404)
+
+    @blueprint.get("/ai-chat/conversations/<conversation_id>/export")
+    @require_auth("operator")
+    def chat_export(conversation_id):
+        """Every turn for the Markdown export, bounded, saying if it was cut (ACC-112)."""
+        store, _ = services()
+        try:
+            return _payload(store.export_messages(g.auth_session.username, conversation_id))
         except (AttributeError, RagChatError) as error:
             return _payload(error={"code": "chat_not_found", "message": str(error)}, status=404)
 
@@ -570,9 +506,16 @@ def register_chat_routes(context: ApiContext) -> None:
     def chat_conversation_delete(conversation_id):
         store, _ = services()
         try:
-            return _payload(store.delete_conversation(g.auth_session.username, conversation_id))
+            result = store.delete_conversation(g.auth_session.username, conversation_id)
         except (AttributeError, RagChatError) as error:
             return _payload(error={"code": "chat_not_found", "message": str(error)}, status=404)
+        # W7 retest: deleting an Assistant conversation was audited and deleting
+        # an AI Chat one was not (LESSONS 6: two surfaces, one kind of act).
+        security.audit(
+            g.auth_session.username, "ai_chat.conversation.delete", "success",
+            target=conversation_id, remote_addr=request.remote_addr or "",
+        )
+        return _payload(result)
 
     @blueprint.post("/ai-chat/conversations/<conversation_id>/fork")
     @require_auth("operator", csrf=True)
@@ -599,6 +542,13 @@ def register_chat_routes(context: ApiContext) -> None:
     def chat_conversation_regenerate(conversation_id):
         store, inference = services()
         body = request.get_json(silent=True) or {}
+        # The model the picker shows, exactly as a send resolves it. This used
+        # to be the conversation's stored model, so a regenerate went to a
+        # model the reader could no longer see - in cluster mode one vLLM did
+        # not serve, 404 - and the failure was blamed on the picker's model.
+        model = str(
+            body.get("model") or store.preference(g.auth_session.username)["model"]
+        ).strip()
         try:
             prepared = store.prepare_regeneration(
                 g.auth_session.username, conversation_id,
@@ -632,7 +582,7 @@ def register_chat_routes(context: ApiContext) -> None:
                             g.auth_session.username, conversation_id
                         ),
                         "message": declined,
-                        "model": conversation["model"],
+                        "model": model,
                         "provider": APPLIANCE_SCOPE_PROVIDER,
                     })
             memory = grounding_memories(prepared["prompt"])
@@ -640,14 +590,18 @@ def register_chat_routes(context: ApiContext) -> None:
                 g.auth_session.username, searchable, retrieved, memory
             )
             result = inference.answer(
-                prepared["prompt"], model=conversation["model"],
+                prepared["prompt"], model=model,
                 history=prepared["history"], retrieved=retrieved,
                 memories=memory["memories"],
+                session_key=conversation_session_key(
+                    g.auth_session.username, conversation_id
+                ),
+                thinking=thinking_choice(store, body, g.auth_session.username),
             )
             assistant_message = store.add_message(
                 g.auth_session.username, conversation_id, "assistant",
                 result["answer"], citations_for(retrieved), retrieval,
-                result["model"], metadata={"performance": result.get("performance")},
+                result["model"], metadata=turn_metadata(result),
             )
         except (
             AttributeError, ChatInferenceError, RagChatError, TypeError, ValueError,
@@ -716,7 +670,7 @@ def register_chat_routes(context: ApiContext) -> None:
             body, preference, existing
         )
         requested_agent_id = str(body.get("agent_id", "")).strip()
-        proposal = agent_proposal(actor, message, requested_agent_id)
+        proposal = agent_proposal(callbacks, actor, message, requested_agent_id)
         if requested_agent_id and proposal is None:
             # Every other early exit releases the claim; this one used to return
             # 400 while leaving the turn marked in-flight, so the client's resend
@@ -746,7 +700,7 @@ def register_chat_routes(context: ApiContext) -> None:
                     "conversation_id": "",
                     "message": proposal_message,
                     "model": model,
-                    "provider": "agent-router",
+                    "provider": AGENT_ROUTER_AUTHOR,
                     "temporary": True,
                     "proposed_agent_task": proposal,
                     "approval_required": True,
@@ -759,14 +713,15 @@ def register_chat_routes(context: ApiContext) -> None:
                 conversation = existing
                 if conversation is None:
                     conversation = store.ensure_conversation(
-                        actor, title=message[:100], model=model, collections=collection_ids,
+                        actor, title=message[:100], collections=collection_ids,
                     )
                 conversation = apply_patch(
                     store, actor, conversation,
-                    conversation_patch(model, collection_ids, collections_chosen),
+                    conversation_patch(collection_ids, collections_chosen),
                 )
                 assistant_message = store.add_exchange(
-                    actor, conversation["id"], message, answer, [], None, "agent-router",
+                    actor, conversation["id"], message, answer, [], None,
+                    AGENT_ROUTER_AUTHOR,
                 )
             except (AttributeError, RagChatError, TypeError, sqlite3.Error) as error:
                 release()
@@ -797,7 +752,7 @@ def register_chat_routes(context: ApiContext) -> None:
                 "conversation_id": conversation["id"],
                 "message": assistant_message,
                 "model": model,
-                "provider": "agent-router",
+                "provider": AGENT_ROUTER_AUTHOR,
                 "proposed_agent_task": proposal,
                 "approval_required": True,
             })
@@ -852,6 +807,9 @@ def register_chat_routes(context: ApiContext) -> None:
                     {
                         "role": item.get("role"),
                         "content": str(item.get("content", ""))[:3000],
+                        # A failure notice the client is holding is not an
+                        # answer; `conversational_history` leaves it out.
+                        "failed": item.get("failed") is True,
                     }
                     for item in body.get("history", [])[-8:]
                     if isinstance(item, dict)
@@ -864,6 +822,14 @@ def register_chat_routes(context: ApiContext) -> None:
                 result = inference.answer(
                     message, model=model, history=history, retrieved=retrieved,
                     memories=memory["memories"],
+                    # A temporary chat has no id: its first message names it
+                    # for as long as it lasts (VD-158) - read off everything
+                    # the client sent, not the last eight turns the model sees.
+                    session_key=opening_session_key(actor, [
+                        *(body.get("history") if isinstance(body.get("history"), list) else []),
+                        {"role": "user", "content": message},
+                    ]),
+                    thinking=thinking_choice(store, body, actor),
                 )
                 return accept({
                     "conversation_id": "",
@@ -871,7 +837,7 @@ def register_chat_routes(context: ApiContext) -> None:
                         "role": "assistant", "content": result["answer"],
                         "citations": citations_for(retrieved),
                         "retrieval": retrieval, "model": result["model"],
-                        "metadata": {"performance": result.get("performance", {})},
+                        "metadata": turn_metadata(result),
                     },
                     "model": result["model"], "provider": result["provider"],
                     "temporary": True, "retrieval": retrieval,
@@ -883,14 +849,13 @@ def register_chat_routes(context: ApiContext) -> None:
             )
             if conversation is None:
                 conversation = store.ensure_conversation(
-                    actor, title=message[:100], model=model, collections=collection_ids,
+                    actor, title=message[:100], collections=collection_ids,
                 )
             # The knowledge selection is the user's choice and is recorded now.
-            # The model is not: it is a record of what answered here, and
-            # nothing has answered yet.
+            # The model is not recorded anywhere but on the turn it writes.
             conversation = apply_patch(
                 store, actor, conversation,
-                conversation_patch("", collection_ids, collections_chosen),
+                conversation_patch(collection_ids, collections_chosen),
             )
             store.add_message(actor, conversation["id"], "user", message)
             memory = grounding_memories(message)
@@ -898,17 +863,13 @@ def register_chat_routes(context: ApiContext) -> None:
             result = inference.answer(
                 message, model=model, history=history, retrieved=retrieved,
                 memories=memory["memories"],
+                session_key=conversation_session_key(actor, conversation["id"]),
+                thinking=thinking_choice(store, body, actor),
             )
             citations = citations_for(retrieved)
             assistant_message = store.add_message(
                 actor, conversation["id"], "assistant", result["answer"], citations,
-                retrieval, result["model"],
-                metadata={"performance": result.get("performance")},
-            )
-            # Something answered, so the conversation may now say what.
-            conversation = apply_patch(
-                store, actor, conversation,
-                conversation_patch(result["model"] or model, [], False),
+                retrieval, result["model"], metadata=turn_metadata(result),
             )
         except (
             AttributeError, ChatInferenceError, RagChatError, TypeError,
@@ -916,13 +877,16 @@ def register_chat_routes(context: ApiContext) -> None:
         ) as error:
             release()
             if not temporary and conversation is not None:
+                # The model the request really went to, which is the picker's
+                # choice or - with none chosen - the one the server offered.
+                failed_model = getattr(error, "model", "") or model
                 try:
                     failure_message = store.add_message(
                         actor,
                         conversation["id"],
                         "assistant",
                         "This request failed: {}".format(str(error)),
-                        model=model,
+                        model=failed_model,
                         # Recorded, never inferred. A model may legitimately
                         # write "this request failed", so the text cannot be
                         # the marker; without a stored one, a reload showed a
@@ -931,7 +895,7 @@ def register_chat_routes(context: ApiContext) -> None:
                         metadata={
                             "failed": True,
                             "error_code": getattr(error, "code", "ai_chat_failed"),
-                            "failed_model": model,
+                            "failed_model": failed_model,
                         },
                     )
                 except (AttributeError, RagChatError, TypeError, sqlite3.Error):
@@ -940,7 +904,7 @@ def register_chat_routes(context: ApiContext) -> None:
                     actor, "ai_chat.message", "failure",
                     target=conversation["id"], remote_addr=request.remote_addr or "",
                     details={
-                        "model": model,
+                        "model": failed_model,
                         "code": getattr(error, "code", "ai_chat_failed"),
                         "saved": True,
                     },

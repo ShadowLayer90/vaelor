@@ -66,6 +66,12 @@ CAPABILITY_LABELS = {
 #: What each tool is for, in the fewest words that still let a model choose
 #: correctly. This is the part that closes the real gap: a model cannot ask for
 #: ``gpu.status`` if nothing ever told it the tool exists.
+#:
+#: **Only tools a question can gather (review S7, VD-205 item 5).** The brief
+#: told the model to "ask for" ``configuration.summary`` and
+#: ``cluster.summary``, which no question ever gathered: an invitation to a
+#: reading the model can never receive. `tests/test_assistant_machine_brief.py`
+#: checks every entry against the gather table.
 TOOL_MAP = (
     ("system.telemetry", "live CPU, memory, temperature, fan, storage, network"),
     ("system.identity", "model, software version, detected peripherals"),
@@ -79,10 +85,9 @@ TOOL_MAP = (
     ("updates.status", "available and staged OS updates"),
     ("logs.service", "recent journal lines for one managed service"),
     ("metrics.history", "recent telemetry samples, for trends"),
-    ("configuration.summary", "stored appliance configuration"),
     ("workloads.inventory", "managed apps, local models, ports, health"),
     ("jobs.recent", "recent approved jobs and their progress"),
-    ("cluster.summary", "head controller, workers, pooled inference"),
+    ("cluster.digest", "every machine in the cluster, serving, alerts"),
 )
 
 #: Tools that only mean anything on a machine that has the hardware they

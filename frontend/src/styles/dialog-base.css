@@ -13,39 +13,22 @@
 
 .dialog {
   width: min(100%, 440px);
-  padding: var(--space-6);
-  background: var(--bg-surface-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-modal);
-}
-
-.dialog--wide {
-  width: min(100%, 720px);
-  max-height: calc(100vh - (2 * var(--space-5)));
+  /* Never taller than the screen it is on (review round 1: a confirmation ran
+     to 912 px on a 667 px phone with Cancel below the edge); what does not
+     fit scrolls inside the dialog. */
+  max-height: calc(100dvh - (2 * var(--space-5)));
   overflow-y: auto;
-}
-
-.dialog--wide > label {
-  display: grid;
-  gap: var(--space-2);
-  margin-top: var(--space-4);
-}
-
-.dialog__icon {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  color: var(--danger);
-  background: var(--danger-soft);
-  border: 1px solid var(--danger-border);
-  border-radius: 50%;
+  padding: var(--space-6);
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge), var(--shadow-modal);
 }
 
 .dialog h2 {
   margin: var(--space-5) 0 var(--space-3);
-  font-size: 21px;
+  font-size: var(--font-size-heading-sm);
+  font-weight: var(--weight-medium);
 }
 
 .dialog p {
@@ -59,6 +42,154 @@
   justify-content: flex-end;
   gap: var(--space-3);
   margin-top: var(--space-6);
+}
+
+/* A confirmation scrolls its body and keeps its actions on screen. Held by
+   scripts/dashboard-layout-contract.mjs (the confirmation dialog clauses). */
+.dialog--confirm {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dialog__body {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.dialog--confirm .dialog__actions {
+  flex: none;
+}
+
+/* The sectioned dialog (VD-200, the ChatDialogs and Assist dialog boards): a
+   header, a body and a footer, each padded and parted by a hairline. Every
+   ConfirmDialog and TextPromptDialog is drawn this way. A confirmation whose
+   action cannot be reversed carries the red "Can't be undone" eyebrow. */
+.dialog.dialog-sectioned {
+  width: min(100%, 432px);
+  padding: 0;
+  background: var(--bg-card-top);
+  border-color: var(--border-default);
+  border-radius: 12px;
+  box-shadow: var(--shadow-modal);
+}
+
+.dialog-sectioned__header {
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border-kv);
+}
+
+.dialog.dialog-sectioned h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.dialog.dialog-sectioned .dialog-sectioned__header p {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.dialog-sectioned__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 22px;
+}
+
+.dialog.dialog-sectioned .dialog-sectioned__footer {
+  flex-wrap: wrap;
+  margin-top: 0;
+  padding: 16px 22px;
+  border-top: 1px solid var(--border-kv);
+}
+
+.dialog-sectioned .modal-error {
+  margin-top: 0;
+}
+
+.dialog-sectioned__eyebrow {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-unread);
+  font-size: var(--font-size-ui-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dialog-sectioned__eyebrow--danger {
+  color: var(--danger-text);
+}
+
+/* The refusal of a modal's own action (W4d-D16, D18), inside the modal. In a
+   scrolling ModalShell it sticks to the dialog's bottom edge, beside the
+   actions the owner just pressed, so it is on screen wherever the form is
+   scrolled to; in a confirmation it sits under the description. */
+.modal-error {
+  margin-top: var(--space-4);
+}
+
+.modal-shell__dialog > .modal-error {
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-5) var(--space-5);
+  background: var(--bg-card);
+  border-top: 1px solid var(--border-row);
+}
+
+/*
+ * The large dialog every form opens in (ModalShell). It was styled in the
+ * later ui-refinement.css layer with its own blue-black gradient and square
+ * corners; it is a dialog, so it lives here and wears the card surface.
+ */
+.modal-shell {
+  position: fixed;
+  z-index: var(--layer-modal);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  background: var(--overlay);
+  backdrop-filter: blur(6px);
+}
+
+.modal-shell__dialog {
+  width: min(100%, 980px);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge), var(--shadow-modal);
+}
+
+.modal-shell__dialog--wide {
+  width: min(100%, 1240px);
+}
+
+.modal-shell__dialog--standard form {
+  width: min(100%, 640px);
+  margin-inline: auto;
+}
+
+.modal-shell__dialog > section {
+  margin: 0;
+  border: 0;
+}
+
+@media (max-width: 720px) {
+  /* A phone opens the dialog as a sheet from the bottom edge. */
+  .modal-shell {
+    align-items: end;
+    padding: 0;
+  }
+
+  .modal-shell__dialog {
+    max-height: 94vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
 }
 
 .sr-only {

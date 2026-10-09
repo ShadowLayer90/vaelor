@@ -178,3 +178,47 @@ def peripheral_temperatures(sys_root: str = "/sys") -> Dict[str, Any]:
                     "celsius": reading["celsius"],
                 })
     return {"storage": storage, "network": network}
+
+
+def _tachometer(path: Path) -> Optional[int]:
+    """One ``fan*_input`` as whole RPM, or ``None`` when it gave no reading."""
+    raw = _read(path)
+    if not raw.isascii() or not raw.isdigit():
+        return None
+    return int(raw)
+
+
+def readable_fan_speeds(sys_root: str = "/sys") -> List[int]:
+    """Every fan tachometer on the machine that gives a reading, in RPM.
+
+    Any hwmon driver's ``fan*_input`` counts - a board controller, the HP WMI
+    node, a GPU's own fan - because the question is "how fast are this
+    machine's fans", not "how fast is one driver's". A channel is NOT a
+    reading when its read fails, when it holds anything but a non-negative
+    whole number, or when the driver flags it faulted (``fan*_fault`` = 1):
+    a faulted channel's number is the sensor saying it is broken.
+
+    A readable 0 is kept: a stopped fan the tachometer sees is a fact. An
+    empty list means no fan was read at all, which a caller must report as
+    absent, never as 0 RPM (VD-205 item 6; the ZBook today has no readable
+    fan on Linux and must read as "not read", not "stopped").
+    """
+    speeds: List[int] = []
+    try:
+        entries = sorted((Path(sys_root) / "class" / "hwmon").iterdir())
+    except OSError:
+        return speeds
+    for entry in entries:
+        try:
+            inputs = sorted(entry.glob("fan*_input"))
+        except OSError:
+            continue
+        for sensor in inputs:
+            rpm = _tachometer(sensor)
+            if rpm is None:
+                continue
+            stem = sensor.name[: -len("_input")]
+            if _read(entry / "{}_fault".format(stem)) == "1":
+                continue
+            speeds.append(rpm)
+    return speeds

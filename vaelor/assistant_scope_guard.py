@@ -27,6 +27,8 @@ instead of posting it to one that cannot read the machine.
 
 from __future__ import annotations
 
+from .assistant_console_places import HARDWARE_PLACE
+
 import ast
 import json
 import re
@@ -40,7 +42,7 @@ from .assistant_answer_presentation import is_appliance_question
 #: failure. The distinction is load-bearing and was drawn against the
 #: appliance's own sentences:
 #:
-#: * ``connected_model_failure_answer`` - "The selected AI connection did not
+#: * ``connected_model_failure_answer`` - "The Assistant's model did not
 #:   answer this request, so I cannot answer it reliably without guessing" - is
 #:   a true statement about a real outage and must survive untouched. A pattern
 #:   as loose as ``I cannot answer`` would swallow it and replace an accurate
@@ -192,7 +194,7 @@ _WITHHELD_ANSWER = (
     "it from what I can read on this machine just now, and I will not guess a "
     "reading in place of one. Name the reading you want - a temperature, free "
     "space, a service, an alert - or read the current values on "
-    "System > Hardware & services."
+    + HARDWARE_PLACE + "."
 )
 
 #: Said beside the readings that survived, when only part of a reply was
@@ -283,7 +285,7 @@ _UNUSABLE_MODEL_ANSWER = (
     "I could not produce a clear answer to that. The connected model returned "
     "an internal, unusable response instead of an answer, so there is nothing "
     "reliable to show. Try rephrasing your question, or read the current "
-    "values on System > Hardware & services."
+    "values on " + HARDWARE_PLACE + "."
 )
 
 
@@ -508,8 +510,9 @@ def guarded_answer(question: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
             "source": SCOPE_GUARD_EVIDENCE,
             "summary": (
                 "{} sentence{} of the prepared answer declined a question "
-                "about this appliance. VD-042 puts appliance questions on "
-                "this surface, so {} withheld rather than shown.".format(
+                "about this appliance. Questions about this appliance are "
+                "the Assistant's to answer, so {} withheld rather than "
+                "shown.".format(
                     withheld, "" if withheld == 1 else "s",
                     "it was" if withheld == 1 else "they were",
                 )

@@ -3,9 +3,29 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, Mapping
 
 from .provider_runtime import assistant_budget, model_capability, request_complexity
+
+
+#: Discovery-degraded flags the research pipeline records when a fallback path
+#: actually fired (a flaky model plan, a failed source selection, a search-query
+#: fallback, or unreachable guarded web research). Escalation to the capable GPU
+#: model is only worthwhile when one of these is set: it means DISCOVERY - not
+#: extraction - underperformed, so a stronger model may find an authoritative
+#: source the assistant missed.
+_DISCOVERY_DEGRADED_FLAGS = (
+    "discovery_fallback",
+    "source_selection_fallback",
+    "query_fallback_used",
+    "web_research_unavailable",
+)
+
+#: The two discovery-empty risk names ``manifest_research_risks`` reports and
+#: ``escalation_recommended`` reads back. Named once so the two functions cannot
+#: drift out of agreement on the exact spelling.
+_RISK_UNVERIFIED_COMPATIBILITY = "unverified compatibility"
+_RISK_NO_DIGEST_IMAGE = "no digest-pinned image"
 
 
 _REVIEWED_SIMPLE = {
@@ -104,12 +124,42 @@ def manifest_research_risks(manifest: Any) -> list[str]:
     compatibility = manifest.get("compatibility", {})
     risks = []
     if isinstance(compatibility, dict) and compatibility.get("status") != "verified":
-        risks.append("unverified compatibility")
+        risks.append(_RISK_UNVERIFIED_COMPATIBILITY)
     if not manifest.get("images"):
-        risks.append("no digest-pinned image")
+        risks.append(_RISK_NO_DIGEST_IMAGE)
     variables = manifest.get("variables", [])
     if isinstance(variables, list) and any(isinstance(item, dict) and item.get("secret") for item in variables):
         risks.append("credential integration")
     if len(manifest.get("images", [])) > 1:
         risks.append("multiple services")
     return risks
+
+
+def escalation_recommended(manifest: Any, discovery_flags: Any) -> bool:
+    """True only when the assistant's DISCOVERY was weak enough to escalate.
+
+    For an unreviewed application, ports and volumes are supplied by the operator
+    at configure time, never by the model - so a "verified image, 0 ports, 0
+    volumes" manifest is the correct shape, and this NEVER keys on those counts.
+    The capable GPU model's real leverage is discovery: finding an authoritative
+    source or verifiable image the assistant missed. So escalation is recommended
+    only when both are true:
+
+    * discovery came up empty - ``manifest_research_risks`` reports both
+      "unverified compatibility" (``compatibility.status`` is not ``verified``)
+      and "no digest-pinned image" (no image was proven); and
+    * a discovery-degraded flag actually fired (a flaky model plan, a failed
+      source selection, a query fallback, or unreachable guarded web research),
+      so the weakness is a discovery gap a stronger model can plausibly close -
+      not an app whose facts are simply absent from the public evidence.
+
+    Pure and side-effect free: the caller decides availability (a capable lease)
+    and fire-once (the job's own ``mode``) separately.
+    """
+    risks = manifest_research_risks(manifest)
+    if not (
+        _RISK_UNVERIFIED_COMPATIBILITY in risks and _RISK_NO_DIGEST_IMAGE in risks
+    ):
+        return False
+    flags = discovery_flags if isinstance(discovery_flags, Mapping) else {}
+    return any(bool(flags.get(flag)) for flag in _DISCOVERY_DEGRADED_FLAGS)

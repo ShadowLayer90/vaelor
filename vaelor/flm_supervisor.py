@@ -15,14 +15,18 @@ port it chose itself.
 
 from __future__ import annotations
 
+import logging
 import socket
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, FrozenSet, Mapping, Optional, Tuple
 
 from .executor_network import available_model_port
 from .flm_service import RESERVED_CONTROL_PLANE_PORTS
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 #: How long to wait for a freshly launched flm-real to answer on loopback
@@ -70,6 +74,66 @@ def should_serve_on_npu(
     if not (capability or {}).get("available"):
         return False
     return bool((plan or {}).get("usable")) and bool((plan or {}).get("flm_tag"))
+
+
+def npu_serves_assistant() -> bool:
+    """Whether this machine's Assistant is the NPU's (VD-001), read the way the
+    deploy's routing reads it: a usable plan, and flm-real, the device and the
+    model present. The control plane's reading for the model list, so "Use
+    model" names the tier the deploy will actually serve (W4d-D13, D28)."""
+    from .flm_service import discover_npu_serving
+    from .inference_tuning import npu_tier_plan
+
+    plan = npu_tier_plan()
+    if not plan.get("usable") or not plan.get("flm_tag"):
+        return False
+    return bool(discover_npu_serving(str(plan["flm_tag"])).get("available"))
+
+
+def npu_own_port(broker: Any) -> Optional[int]:
+    """The loopback port the NPU Assistant's own lease names, or ``None``.
+
+    The lease is the NPU's only when it is pinned to an FLM tag - the same
+    positive identification the boot reconcile makes (VD-001, FIX 2) - so a
+    llama.cpp Assistant's port is never taken for the NPU's.
+    """
+    from .credential_broker import CredentialError
+    from .gpu_serving_target import loopback_port
+    from .managed_local_credentials import pins_an_flm_tag
+
+    try:
+        lease = broker.resolve_active("deployment-agent")
+    except CredentialError:
+        return None
+    except Exception as error:  # noqa: BLE001 - never fail the deploy over it
+        # LESSONS 8: an unreadable lease is not "no NPU lease"; it is said, and
+        # the redeploy falls back to the lowest free port, as it always did.
+        LOGGER.warning("The Assistant's lease could not be read for its port: %s", error)
+        return None
+    if not pins_an_flm_tag(lease.get("model")):
+        return None
+    return loopback_port(str(lease.get("base_url") or ""))
+
+
+def npu_port_claims(broker: Any) -> Tuple[Optional[int], FrozenSet[int]]:
+    """``(own, reserved)``: the NPU Assistant's own port, and every loopback port
+    another Vaelor-managed local model's credential names (F6, VD-179).
+
+    A port binds as free the moment its server stops, but a stopped AI Chat
+    model comes back on the port its lease names - ``gpu_chat_relaunch`` reads
+    ``target.port`` and never re-allocates - so those ports are claimed, not
+    free. Read off the broker's listing like the credential sweep's tiers.
+    """
+    from .gpu_serving_target import loopback_port
+    from .managed_local_credentials import gpu_tier_endpoints
+
+    try:
+        endpoints = gpu_tier_endpoints(broker)
+    except Exception as error:  # noqa: BLE001 - never fail the deploy over it
+        LOGGER.warning("The stored model credentials could not be read: %s", error)
+        endpoints = []
+    reserved = frozenset(port for port in map(loopback_port, endpoints) if port)
+    return npu_own_port(broker), reserved
 
 
 def _endpoint_healthy(
@@ -120,7 +184,7 @@ class FlmSupervisor:
         self._launcher = launcher
         self._health = health or _endpoint_healthy
         self._allocate_port = allocate_port or (
-            lambda: available_model_port(socket.socket)
+            lambda exclude=frozenset(): available_model_port(socket.socket, exclude)
         )
         self._deadline = float(deadline_seconds)
         self._poll = float(poll_seconds)
@@ -140,6 +204,28 @@ class FlmSupervisor:
                 "flm-real server."
             )
         return port
+
+    def redeploy_port(
+        self, own_port: Optional[int], reserved: FrozenSet[int] = frozenset(),
+    ) -> int:
+        """The port a (re)deployed NPU Assistant serves on (W5, W4d-D13, F6).
+
+        Its own port (``own_port``, read off the Assistant's lease by
+        :func:`npu_own_port`): flm-real stops its old process before it starts
+        the new one, so its own port is as good as free. It used to take a
+        fresh port because the old server still held its own - 8080 became
+        8081 and every client of the old endpoint broke. It no longer moves
+        DOWN to a lower free port either: a stopped AI Chat model binds as free
+        and comes back on its own port (F6). ``reserved`` - the ports
+        :func:`npu_port_claims` reads off other models' credentials - is never
+        taken: an own port another model names (D13 left the Assistant on the
+        stopped 27B's) is given back for the lowest unclaimed free one, and
+        with no NPU lease (the VD-002 migration from a llama.cpp Assistant,
+        which must coexist until flm-real is healthy) only that is a candidate.
+        """
+        if own_port and own_port not in reserved:
+            return self.allocate_port(own_port)
+        return self.allocate_port(int(self._allocate_port(exclude=reserved)))
 
     def serve(
         self, tag: str, *, ctx_len: int, port: int,

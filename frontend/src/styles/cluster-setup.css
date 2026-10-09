@@ -1,0 +1,332 @@
+/*
+ * Cluster > Setup (VD-200: the ClusterSetup, ClusterSetupMachines and
+ * ClusterDialogsGrow boards): the two columns at the top of the tab, the
+ * machines awaiting join, the add-a-machine flow, the GPU memory pool
+ * sub-cards and the cluster link list. The shared building blocks are in
+ * cluster.css; this sheet holds only what Setup draws itself. Tokens only.
+ */
+
+/* Two columns: this node and Add a machine | awaiting join, removals, requirements. */
+.cl-setup__columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 16px;
+  align-items: start;
+  min-width: 0;
+}
+
+.cl-setup__lead {
+  color: var(--text-primary);
+}
+
+.cl-setup__muted {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-setup__mono {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-setup__note {
+  margin: 0;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+/* Worker requirements: the label | value rows of .cl-facts, one row per fact. */
+.cl-setup__fact {
+  display: contents;
+}
+
+/* A machine awaiting join, one per block inside the flush card. */
+.cl-setup__machine {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.cl-setup__machine:first-child {
+  border-top: 0;
+}
+
+.cl-setup__machine-head,
+.cl-setup__pool-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cl-setup__machine-name,
+.cl-setup__pool-name {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cl-setup__machine-name h3,
+.cl-setup__pool-name h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+/* A pool card's name is one line, cut with an ellipsis (its title keeps the
+   whole name): wrapped, a long worker name put every row of its card 19 px
+   below the same row of the controller's card beside it (W6-2). */
+.cl-setup__pool-name h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cl-setup__machine-name > span {
+  color: var(--text-muted);
+}
+
+.cl-setup__pool-name p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-setup__reach,
+.cl-setup__mismatch {
+  margin: 0;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.55;
+}
+
+/*
+ * These cards are flex COLUMNS. fleet.css once gave every outcome line
+ * `flex-basis: 100%` so it wrapped onto its own line in a flex ROW; in a column
+ * that basis is 100% of the card's height. (fleet.css now uses a full width,
+ * safe in any column; the basis here stays as a second hold.) Once the pool cards stretched to one
+ * height (polish cause 7) that height was definite: the outcome line asked for
+ * 277 px and the readings above it shrank from 60 to 15 px to make room, so
+ * every row below them stood 45 px off the other card's (dashboard contract
+ * pool_alignment). In a column the line is as tall as its text.
+ */
+.cl-setup__machine .recheck-outcome,
+.cl-setup__pool .recheck-outcome {
+  flex-basis: auto;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* Removed workers and Cluster settings rows. */
+.cl-setup__removals > li,
+.cl-setup__settings > li {
+  align-items: flex-start;
+}
+
+/* Add a machine. */
+.cl-setup__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.cl-setup__add-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 16px;
+}
+
+.cl-setup__add-footer > .cl-meta {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.cl-setup__identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cl-setup__identity-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cl-setup__identity-text p {
+  margin: 0;
+}
+
+.cl-setup__identity-text code.cl-setup__mono {
+  overflow-wrap: anywhere;
+}
+
+/* GPU memory pool: a sub-card per machine. */
+.cl-setup__pool {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+}
+
+.cl-setup__pool-trail {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cl-setup__pool-trail .ui-button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: var(--font-size-ui-sm);
+}
+
+/* A field with its buttons on the field's own line, the hint beneath. */
+.cl-setup__pool-edit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.cl-setup__pool-buttons {
+  margin-top: 25px;
+}
+
+.cl-setup__pool .ui-button svg,
+.cl-card__header .ui-button svg {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .cl-setup__pool-edit {
+    grid-template-columns: 1fr;
+  }
+
+  .cl-setup__pool-buttons {
+    margin-top: 0;
+  }
+
+  .cl-setup__machine-head,
+  .cl-setup__pool-head {
+    flex-wrap: wrap;
+  }
+
+  /* A phone's tap target is 44 px (VD-200 review S6). */
+  .cl-setup__pool-trail .ui-button {
+    min-height: 44px;
+  }
+}
+
+/* Cluster link. */
+.cl-setup__chosen {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.cl-setup__links {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  list-style: none;
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.cl-setup__links > li {
+  display: grid;
+  grid-template-columns: minmax(90px, 118px) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  background: var(--bg-kv);
+  border-top: 1px solid var(--border-kv);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-setup__links > li:first-child {
+  border-top: 0;
+}
+
+.cl-setup__links > li > strong {
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.cl-setup__link-detail {
+  color: var(--text-secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .cl-setup__links > li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .cl-setup__links > li > .cl-setup__link-detail {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+/* Cluster link and Cluster settings: two equal columns, one card keeps its half. */
+.cl-setup__pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  /* Cards in one row share one height, so their footers and actions line up
+     (polish cause 7; LESSONS 6). The card is a flex column whose body grows. */
+  align-items: stretch;
+  min-width: 0;
+}
+
+@media (max-width: 1024px) {
+  .cl-setup__pair {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The pool sub-card's four figures stay on one row while they fit. */
+.cl-setup__pool .cl-kv {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 96px), 1fr));
+}
+
+/* An icon inside a button keeps a gap from its words. */
+.cl-setup .ui-button:has(> svg) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* Notices on this tab sit in the stack's own gaps; the page-wide notice margin would double them. */
+.cl-setup .ui-notice {
+  margin-top: 0;
+}

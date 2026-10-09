@@ -40,19 +40,28 @@ const navigationAliases: Record<string, NavigationPage> = {
 };
 
 /**
- * Routes reachable by URL that are deliberately not rail destinations.
+ * Routes reachable by URL that the shell renders outside `NavigationPage`.
  *
  * `#/memory` is appliance-wide: `_list_memories` has no actor filter, so the
- * same store answers the Assistant and AI Chat. Listing it in the rail would
- * claim it is a tenth place to work; nesting it under the Assistant claimed it
- * was the Assistant's. It is neither, so it is a page reached from the chip on
- * whichever surface you are already using.
+ * same store answers the Assistant and AI Chat. The redesign gives it its own
+ * rail item in the AI group, after the Assistant (`memoryRailItem`), rather
+ * than nesting it under either surface; the chips on those surfaces still
+ * open it. Every memory endpoint is administrator-only, so the item is too.
  */
 export const standaloneRoutes = ["memory"] as const;
 
 export type StandaloneRoute = (typeof standaloneRoutes)[number];
 
 const standaloneRouteSet = new Set<string>(standaloneRoutes);
+
+/** The rail's Memory item: AI group, after the Assistant; administrators only. */
+export const memoryRailItem = {
+  route: "memory" as StandaloneRoute,
+  label: "Memory",
+  descriptor: "What Vaelor remembers, for the Assistant and AI Chat alike",
+  hash: "#/memory",
+  after: "assistant" as NavigationPage,
+} as const;
 
 export function standaloneRouteFromHash(hash: string): StandaloneRoute | null {
   const candidate = hash.replace(/^#\/?/, "").split(/[/?]/, 1)[0].toLowerCase();
@@ -99,4 +108,16 @@ export function hashTargetsPage(hash: string, page: NavigationPage): boolean {
   const path = hash.replace(/^#\/?/, "").split("?", 1)[0];
   if (page === "overview") return path === "" || path === "overview";
   return path === page || path.startsWith(`${page}/`);
+}
+
+/**
+ * A backend route ("/workloads/models", the `owner_route` an operation names)
+ * as this app's link. The app is hash-routed: a path href reloads the page at
+ * that path, and the router - reading only the hash - shows Home (W4d-D24).
+ * An address that is already a hash or carries a scheme is left alone.
+ */
+export function routeHref(route: string): string {
+  const trimmed = route.trim();
+  if (trimmed.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed;
+  return "#/" + trimmed.replace(/^\/+/, "");
 }

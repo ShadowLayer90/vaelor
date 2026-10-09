@@ -8,6 +8,8 @@ import re
 from flask import Response, abort, send_from_directory
 from flask_cors import cross_origin
 
+from .api_common import payload
+
 # A content-hashed build artifact under assets/ never changes for a given URL:
 # a new build emits a new hash. Tell the browser it may keep it for a year and
 # never revalidate.
@@ -61,6 +63,17 @@ def register_frontend_routes(app, www_v2_path: str) -> None:
     @app.route("/<path:path>")
     @cross_origin()
     def catch_all(path):
+        # W4d-D9: an unrouted API path answered 200 with the console's HTML, so
+        # a script probing `/api/v2/<typo>` read success (LESSONS 8: an absence
+        # presented as an answer). API paths are never the console's to serve.
+        if path == "api" or path.startswith("api/"):
+            return payload(
+                error={
+                    "code": "not_found",
+                    "message": "There is no API route at /{}.".format(path[:200]),
+                },
+                status=404,
+            )
         with open(f"{app.static_folder}/index.html") as source:
             response = Response(source.read(), mimetype="text/html")
         response.headers["Cache-Control"] = REVALIDATE_HTML_CACHE

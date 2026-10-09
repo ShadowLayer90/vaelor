@@ -177,6 +177,10 @@ class Reading(NamedTuple):
 #: simply not trended, which is a silence rather than a wrong sentence.
 #:
 #: Ordered as an owner asks: the live question was about temperature.
+#: The words that make a sentence about the GPU.
+_GPU_SUBJECT: Tuple[str, ...] = ("gpu", "gpus", "graphics")
+_FAN_SUBJECT: Tuple[str, ...] = ("fan", "fans", "rpm", "fan speeds")
+
 TRENDED_READINGS: Tuple[Reading, ...] = (
     Reading(
         "cpu_temperature", "°C", 0.5,
@@ -203,7 +207,31 @@ TRENDED_READINGS: Tuple[Reading, ...] = (
         ("memory usage", "memory", "ram", "swap",
          "free memory", "memory pressure"),
     ),
+    # Review B9: the store keeps every numeric field a sample carries, GPU and
+    # fan readings among them, and these were refused as "something these
+    # samples do not record". The GPU subject words are shared by its three
+    # readings; `readings_named` narrows them by the attribute asked about.
+    Reading("gpu_temperature_c", "°C", 0.5, _GPU_SUBJECT + ("gpu temp", "gpu hot")),
+    Reading("gpu_busy_percent", "%", 2.0, _GPU_SUBJECT + ("gpu busy", "gpu load", "gpu usage")),
+    Reading("gpu_power_watts", " W", 0.5, _GPU_SUBJECT + ("gpu watts", "gpu draw")),
+    Reading("fan_rpm", " RPM", 50.0, _FAN_SUBJECT),
+    # The Raspberry Pi's case fan is recorded as `pwm_fan_speed` (RPM), and the
+    # refusal said the store held no fan speed while listing it (adversarial
+    # review should-fix 4). Same subject words, so "the fan" reads both.
+    Reading("pwm_fan_speed", " RPM", 50.0, _FAN_SUBJECT + ("pwm fan",)),
 )
+
+#: Which attribute of the GPU a sentence asks about, per GPU reading field.
+_GPU_ATTRIBUTES = {
+    "gpu_temperature_c": ("temperature", "temperatures", "temp", "temps", "hot", "hotter",
+                          "hottest", "warm", "warmer", "heat", "degrees", "thermal"),
+    "gpu_busy_percent": ("busy", "use", "usage", "used", "load", "loaded", "utilisation",
+                         "utilization", "idle", "work", "working"),
+    "gpu_power_watts": ("power", "watt", "watts", "wattage", "draw", "drawing", "energy"),
+}
+_CPU_SUBJECT = ("cpu", "cpus", "processor", "processors")
+_TEMPERATURE_WORDS = ("temperature", "temperatures", "temp", "temps", "hot", "hotter",
+                      "warm", "warmer", "heat", "degrees", "celsius", "thermal")
 
 
 class Trend(NamedTuple):
@@ -391,10 +419,23 @@ def readings_named(message: str) -> Tuple[str, ...]:
     at tool granularity answers a fan question with a temperature.
     """
     text = str(message or "")
-    return tuple(
+    named = [
         reading.field for reading in TRENDED_READINGS
         if mentions(text, reading.asked_by)
-    )
+    ]
+    if ("fan_rpm" in named or "pwm_fan_speed" in named) and not mentions(text, _TEMPERATURE_WORDS):
+        # "is the cooling fan ok" is about the fan: "cooling" must not also
+        # claim the CPU temperature and answer with it.
+        named = [field for field in named if field != "cpu_temperature"]
+    if mentions(text, _GPU_SUBJECT) and not mentions(text, _CPU_SUBJECT):
+        # "was the GPU hot" is about the GPU: "hot" must not also claim the
+        # CPU temperature, nor "GPU memory" the system memory.
+        named = [field for field in named if field.startswith("gpu_")
+                 or (field == "memory_percent" and mentions(text, ("ram", "system memory")))]
+        attributed = [field for field in named if mentions(text, _GPU_ATTRIBUTES.get(field, ()))]
+        if attributed:
+            named = [field for field in named if field in attributed or not field.startswith("gpu_")]
+    return tuple(named)
 
 
 def claimed_by_a_reading(phrase: str) -> bool:
@@ -559,6 +600,12 @@ def _opening(label: str) -> str:
 def describe(trend: Trend) -> str:
     """One reading's movement, in the direction words an owner asked with."""
     unit = trend.reading.unit
+    spread = trend.high - trend.low
+    if trend.direction == HELD_STEADY and spread > trend.reading.steady_within:
+        # Review S1: a 30 °C spike between equal endpoints is not "steady".
+        return "{} ended about where it began, around {}, but moved between {} and {} across those samples.".format(
+            _opening(trend.reading.label), _figure(trend.last, unit),
+            _figure(trend.low, unit), _figure(trend.high, unit))
     if trend.direction == HELD_STEADY:
         line = "{} held steady, around {}.".format(
             _opening(trend.reading.label), _figure(trend.last, unit))
@@ -605,7 +652,26 @@ def _listed(names: Sequence[str]) -> str:
     return "{} and {}".format(", ".join(items[:-1]), items[-1])
 
 
-def nothing_to_compare(samples: Sequence[Any]) -> str:
+def recorded_fields(samples: Sequence[Any]) -> List[str]:
+    """The readings these rows actually carry as numbers, by name (review B9).
+
+    Every numeric field a sample holds, not the list this module knows how to
+    trend, so a refusal never says the store lacks a reading it holds.
+    """
+    names: List[str] = []
+    for sample in samples or ():
+        if not isinstance(sample, dict):
+            continue
+        for key, value in sample.items():
+            if key == "time" or _number(value) is None:
+                continue
+            label = FIELD_NAMES.get(key, str(key).replace("_", " "))
+            if label not in names:
+                names.append(label)
+    return names
+
+
+def nothing_to_compare(samples: Sequence[Any], named: Sequence[str] = ()) -> str:
     """What is held, when a direction cannot be read out of it.
 
     Reached when the samples arrived but nothing in them can be compared for
@@ -613,6 +679,14 @@ def nothing_to_compare(samples: Sequence[Any]) -> str:
     the defect this module was written to remove.
     """
     measured = span(samples)
+    missing = [reading.label for reading in wanted(named)
+               if not _series(list(samples or ()), reading.field)] if named else []
+    if missing and len(missing) == len(wanted(named)):
+        held = recorded_fields(samples)
+        return (
+            "The retained {} {} on this machine. They record {}.".format(SUBJECT_NOT_RETAINED,
+                _listed(missing), _listed(held[:8]) if held else "no numeric readings")
+        )
     if measured.count == 1:
         return (
             "This appliance is holding {}, so there is nothing to compare it "
@@ -640,8 +714,7 @@ def off_subject(samples: Sequence[Any]) -> str:
     back to what this module can trend at all when there are none, so the
     sentence never lists a reading this store did not record.
     """
-    found = trends(samples)
-    labels = [trend.reading.label for trend in found] or [
+    labels = recorded_fields(samples)[:8] or [
         reading.label for reading in TRENDED_READINGS
     ]
     return (

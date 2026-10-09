@@ -1,0 +1,293 @@
+/*
+ * The Cluster page's deploy dialogs (VD-200 boards ClusterDialogsServe,
+ * ClusterDialogsServe2, ClusterDialogsGrow, ClusterDialogsAgentDeploy,
+ * ClusterDialogsAgentConfig, ClusterDialogsAgentReview): serve a model, deploy
+ * an app, deploy an agent. They render through ClusterDialog and OptionCard
+ * (styles/cluster.css); this file holds only what those dialogs add. Tokens
+ * from tokens-auth.css only; 12 px is the floor for every text.
+ */
+
+/* A labelled group of choices: no fieldset chrome, the legend as a field label. */
+.cd-group {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cd-group > legend,
+.cd-label {
+  margin: 0 0 10px;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cd-label {
+  margin: 0;
+}
+
+.cd-group > legend.cd-label--strong,
+.cd-label--strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Option cards side by side. */
+.cd-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.cd-options--four {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+}
+
+.cd-options--compact .cl-opt {
+  padding: 10px 12px;
+}
+
+/* The chip-sized checkbox cards of an attached server's tools. */
+.cd-options--chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-left: 26px;
+}
+
+.cd-options--chips .cl-opt {
+  align-items: center;
+  padding: 8px 12px;
+}
+
+.cd-options--chips .cl-opt > input {
+  margin-top: 0;
+}
+
+/* The two-up form grid (name | port, interface | memory use, ...). */
+.cd-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .cd-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A bordered box inside a dialog: the fit decision, the tool grants, Advanced. */
+.cd-box {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+.cd-box > p {
+  margin: 0;
+}
+
+/* The fit decision. */
+.cd-fit__decision {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cd-fit__decision > p {
+  margin: 0;
+}
+
+.cd-fit__summary {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+}
+
+.cd-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.55;
+}
+
+.cd-info-text {
+  margin: 0;
+  color: var(--info-text);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cd-bad-text {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--font-size-ui-sm);
+}
+
+/* The GPU form's footer is portalled into ClusterDialog's footer. */
+.cd-footer-slot {
+  display: contents;
+}
+
+/* Deploy app: the Advanced disclosure. */
+.cd-advanced {
+  min-width: 0;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+.cd-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  cursor: pointer;
+  list-style: none;
+}
+
+.cd-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cd-advanced > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--text-secondary);
+  border-bottom: 1.5px solid var(--text-secondary);
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast);
+}
+
+.cd-advanced[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.cd-advanced > summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+.cd-advanced__body {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 14px;
+}
+
+.cd-labels {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cd-labels > legend {
+  margin: 0 0 6px;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.55;
+}
+
+.cd-label-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+@media (max-width: 720px) {
+  .cd-label-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+/* Deploy an agent: the Easy gallery. */
+.cd-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.cd-agent {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-card);
+  border-radius: 12px;
+}
+
+.cd-agent > h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.cd-agent > p {
+  margin: 0;
+}
+
+.cd-agent .ui-button-wrap,
+.cd-agent .ui-button {
+  width: 100%;
+}
+
+.cd-agent .ui-button {
+  justify-content: flex-start;
+  text-align: left;
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .cd-agent .ui-button {
+    min-height: 44px;
+  }
+
+  /* The Advanced disclosure's 40 px row is the full touch target here. */
+  .cd-advanced > summary {
+    min-height: var(--control-height);
+  }
+}
+
+.cd-agent .ui-button-wrap {
+  display: grid;
+  gap: 8px;
+}
+
+.cd-agent .cl-kv {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.cd-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+/* The global `.notice` top margin (overview.css) would stack on the body's own gap. */
+.cd-dialog .ui-notice {
+  margin-top: 0;
+}

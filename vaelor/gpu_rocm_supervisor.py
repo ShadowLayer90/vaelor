@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import socket
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, FrozenSet, Optional
 
 from .executor_network import available_model_port
 from .flm_service import RESERVED_CONTROL_PLANE_PORTS
@@ -72,21 +72,23 @@ class GpuRocmSupervisor:
         self._launcher = launcher
         self._health = health or _endpoint_healthy
         self._allocate_port = allocate_port or (
-            lambda: available_model_port(socket.socket)
+            lambda exclude=frozenset(): available_model_port(socket.socket, exclude)
         )
         self._deadline = float(deadline_seconds)
         self._poll = float(poll_seconds)
         self._sleep = sleep
         self._monotonic = monotonic
 
-    def allocate_port(self, requested: int = 0) -> int:
+    def allocate_port(self, requested: int = 0, exclude: FrozenSet[int] = frozenset()) -> int:
         """A validated loopback port: the requested one, or a free one chosen.
 
         The same guard the llama.cpp and NPU deploys apply, so a GPU deploy
         cannot be pointed at a privileged port or at the reserved control-plane
-        ports.
+        ports. ``exclude`` - ports installed apps publish (W6-D2 reverse) - is
+        never chosen.
         """
-        port = int(requested or 0) or int(self._allocate_port())
+        port = int(requested or 0) or int(
+            self._allocate_port(exclude=exclude) if exclude else self._allocate_port())
         if not 1024 <= port <= 65535 or port in RESERVED_CONTROL_PLANE_PORTS:
             raise ValueError(
                 "Choose an available loopback port from 1024 to 65535 for the "
@@ -149,6 +151,18 @@ class GpuRocmSupervisor:
     def stop(self) -> Dict[str, Any]:
         outcome = self._launcher.stop()
         return outcome if isinstance(outcome, dict) else {"stopped": True}
+
+    def status(self) -> Dict[str, Any]:
+        """Whether the launched server is still running, and on what model/port.
+
+        Distinct from :meth:`healthy`, which asks the ENDPOINT. A server can be
+        running while not yet answering (a 27B is minutes into its load) and can
+        have exited while a loopback port still refuses in the same way it did
+        before it started - and the GPU cluster mode switch needs the first
+        question, not the second: "has the process that holds the GPU gone".
+        """
+        outcome = self._launcher.status()
+        return outcome if isinstance(outcome, dict) else {"running": False}
 
 
 class GpuBridgeLauncher:

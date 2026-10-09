@@ -23,33 +23,38 @@ import socket
 import subprocess
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from .app_port_claims import app_port_holders_keeping, pick_model_port
 from .copilot_setup import local_runtime_settings
 from .credential_broker import CredentialBrokerClient, CredentialError
 from .hardware_bridge import HardwareBridgeError
 from .executor_network import available_model_port, parse_memory_usage
+from .gpu_serving_target import (
+    AI_CHAT_HELD_BY_CLUSTER, GPU_HELD_BY_CLUSTER, loopback_port,
+)
 from .inference_tuning import (
     DEFAULT_MODEL_FLAGS,
     RECOMMENDED_RUNTIME_MODE,
 )
 from .model_sizing import loaded_model_capacity
 from .job_control import JobCancelled
-from .managed_local_credentials import activate_managed_chat, activate_managed_local
-from .model_catalog import catalog_engine, catalog_surface
+from .managed_local_credentials import (
+    AI_CHAT_MODEL_PREFIX, ASSISTANT_NPU_PREFIX, MANAGED_LOCAL_CREDENTIAL_LABEL, PREFIX,
+    activate_managed_chat, activate_managed_local,
+)
+from .model_catalog import catalog_engine, catalog_surface, deploy_surface
 from .model_service_compose import accelerator_plan, build_model_compose
 from .model_start_verification import accelerator_baseline, verify_started_model
 
 
-#: The broker label a managed-local credential carries, and the fallback detail
-#: when its connection test fails without a message. One home each, because both
-#: deploy paths write them - the llama.cpp path and the flm-real NPU path - and a
-#: sentence written in two places in one module is the shape #98 records
-#: (LESSONS 6 / VD-090). `{}` is filled with the model's short name.
-MANAGED_LOCAL_CREDENTIAL_LABEL = "Managed local model · {}"
+#: The fallback detail when a managed-local credential's connection test fails
+#: without a message. One home, because both deploy paths write it - the
+#: llama.cpp path and the flm-real NPU path - and a sentence written in two
+#: places in one module is the shape #98 records (LESSONS 6 / VD-090). The
+#: credential label itself lives with the credential policy that reads it back.
 CONNECTION_TEST_FAILED_DETAIL = "connection test failed"
 
 
@@ -72,27 +77,6 @@ GPU_CHAT_COMPOSE_PROJECT = "model-chat"
 #: becoming healthy - is NOT retried; the supervisor already stopped it.
 NPU_AUTOSTART_ATTEMPTS = 6
 NPU_AUTOSTART_RETRY_SECONDS = 5.0
-
-
-def _loopback_port(base_url: str) -> Optional[int]:
-    """The loopback port carried in a managed-local credential's ``base_url``.
-
-    The credential is ``http://127.0.0.1:PORT/v1`` (or the IPv6
-    ``http://[::1]:PORT/...``). Reusing that exact port on relaunch is the whole
-    point of the VD-001 reconcile: flm-real comes back on the SAME port the
-    stored credential already names, so the credential stays valid with no
-    re-registration and no churn. Returns None for anything outside the
-    unprivileged range (1024-65535) rather than handing the supervisor a port it
-    would reject anyway - and None is the non-fatal "nothing to supervise" answer
-    everywhere it is read.
-    """
-    try:
-        port = urllib.parse.urlparse(str(base_url or "")).port
-    except ValueError:
-        return None
-    if port is None or not 1024 <= port <= 65535:
-        return None
-    return port
 
 
 def _artifact_identity(model: Path) -> Dict[str, str]:
@@ -379,7 +363,12 @@ class ExecutorModelDeployMixin:
             if not managed_local_connection(lease):
                 # The Assistant is on a hosted provider; nothing local to run.
                 return None
-            port = _loopback_port(str(lease.get("base_url") or ""))
+            # Reusing the exact port the stored credential names is the whole
+            # point of the VD-001 reconcile: flm-real comes back on the SAME
+            # port, so the credential stays valid with no re-registration. The
+            # gate module's reading (loopback host, unprivileged range) answers
+            # None for anything else, the non-fatal "nothing to supervise".
+            port = loopback_port(str(lease.get("base_url") or ""))
             if port is None:
                 return None
             plan = decision["plan"]
@@ -468,16 +457,17 @@ class ExecutorModelDeployMixin:
         never comes up - the exact outcome if the launch environment, the
         ``serve`` flag names or the health-endpoint assumption is wrong on the
         hardware - llama.cpp is left running and the deploy raises an honest
-        error. The Assistant is never left with no server. flm-real takes a
-        freshly allocated loopback port rather than the payload's, which on the
-        refresh path is the *llama.cpp* container's port: the two must coexist
-        until flm-real is proven healthy.
+        error. The Assistant is never left with no server. flm-real never takes
+        the payload's port (on the refresh path the *llama.cpp* container's, which
+        must coexist until flm-real is healthy): `redeploy_port` keeps its own (F6).
         """
+        from .flm_supervisor import npu_port_claims
         plan = decision["plan"]
         tag = str(plan["flm_tag"])
         ctx_len = int(plan["context_tokens"])
         supervisor = self._flm_supervisor()
-        port = supervisor.allocate_port(0)
+        own, reserved = npu_port_claims(CredentialBrokerClient())  # + apps' ports (W6-D2 reverse, LESSONS 22)
+        port = supervisor.redeploy_port(own, reserved | app_port_holders_keeping(self.workloads_root, own, reserved))
         project = self._project_directory("model-assistant")
         self._checkpoint(45, "Starting the neural processor model server", "starting")
         # If flm-real never answers, `serve` stops it and raises here - before
@@ -487,11 +477,10 @@ class ExecutorModelDeployMixin:
             announce=lambda detail: self._checkpoint(75, detail, "starting"),
         )
         endpoint = served["endpoint"]
-        candidate_id = "cred_managed_local_{}".format(
-            hashlib.sha256(
-                "npu:{}:{}:{}".format(tag, port, time.time_ns()).encode()
-            ).hexdigest()[:12]
-        )
+        # VD-202: the id marks the Assistant's NPU model (`model_credential_roles`).
+        candidate_id = ASSISTANT_NPU_PREFIX + hashlib.sha256(
+            "npu:{}:{}:{}".format(tag, port, time.time_ns()).encode()
+        ).hexdigest()[:12]
         broker = CredentialBrokerClient()
         # Register the profile already pinned to the served tag, NOT model="".
         # The connection test below fires before `select_model`, and a reader
@@ -661,36 +650,41 @@ class ExecutorModelDeployMixin:
         # the exact misroute a live install hit (the 27B came back as
         # `backend: flm-real, device: npu`).
         #
-        # Guarded on a NON-EMPTY path, because the model file is resolved here
-        # only to read its catalog engine. A pathless deploy - the NPU assistant
-        # reconcile arrives as `{"surface": "assistant"}` with no model file -
-        # must NOT be forced through `_model_file` (it would raise before the NPU
-        # decision is even reached). A model outside the managed layout has no
-        # catalog identity (an empty dict) and is never splatted into
-        # `catalog_engine` (whose repo/file are required), so it too falls
-        # straight through to the NPU/llama.cpp routing unchanged.
+        # Guarded on a NON-EMPTY path: a pathless deploy (the NPU reconcile's
+        # `{"surface": "assistant"}`) must not reach `_model_file`, which raises,
+        # and a model outside the managed layout has no catalog identity, so it
+        # falls straight through to the NPU/llama.cpp routing unchanged.
         path = str(payload.get("path", ""))
         model = self._model_file(path) if path else None
-        identity: Dict[str, str] = {}
+        identity = _artifact_identity(model) if model is not None else {}
+        # **Which surface this deploy serves - one rule, `deploy_surface`
+        # (#247m, W5 D13).** The request wins over the catalog, and a model file
+        # on a machine whose Assistant is the NPU's is AI Chat's: the NPU serves
+        # an FLM tag, so routing a GGUF there re-served the Assistant instead.
+        # Decided before the engine routes, so AI Chat's Mode B refusal stands
+        # in one place for the FP4 fork, the generic fork and the compose path.
+        from .deployment_refresh import REFRESH_REASON
+
+        surface = deploy_surface(
+            str(payload.get("surface") or ""),
+            catalog_surface(**identity) if identity else "",
+            names_file=bool(path),
+            npu_holds_assistant=lambda: self._npu_serving_decision(
+                {"surface": "assistant"}, self._model_hardware_budget())["serve_on_npu"],
+            refresh=payload.get("reason") == REFRESH_REASON,
+        )
+        payload = {**payload, "surface": surface}
+        serve_as_chat = surface == "ai-chat"
+        if serve_as_chat:
+            self._refuse_deploy_under_cluster(AI_CHAT_HELD_BY_CLUSTER)
         # FIX 1 (HIGH-1 + MEDIUM-3): on a fork serve failure `_gpu_fork_or_fallback`
         # returns (None, reason) and we fall through to compose with the SAME model.
         gpu_fork_fallback_reason = ""
-        if model is not None:
-            identity = _artifact_identity(model)
-            if identity and catalog_engine(**identity) == "rocmfpx":
-                fork, gpu_fork_fallback_reason = self._gpu_fork_or_fallback(payload, model)
-                if fork is not None:
-                    return fork
-        # **Which serving surface this deploy is for - the Assistant, or AI Chat
-        # (#247m).** A catalog GGUF marked ``surface="ai-chat"`` is served on the
-        # GPU through the SAME compose path, differing only in claiming ``ai-chat``
-        # (not ``deployment-agent``) and in being exempt from the NPU gate. The
-        # surface is DATA on the entry; a pair the catalog does not stock falls back
-        # to the payload's own surface (default ``assistant``) and replaces it.
-        entry_surface = catalog_surface(**identity) if identity else ""
-        surface = entry_surface or str(payload.get("surface") or "assistant")
-        payload = {**payload, "surface": surface}
-        serve_as_chat = surface == "ai-chat"
+        if identity and catalog_engine(**identity) == "rocmfpx":
+            self._require_gpu_rocm_serving()  # ACC-061: the gate every GPU model passes
+            fork, gpu_fork_fallback_reason = self._gpu_fork_or_fallback(payload, model)
+            if fork is not None:
+                return fork
         # Route the Assistant to the NPU when this machine serves it (VD-001):
         # a neural accelerator is present, flm-real and the model installed, the
         # model fit to run. Every Raspberry Pi falls through to the llama.cpp path
@@ -709,14 +703,13 @@ class ExecutorModelDeployMixin:
             )
             if fork is not None:
                 return fork
-        # The llama.cpp/compose path below needs the model file. It is resolved
-        # above only when the payload named a path; a pathless deploy that
-        # reaches here (neither GPU nor NPU) resolves it now, which raises the
-        # same "no model file" error the original single call did.
+        # The compose path needs the model file; a pathless deploy that reaches
+        # here resolves it now, raising the original "no model file" error.
         if model is None:
             model = self._model_file(path)
-        requested_port = int(payload.get("port") or 0)
-        port = requested_port or available_model_port(socket.socket)
+        port = pick_model_port(  # never a stopped app's port (W6-D2 reverse, LESSONS 6)
+            int(payload.get("port") or 0), self.workloads_root,
+            lambda exclude=frozenset(): available_model_port(socket.socket, exclude))
         if not 1024 <= port <= 65535 or port in {34001, 34002}:
             raise ValueError("Choose an available port from 1024 to 65535.")
         # An AI-Chat GPU deploy gets its own compose project (#247m), so it
@@ -788,13 +781,21 @@ class ExecutorModelDeployMixin:
             # signature as the three kills #117 and VD-070 record.
             **_artifact_identity(model),
         )
-        project.mkdir(parents=True, exist_ok=True)
-        project.chmod(0o2770)
         plan = accelerator_plan(
             hardware,
             model_bytes=model_bytes,
             kv_cache_bytes=int(runtime.get("kv_cache_bytes") or 0),
         )
+        # A plan that settled on the GPU is llama.cpp beside vLLM while the mode
+        # file reads Mode B - the Assistant's deploy passes the surface gate
+        # above by design and reaches here (VD-127, the placement residual).
+        # Refused, not re-planned onto the CPU: nothing is written yet, and a
+        # plan the operator did not ask for is a false record. Read the way
+        # `build_model_compose` reads it (an absent backend is not the CPU).
+        if plan.get("backend") != "cpu":
+            self._refuse_deploy_under_cluster(GPU_HELD_BY_CLUSTER)
+        project.mkdir(parents=True, exist_ok=True)
+        project.chmod(0o2770)
         content = build_model_compose(
             model_dir=str(model.parent),
             model_name=model.name,
@@ -806,11 +807,9 @@ class ExecutorModelDeployMixin:
         previous_content = (
             compose_file.read_text(encoding="utf-8") if compose_file.exists() else None
         )
-        candidate_id = "cred_managed_local_{}".format(
-            hashlib.sha256(
-                "{}:{}:{}".format(model, port, time.time_ns()).encode()
-            ).hexdigest()[:12]
-        )
+        # VD-202: an AI Chat model is marked as one, so the Assistant refuses it.
+        candidate_id = (AI_CHAT_MODEL_PREFIX if serve_as_chat else PREFIX) + hashlib.sha256(
+            "{}:{}:{}".format(model, port, time.time_ns()).encode()).hexdigest()[:12]
         temporary = project / ".compose.yaml.tmp"
         temporary.write_text(content, encoding="utf-8")
         temporary.chmod(0o660)

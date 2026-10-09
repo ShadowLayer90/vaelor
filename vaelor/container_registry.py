@@ -213,6 +213,7 @@ def homepage_image_candidates(homepage: Any) -> List[ImageReference]:
 
 def proven_image_from_manifest_list(
     manifests: Any, target_architecture: str, repository: str, source_url: str,
+    service: str = "app",
 ) -> dict | None:
     """Select the linux/<target-architecture> entry of a manifest LIST.
 
@@ -220,7 +221,9 @@ def proven_image_from_manifest_list(
     ``service``, ``repository`` (``ghcr.io/<owner>/<image>``), ``digest``, the
     matched ``architectures``, and the ``source_url`` - or ``None`` when no
     entry pins that architecture. Only a real ``sha256:`` digest carried by the
-    registry is accepted; nothing is fabricated.
+    registry is accepted; nothing is fabricated. ``service`` labels the proven
+    image with its compose service so a multi-service proof (B2) does not
+    collide every image on the single ``"app"`` service.
     """
     if not isinstance(manifests, list):
         return None
@@ -236,7 +239,7 @@ def proven_image_from_manifest_list(
         digest = str(entry.get("digest", ""))
         if normalized == target_architecture and _DIGEST.fullmatch(digest):
             return {
-                "service": "app",
+                "service": service,
                 "repository": repository,
                 "digest": digest,
                 "architectures": [normalized],

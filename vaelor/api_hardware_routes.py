@@ -17,8 +17,10 @@ from .console_capabilities import (
 )
 from .copilot_setup import hardware_inventory
 from .health_evaluation import evaluate_health
+from .platforms.gpu_temperature import limits_from_driver
 from .metrics_export import PROMETHEUS_CONTENT_TYPE, metrics_from_callbacks
 from .api_common import ApiContext, payload as _payload
+from .audit_targets import describe_targets
 from .api_machine import machine_payload, platform_driver
 from .platforms import PRODUCTS, observed_capabilities, plausible_products
 from .device_identity import (
@@ -172,9 +174,10 @@ def register_hardware_routes(context: ApiContext) -> None:
         # 70/80 °C is a Raspberry Pi constant. A workstation processor boosts
         # into the mid-nineties by design, so reusing those numbers pinned it
         # in "Attention" permanently while idle.
-        policy = platform_driver(callbacks).thermal_policy()
+        driver = platform_driver(callbacks)
+        policy = driver.thermal_policy()
         return _payload({
-            **evaluate_health(data, policy),
+            **evaluate_health(data, policy, limits_from_driver(driver)),
             "sampled_at": int(time.time() * 1000),
         })
 
@@ -254,7 +257,12 @@ def register_hardware_routes(context: ApiContext) -> None:
             parsed_limit = int(limit)
         except ValueError:
             parsed_limit = 50
-        return _payload(security.list_audit(parsed_limit))
+        # W6-D1: each row's target in words, resolved where its type is known.
+        # W7-1: named in the viewer's own scope, never the row author's.
+        return _payload(describe_targets(
+            security.list_audit(parsed_limit), callbacks,
+            {"username": g.auth_session.username, "role": g.auth_session.role},
+        ))
 
     @blueprint.get("/workloads/capabilities")
     @require_auth("viewer")
@@ -312,9 +320,21 @@ def register_hardware_routes(context: ApiContext) -> None:
         except (AttributeError, TypeError, ValueError) as error:
             return _payload(error={"code": "service_logs_unavailable", "message": str(error)}, status=400)
 
+    @blueprint.get("/system/network/status")
+    @require_auth("operator")
+    def system_network_status():
+        # W7 retest: Home probed on every page load and wrote a "Tested
+        # internet connectivity" row each time. The page's own probe is this
+        # read-only GET, unaudited like every other status read. W8-4: it was
+        # a `{"passive": true}` flag on the POST, so the client chose whether
+        # its own test was recorded; the exemption is now the route, which
+        # the server owns (LESSONS 8, 18).
+        return _payload(callbacks.get("system_inventory").connectivity())
+
     @blueprint.post("/system/network/test")
     @require_auth("operator", csrf=True)
     def system_network_test():
+        # The owner's Test press: always audited, whatever the body says.
         inventory = callbacks.get("system_inventory")
         result = inventory.connectivity()
         # Same defect class as the assistant turn recorded as SUCCESS: the

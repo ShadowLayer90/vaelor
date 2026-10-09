@@ -9,6 +9,8 @@ export interface ActivityModel {
 
 export interface ActivityJob extends JobHistoryItem {
   attempt?: number;
+  /** The server's one attention verdict for this row (VD-139). */
+  needs_attention?: boolean;
   message?: string;
   progress?: number;
   retry_ancestry?: string[];
@@ -92,7 +94,12 @@ export function summarizeWorkloadActivity<T extends ActivityJob>(jobs: T[], mode
   }
 
   const visible = jobs
-    .filter((job) => !job.resolved_by_retry && !projectedAncestors.has(job.id))
+    // An attempt a later one replaced is folded into it - unless the server's
+    // one attention verdict (VD-139, `needs_attention`) says it still needs
+    // the owner: a failure whose retry failed too, or is still running, has
+    // not been resolved, and hiding it would hide what needs attention.
+    .filter((job) => job.needs_attention === true
+      || (!job.resolved_by_retry && !projectedAncestors.has(job.id)))
     .filter((job) => {
       if (!jobIsSuccessful(job)) return true;
       if (job.type === "model.download" && modelForJob(job, models)) return false;

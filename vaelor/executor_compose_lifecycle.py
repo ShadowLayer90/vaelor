@@ -28,6 +28,7 @@ from .application_executor import (
     rollback_application_compose,
     wait_for_application_health,
 )
+from .app_port_claims import model_port_holders, refuse_claimed_compose
 from .checkpoints import CheckpointInventory
 from .deployment_refresh import MANAGED_PROJECT
 
@@ -271,8 +272,13 @@ class ExecutorComposeLifecycleMixin:
             rollback_completed = not candidate_committed
             if candidate_committed:
                 try:
+                    # Not cancellable (W4d-D25): this IS the cleanup a cancel
+                    # needs, and the cancel flag is still set.
                     rollback_application_compose(
-                        self._compose, project, compose_file, previous_content
+                        lambda *arguments, **options: self._compose(
+                            *arguments, cancellable=False, **options
+                        ),
+                        project, compose_file, previous_content,
                     )
                     rollback_completed = True
                 except Exception as rollback_error:
@@ -463,6 +469,9 @@ class ExecutorComposeLifecycleMixin:
         if not compose_file.is_file():
             raise ValueError("Checkpoint does not contain compose.yaml.")
         self._compose(restored, "config", "--quiet", timeout=30)
+        # W7-2: a restore starts the app on its old ports; refuse one a stored
+        # model now comes back on, before anything is swapped in.
+        refuse_claimed_compose(compose_file, model_port_holders(self.credential_broker))
         return {
             "state": "compose_config_validated",
             "structural_valid": True,
@@ -471,6 +480,44 @@ class ExecutorComposeLifecycleMixin:
             "startup_proven": False,
             "message": "Staged Compose configuration passed preflight; startup is not proven.",
         }
+
+    def _swap_in_restored(self, project: Path, restored: Path) -> None:
+        """Replace ``project`` with the verified ``restored`` tree and start it.
+
+        On any failure - a cancel included - the previous tree goes back and is
+        started again. That start is not cancellable (W4d-D25 class, F7): the
+        cancel flag stays set until the job ends, so a cancellable rollback was
+        itself cancelled and left the app stopped.
+        """
+        rollback = project.with_name(".{}-restore-rollback".format(project.name))
+        if rollback.exists():
+            shutil.rmtree(rollback)
+        try:
+            self._compose(project, "down", "--remove-orphans", timeout=180)
+        except Exception:
+            # Review R2-6: a cancel (or failure) while stopping leaves the app
+            # half down with its tree untouched; start it again, uncancellably.
+            self._compose(
+                project, "up", "-d", "--remove-orphans", timeout=180,
+                cancellable=False,
+            )
+            raise
+        project.replace(rollback)
+        try:
+            shutil.copytree(restored, project)
+            self._compose(project, "config", "--quiet", timeout=30)
+            self._checkpoint(75, "Starting restored application", "starting")
+            self._compose(project, "up", "-d", "--remove-orphans", timeout=180)
+        except Exception:
+            if project.exists():
+                shutil.rmtree(project)
+            rollback.replace(project)
+            self._compose(
+                project, "up", "-d", "--remove-orphans", timeout=180,
+                cancellable=False,
+            )
+            raise
+        shutil.rmtree(rollback)
 
     def _restore_checkpoint(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         checkpoint = str(payload.get("checkpoint", "")).strip()
@@ -543,23 +590,7 @@ class ExecutorComposeLifecycleMixin:
                 "_actor": payload.get("_actor"),
                 "_job_id": payload.get("_job_id"),
             })
-            rollback = project.with_name(".{}-restore-rollback".format(project.name))
-            if rollback.exists():
-                shutil.rmtree(rollback)
-            self._compose(project, "down", "--remove-orphans", timeout=180)
-            project.replace(rollback)
-            try:
-                shutil.copytree(restored, project)
-                self._compose(project, "config", "--quiet", timeout=30)
-                self._checkpoint(75, "Starting restored application", "starting")
-                self._compose(project, "up", "-d", "--remove-orphans", timeout=180)
-            except Exception:
-                if project.exists():
-                    shutil.rmtree(project)
-                rollback.replace(project)
-                self._compose(project, "up", "-d", "--remove-orphans", timeout=180)
-                raise
-            shutil.rmtree(rollback)
+            self._swap_in_restored(project, restored)
         return {
             "project": project_name,
             "restored_from": checkpoint,

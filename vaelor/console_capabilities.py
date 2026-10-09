@@ -35,8 +35,8 @@ to callers:
 Z2 returns the opposite verdict — RST, i.e. "no DASH hardware" — because Linux
 routes the host's own address over ``lo``::
 
-    $ ip route get 192.168.4.58
-    local 192.168.4.58 dev lo src 192.168.4.58
+    $ ip route get 192.0.2.58
+    local 192.0.2.58 dev lo src 192.0.2.58
 
 The packet never reaches the network controller, so a self-probe does not
 merely fail to detect the management engine: it produces a confident ``absent``

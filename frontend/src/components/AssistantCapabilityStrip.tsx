@@ -26,17 +26,20 @@ export interface AssistantCapabilityStripProps {
   /**
    * Appliance-wide memory. Omit for readers who may not open it: every memory
    * endpoint is administrator-only, so an entry point shown to an operator is
-   * a link straight to an error.
+   * a link straight to an error. A count that was not read is `null` and the
+   * chip says "Not read" (VD-200 decision 9), never a zero.
    */
-  memory?: { count: number; href: string };
+  memory?: { count: number | null; href: string };
   /**
    * Reviewed skills, and the disclosure that reveals them.
    *
    * Named "playbooks" here and skills everywhere else - in the panel this chip
    * opens, in its controls, and in `/assistant/skills` - so the first word the
-   * reader met was the one the product never used again.
+   * reader met was the one the product never used again. A count that was not
+   * read is `null`: the chip says "Skills · Not read" and opens nothing, since
+   * the list behind it would be an empty one that was never read (VD-200).
    */
-  skills?: { count: number; expanded: boolean; onToggle: () => void };
+  skills?: { count: number | null; expanded: boolean; onToggle: () => void };
   /** The model answering here, named exactly as the engine reports it. */
   model: string;
   label?: string;
@@ -57,28 +60,34 @@ export function AssistantCapabilityStrip({
      * line is a flex row, and a whitespace-only text node is not a flex item,
      * so nothing about the layout changes.
      */
-    <div aria-label={label} className="capability-strip" role="group">
-      <span className="capability-note">
-        <Icon name="cpu" size={15} />
+    <div aria-label={label} className="as-strip" role="group">
+      <span className="capability-note as-chip as-chip--static">
+        <Icon name="cpu" size={16} />
         <strong>{scope.label}</strong>{" "}
         <small>{scope.detail} · {model}</small>
       </span>
       {memory && (
-        <a className="capability-chip capability-chip--link" href={memory.href}>
-          <Icon name="database" size={15} />
-          <strong>Remembers {memory.count}</strong>{" "}
+        <a className="capability-chip capability-chip--link as-chip" href={memory.href}>
+          <Icon name="database" size={16} />
+          <strong>{memory.count === null ? "Memory · Not read" : `Remembers ${memory.count}`}</strong>{" "}
           <small>Shared with AI Chat</small>
         </a>
       )}
-      {skills && (
+      {skills && skills.count === null && (
+        <span className="capability-note as-chip as-chip--static">
+          <Icon name="shield" size={16} />
+          <strong>Skills · Not read</strong>
+        </span>
+      )}
+      {skills && skills.count !== null && (
         <Button
           aria-expanded={skills.expanded}
-          className="capability-chip capability-chip--action"
+          className="capability-chip capability-chip--action as-chip"
           onClick={skills.onToggle}
           type="button"
           variant="quiet"
         >
-          <Icon name="shield" size={15} />
+          <Icon name="shield" size={16} />
           <strong>{skills.count} skill{skills.count === 1 ? "" : "s"}</strong>{" "}
           <small>{skills.expanded ? "Hide" : "Review"}</small>
         </Button>

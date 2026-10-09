@@ -1,0 +1,865 @@
+/*
+ * Chart primitives (VD-147): the time-series chart, its legend, tooltip and
+ * table, the stat tile and the meter. Tokens only. The series colours are the
+ * --chart-series-* tokens, validated on --bg-surface, which is why the chart
+ * and the tile paint that surface themselves.
+ *
+ * Colour is never the only key. Each series mark has its own line style:
+ * slot 1 solid, slot 2 dashed, slot 3 dotted, the aggregate a thicker neutral
+ * line, a node without a colour slot a neutral dash-dot. A partial stretch
+ * keeps its series' own line style and is drawn lighter and thinner.
+ */
+
+/* ---- The chart figure ---------------------------------------------------- */
+
+.chart {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.chart__header {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+/* A title wraps rather than losing its end: "(graphics engine)" names the sensor. */
+.chart__title {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-semibold);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* The chart's summary sentence, on screen: it wraps, it is never clipped. */
+.chart__caption {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chart__unit {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+/* The panel's freshness, at the far end of the title row. */
+.chart__badge {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+/* The caller's own controls sit in the title row, after the title and
+   before the badge, where a wide panel has room for them, so the control row
+   keeps its width for the names. A narrow panel moves them under the title. */
+.chart__toolbar {
+  min-width: 0;
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-inline-start: auto;
+}
+
+.chart__toolbar + .chart__badge {
+  margin-inline-start: 0;
+}
+
+/* The backend's sentences about the panel, and each absent series with its
+   state and reason: shown whole, wrapping, never cut. */
+.chart__notes {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.4;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.chart__note-absent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+}
+
+/* The plot and the table that replaces it share one block size, so "Show as
+   table" does not move the legend or the panels around it. 124px is what the
+   248px panel of the dashboard leaves at compact density once the header, the
+   summary line, the control row, the gaps and the padding are taken out; the
+   chart measures its plot, so a taller panel simply gets a taller plot. */
+/* Every plot is at least 124 px tall, so its gridlines sit 20 px or more apart
+   (owner decision "readable charts"). */
+.chart-plot,
+.chart-table-wrap {
+  position: relative;
+  min-width: 0;
+  block-size: 124px;
+  min-block-size: 124px;
+  flex: 1 1 auto;
+}
+
+.chart-plot:focus-visible,
+.chart-table-wrap:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.chart-plot__svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: visible;
+}
+
+.chart-grid {
+  stroke: var(--chart-grid);
+  stroke-width: 1;
+}
+
+.chart-axis-text {
+  fill: var(--chart-axis-text);
+  font-size: var(--font-size-body-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A chart with no sample in its range: no axis values are drawn, and it says so. */
+.chart-plot__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  pointer-events: none;
+}
+
+/* A blank chart says why: the backend's reasons, whole, centred in the plot. */
+.chart-plot__empty ul,
+.chart-plot__empty p {
+  max-inline-size: 60ch;
+  margin: 0;
+  padding: 0 var(--space-4);
+  list-style: none;
+  text-align: center;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Series marks -------------------------------------------------------- */
+
+.chart-line {
+  fill: none;
+  stroke: var(--chart-series-aggregate);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: butt;
+}
+
+.chart-line--slot-1 { stroke: var(--chart-series-1); }
+.chart-line--slot-2 { stroke: var(--chart-series-2); stroke-dasharray: 6 3; }
+.chart-line--slot-3 { stroke: var(--chart-series-3); stroke-dasharray: 2 3; }
+.chart-line--aggregate { stroke: var(--chart-series-aggregate); stroke-width: 3; }
+.chart-line--extra { stroke: var(--chart-axis-text); stroke-dasharray: 8 3 2 3; }
+.chart-line--layer-1 { stroke: var(--chart-series-aggregate); }
+.chart-line--layer-2 { stroke: var(--chart-series-aggregate); stroke-dasharray: 6 3; }
+.chart-line--layer-3 { stroke: var(--chart-series-aggregate); stroke-dasharray: 2 3; }
+
+/* A partial stretch keeps its series' own dash (the dash is the series' key)
+   and is drawn lighter and thinner. 0.75 keeps every series mark at 3:1 or
+   better on --bg-surface; the thinner stroke carries the rest of the
+   difference. The aggregate stays thicker than a node when both are partial. */
+.chart-line--partial {
+  opacity: 0.75;
+  stroke-width: 1.25;
+}
+
+.chart-line--aggregate.chart-line--partial {
+  stroke-width: 2;
+}
+
+.chart-dot,
+.chart-focus-dot {
+  fill: var(--chart-series-aggregate);
+  stroke: var(--bg-surface);
+  stroke-width: 2;
+}
+
+.chart-dot--slot-1 { fill: var(--chart-series-1); }
+.chart-dot--slot-2 { fill: var(--chart-series-2); }
+.chart-dot--slot-3 { fill: var(--chart-series-3); }
+.chart-dot--extra { fill: var(--chart-axis-text); }
+.chart-dot--partial { opacity: 0.75; }
+
+/* A machine's second line (memory beside CPU): same colour and dash, hollow rings. */
+.chart-ring {
+  fill: var(--bg-surface);
+  stroke: var(--chart-series-aggregate);
+  stroke-width: 1.5;
+}
+
+.chart-ring--slot-1 { stroke: var(--chart-series-1); }
+.chart-ring--slot-2 { stroke: var(--chart-series-2); }
+.chart-ring--slot-3 { stroke: var(--chart-series-3); }
+.chart-ring--extra { stroke: var(--chart-axis-text); }
+
+/* Stacked layers are one neutral ink at three strengths, not three hues: a
+   layer is a part of one machine's total, not a machine. */
+.chart-area {
+  fill: var(--chart-series-aggregate);
+  stroke: none;
+}
+
+.chart-area--layer-1 { fill-opacity: 0.3; }
+.chart-area--layer-2 { fill-opacity: 0.13; }
+.chart-area--layer-3 { fill-opacity: 0.06; }
+.chart-area--partial { opacity: 0.5; }
+
+.chart-threshold__line {
+  stroke: var(--chart-threshold);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.chart-event__line {
+  stroke: var(--chart-event);
+  stroke-width: 1;
+  stroke-dasharray: 1 3;
+}
+
+.chart-event__marker {
+  fill: var(--chart-event);
+}
+
+.chart-crosshair__line {
+  stroke: var(--chart-crosshair);
+  stroke-width: 1;
+}
+
+/* ---- Tooltip ------------------------------------------------------------- */
+
+/* Inside the plot, always: no taller than the plot and no wider than the half
+   of it the tooltip opens into (it flips sides at the middle). One that still
+   does not fit drops its band notes (ChartTooltip measures itself). */
+.chart-tooltip {
+  position: absolute;
+  top: 0;
+  z-index: var(--layer-raised);
+  min-width: 168px;
+  max-width: min(320px, calc(50% - 2 * var(--space-3)));
+  max-block-size: 100%;
+  overflow: hidden;
+  margin-inline: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-secondary);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.chart-tooltip__time,
+.chart-tooltip__event {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.chart-tooltip__rows {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-1) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chart-tooltip__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: var(--space-3);
+}
+
+.chart-tooltip__value {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.chart-tooltip__series {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chart-tooltip__name {
+  overflow-wrap: anywhere;
+}
+
+.chart-tooltip__note {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+}
+
+/* Two series to a line, each on one line: a long machine name is cut here
+   (the legend's title, the live region and the table say it whole). */
+.chart-tooltip[data-fit="columns"] .chart-tooltip__rows,
+.chart-tooltip[data-fit="keys"] .chart-tooltip__rows {
+  grid-template-columns: repeat(2, minmax(0, auto));
+  column-gap: var(--space-4);
+}
+
+.chart-tooltip[data-fit="columns"] .chart-tooltip__series {
+  overflow: hidden;
+}
+
+.chart-tooltip[data-fit="columns"] .chart-tooltip__name {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The last fit: every value beside its line key, all on as few lines as fit. */
+.chart-tooltip[data-fit="keys"] .chart-tooltip__rows {
+  grid-template-columns: repeat(4, auto);
+}
+
+.chart-tooltip[data-fit="keys"] .chart-tooltip__name {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A narrow chart's readout: a strip under the plot, one line per series, so
+   it never covers the drawing and always has the same height. A line too
+   long for the strip is cut; the live region and the table say it whole. */
+.chart-readout {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.4;
+}
+
+.chart-readout .chart-tooltip__rows {
+  gap: 0;
+  margin: 0;
+}
+
+.chart-readout .chart-tooltip__row,
+.chart-readout .chart-tooltip__event {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chart-readout .chart-tooltip__series,
+.chart-readout .chart-tooltip__note {
+  margin-inline-start: var(--space-2);
+}
+
+/* The series runs inline with its value, so a long name is what the ellipsis
+   cuts, never the whole name after the value. */
+.chart-readout .chart-tooltip__series {
+  display: inline;
+}
+
+.chart-readout .chart-key {
+  margin-inline-end: var(--space-2);
+  vertical-align: middle;
+}
+
+/* ---- Legend and controls: one row, one height ---------------------------- */
+
+/* One reserved row, one control tall: the toggles, the chooser inline and
+   "Show as table" at the end. Names are whole: when they do not all fit the
+   row takes another line, and a name is cut only when it is wider than the
+   whole row (its title and accessible name still say it whole). */
+.chart__controls {
+  min-width: 0;
+  min-block-size: var(--control-height);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+
+/* The legend wrapper adds no box (it is a plain div, no role): its list and
+   the node chooser are items of the control row itself, so when four machines
+   wrap the list, the chooser and "Show as table" share the next row instead of
+   taking a row each. */
+.chart-legend {
+  display: contents;
+}
+
+.chart-legend__list {
+  min-width: 0;
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chart-legend__item {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 0 auto;
+}
+
+
+
+.chart-key {
+  flex: none;
+  overflow: visible;
+}
+
+.ui-button.chart-legend__toggle,
+.ui-button.chart__table-toggle {
+  min-height: var(--control-height);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+/* A series name is whole; only a name wider than the whole row is cut, and
+   its title and accessible name say it whole. The toggle keeps the full
+   control height, with a narrower side padding. */
+.ui-button.chart-legend__toggle {
+  min-width: 0;
+  padding-inline: var(--space-2);
+  max-width: 100%;
+  text-align: start;
+}
+
+.chart-legend__toggle .chart-legend__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-button.chart-legend__toggle:hover:not(:disabled),
+.ui-button.chart__table-toggle:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+}
+
+/* Off is said by the struck-through name. The swatch keeps its mark, so a
+   toggle never recolours a series. */
+.chart-legend__toggle[aria-pressed="false"] .chart-legend__name {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+/* Off by default: the backend's off words say so, so there is no strike. */
+.chart-legend__toggle.chart-legend__toggle--off-label[aria-pressed="false"] .chart-legend__name {
+  text-decoration: none;
+}
+
+.ui-button.chart__table-toggle[aria-pressed="true"] {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.chart__controls > .ui-button-wrap {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+/* A series the backend sent with no values: its name, its state and the
+   reason. It sits in the legend row when it fits, so an absent series does
+   not make its panel taller; a sentence too long for the row wraps. */
+.chart-legend__absent {
+  min-width: 0;
+  min-height: var(--control-height);
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.4;
+}
+
+.chart-legend__absent .chart-legend__name {
+  color: var(--text-secondary);
+  font-weight: var(--weight-medium);
+}
+
+.chart-legend__state {
+  color: var(--text-secondary);
+}
+
+.chart-legend__reason {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The chooser's label sits beside its control, so the control row stays one
+   control tall instead of growing by a label line. */
+.chart-legend__chooser .ui-field > label {
+  white-space: nowrap;
+}
+
+.chart-legend__chooser .ui-field {
+  grid-template-columns: auto minmax(120px, 200px);
+  align-items: center;
+  column-gap: var(--space-2);
+}
+
+/* ---- Table --------------------------------------------------------------- */
+
+.chart-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+}
+
+.chart-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-table th,
+.chart-table td {
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: end;
+  white-space: nowrap;
+}
+
+.chart-table th:first-child {
+  text-align: start;
+}
+
+.chart-table thead th {
+  position: sticky;
+  top: 0;
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
+  font-weight: var(--weight-semibold);
+}
+
+.chart-table tbody th {
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+}
+
+/* ---- Stat tile ----------------------------------------------------------- */
+
+/*
+ * Every row is reserved, filled or not: title (two lines), value, then a detail
+ * block of caption (two lines), meter row and "beneath" (two lines, more when
+ * the machines need them: they are never cut). A tile with no value
+ * prints its reason in the detail block's space. So no state grows a tile
+ * and no state moves a title.
+ */
+.chart-tile {
+  /* The tile's text leading, one value for every reserved-line calc below
+     (UX-A11: the Performance tiles tighten it on a wide screen). */
+  --chart-tile-leading: 1.4;
+  min-width: 0;
+  min-block-size: 140px;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+/* Two lines, both reserved: "Avg GPU power (graphics engine)" keeps its
+   sensor on a narrow tile, and every tile's value row starts at the same
+   height whether its title took one line or two. */
+.chart-tile__title {
+  min-width: 0;
+  min-block-size: calc(2 * var(--chart-tile-leading) * var(--font-size-body-sm));
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--chart-tile-leading);
+  overflow-wrap: anywhere;
+}
+
+.chart-tile__value {
+  min-width: 0;
+  block-size: calc(var(--font-size-heading-md) * 1.1);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-heading-md);
+  font-weight: var(--weight-semibold);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.chart-tile__unit {
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--weight-medium);
+}
+
+/* The shared mark is 44px tall for touch; here it takes the value row's
+   height instead, so an unavailable tile is not taller than a measured one. */
+.chart-tile__value .ui-unavailable-value {
+  min-height: 0;
+  block-size: 100%;
+  align-self: stretch;
+  padding-block: 0;
+}
+
+.chart-tile__detail {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto 8px auto;
+  align-content: start;
+  gap: var(--space-2);
+}
+
+/* A caption or a reason is the backend's sentence: shown whole, wrapping. The
+   tiles of a row stretch together, so a longer one grows its row, never cuts. */
+.chart-tile__caption,
+.chart-tile__reason {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--chart-tile-leading);
+  overflow-wrap: anywhere;
+}
+
+.chart-tile__caption {
+  min-block-size: calc(2 * var(--chart-tile-leading) * var(--font-size-body-sm));
+}
+
+.chart-tile__state {
+  color: var(--text-secondary);
+  font-weight: var(--weight-semibold);
+}
+
+.chart-tile__meter {
+  min-width: 0;
+  block-size: 8px;
+}
+
+/* Two lines reserved. Three machines and "and N more" do not fit one line of
+   a tile at 1920px, and cutting every name to a letter to make them fit says
+   nothing; a second line does. On a narrow tile they take a third rather than
+   hiding "and N more": the tiles of a row stretch together. */
+.chart-tile__beneath {
+  min-width: 0;
+  min-block-size: calc(2 * var(--chart-tile-leading) * var(--font-size-body-sm));
+  display: flex;
+  flex-wrap: wrap;
+  align-content: start;
+  gap: 0 var(--space-3);
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--chart-tile-leading);
+  white-space: nowrap;
+}
+
+.chart-tile__node {
+  min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: var(--space-1);
+}
+
+/* A machine's name is never cut: a long one wraps inside its entry, and its
+   value stays whole beside it. */
+.chart-tile__node-name {
+  min-width: 0;
+  color: var(--text-muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Owner decision "shorten names instead": a tile listing as many machines as
+   it shows keeps each name to one line on a wide screen, so long names do not
+   push the dashboard's first chart row below the fold. Only there is a tile
+   name cut; the cut is visual, so its title and a screen reader still say it
+   whole. The legend and the table keep whole names. */
+@media (min-width: 1024px) {
+  .chart-tile[data-crowded="true"] .chart-tile__node-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* On a phone a long value ("Nothing to show") moves under the name rather
+   than squeezing the name to a letter a line. */
+@media (max-width: 720px) {
+  .chart-tile__node {
+    flex-wrap: wrap;
+  }
+  .chart-tile__node-name {
+    min-width: min(100%, 8ch);
+  }
+}
+
+.chart-tile__node-value,
+.chart-tile__more {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tile__more {
+  color: var(--text-muted);
+}
+
+/* ---- Meter --------------------------------------------------------------- */
+
+.chart-meter {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.chart-meter__bar {
+  block-size: 8px;
+}
+
+.chart-meter__svg {
+  display: block;
+  inline-size: 100%;
+  block-size: 8px;
+  overflow: visible;
+}
+
+.chart-meter__track { fill: var(--border-default); }
+.chart-meter__fill { fill: var(--chart-series-aggregate); }
+
+/* A mark is drawn twice: a surface-coloured ring, then the mark, so it stays
+   visible where the fill has passed it. */
+.chart-meter__mark-ring {
+  stroke: var(--bg-surface);
+  stroke-width: 4;
+}
+
+.chart-meter__mark {
+  stroke: var(--text-primary);
+  stroke-width: 2;
+}
+
+.chart-meter__caption {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Forced colours ------------------------------------------------------
+ * The palette is replaced by the system's, so every series becomes the same
+ * ink. The line styles are restated here so the block stands on its own: the
+ * dash pattern and the stroke width are then the ONLY key, and they must
+ * survive.
+ */
+@media (forced-colors: active) {
+  .chart,
+  .chart-tile,
+  .chart-tooltip {
+    background: Canvas;
+    border-color: CanvasText;
+  }
+
+  .chart-line,
+  .chart-meter__mark,
+  .chart-crosshair__line,
+  .chart-threshold__line,
+  .chart-event__line {
+    stroke: CanvasText;
+  }
+
+  .chart-line--slot-1 { stroke-dasharray: none; }
+  .chart-line--slot-2 { stroke-dasharray: 6 3; }
+  .chart-line--slot-3 { stroke-dasharray: 2 3; }
+  .chart-line--aggregate { stroke-dasharray: none; stroke-width: 4; }
+  .chart-line--extra { stroke-dasharray: 8 3 2 3; }
+
+  .chart-dot,
+  .chart-focus-dot {
+    fill: CanvasText;
+    stroke: Canvas;
+  }
+
+  .chart-area,
+  .chart-event__marker,
+  .chart-meter__fill {
+    fill: CanvasText;
+  }
+
+  .chart-grid {
+    stroke: GrayText;
+  }
+
+  .chart-meter__track {
+    fill: GrayText;
+  }
+
+  .chart-meter__mark-ring {
+    stroke: Canvas;
+  }
+
+  .chart-axis-text {
+    fill: CanvasText;
+  }
+
+  .chart-plot:focus-visible,
+  .chart-table-wrap:focus-visible {
+    outline-color: Highlight;
+  }
+}

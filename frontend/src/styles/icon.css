@@ -1,0 +1,8 @@
+/*
+ * Every <Icon> svg (components/Icon.tsx). An icon keeps the size it was given:
+ * as a flex item it must never shrink, or a long line of text beside it
+ * squeezes the glyph (the memory optimizer's shield drew at 4 px on a phone).
+ */
+.ui-icon {
+  flex: none;
+}

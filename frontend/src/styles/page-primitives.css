@@ -1,0 +1,500 @@
+/*
+ * The redesign's page building blocks (VD-200): the card, the page header,
+ * stat tiles, list rows, tables, meters, the empty and loading states and the
+ * segmented choice, drawn to the mockup boards in pixels. The React side is
+ * components/ui (Card, layout.tsx). A page composes these; it does not
+ * restyle them.
+ */
+
+/* Card: a near-black fill that darkens downward, a hairline border and one
+   lit top edge; a header row (title, description, actions) over the body. */
+.ui-card {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge);
+}
+
+.ui-card__header,
+.ui-card__body,
+.ui-card__footer {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ui-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.ui-card__titles {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.ui-card__header h2,
+.ui-card__header p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ui-card__header h2 {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.ui-card__header p {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ui-card__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--font-size-ui-xs);
+}
+
+.ui-card__body {
+  flex: 1 1 auto;
+  padding: 18px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ui-card__body--flush {
+  padding: 0;
+}
+
+.ui-card__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 16px 18px;
+  border-top: 1px solid var(--border-row);
+}
+
+.ui-card__footer > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Page header: a large light first line, a grey second, actions right. */
+.ui-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ui-page-header__title {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-display);
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.ui-page-header__title > span {
+  color: var(--text-faint-label);
+}
+
+.ui-page-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* A text link in a card's header ("Open Cluster") is a target at least 24 px
+   high (WCAG 2.5.8; polish audit cause 10 measured it at 16), and the full
+   touch target on a phone or a touch screen (--target-min says which). The
+   padding grows the target, not the row: the header already centres a 36 px
+   button. Zero specificity on purpose: a screen that sizes its own link
+   higher still wins (at (0,2,1) this rule cut Activity's 44 px
+   .cl-act__link to 24 - polish review R11). */
+:where(.ui-card__actions > a:not(.ui-button)) {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--target-min);
+  padding-block: var(--space-1);
+}
+
+/* A link drawn as a button (a door to another page, never an action). */
+a.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+/* A page's or a card's own buttons are the board's 36 px pills on a desktop;
+   a phone or a touch screen keeps the 44 px target. */
+.ui-page-header__actions .ui-button,
+.ui-card__actions .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.ui-page-header__actions .ui-button--primary,
+.ui-card__actions .ui-button--primary {
+  font-weight: 600;
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .ui-page-header__actions .ui-button,
+.ui-card__actions .ui-button {
+    min-height: var(--control-height);
+    height: var(--control-height);
+  }
+}
+
+/* Stat tile */
+.ui-stat-tile {
+  gap: 10px;
+  padding: 16px 18px;
+}
+
+a.ui-stat-tile--link {
+  color: inherit;
+  text-decoration: none;
+  transition: border-color var(--motion-fast) ease;
+}
+
+a.ui-stat-tile--link:hover {
+  border-color: var(--border-strong);
+}
+
+.ui-stat-tile__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ui-stat-tile__value {
+  font-size: var(--font-size-stat);
+  font-weight: 300;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-stat-tile__value > span {
+  margin-left: 4px;
+  color: var(--text-faint-label);
+  font-size: var(--font-size-ui-lg);
+  letter-spacing: 0;
+}
+
+/* Not read: said in words, grey, at the height of a reading - never a zero. */
+.ui-stat-tile__value--unread {
+  display: flex;
+  align-items: center;
+  min-height: 37px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-lg);
+  letter-spacing: 0;
+}
+
+.ui-stat-tile__foot {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* A short trend: one bar per bucket, the newest in the accent. */
+.ui-trend {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 34px;
+}
+
+.ui-trend > i {
+  flex: 1;
+  min-height: 2px;
+  background: var(--bg-spark);
+  border-radius: 2px;
+}
+
+.ui-trend > i.is-latest {
+  background: var(--accent);
+}
+
+/* A bucket with no reading: a hairline at the floor, not a bar. */
+.ui-trend > i.is-empty {
+  height: 2px;
+  background: var(--border-subtle);
+}
+
+/* List row */
+.ui-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.ui-row:first-child {
+  border-top: 0;
+}
+
+.ui-row--start {
+  align-items: flex-start;
+}
+
+.ui-row__icon {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: var(--text-secondary);
+  background: var(--bg-icon);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-md);
+}
+
+.ui-row__icon--accent {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-deep);
+}
+
+.ui-row__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ui-row__title {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.ui-row__detail {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ui-row__trailing {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  white-space: nowrap;
+}
+
+/* Table: a quiet sentence-case head, rows split by a hairline. It scrolls
+   inside its own box, never the page. */
+.ui-table-scroll {
+  position: relative;
+  overflow-x: auto;
+}
+
+.ui-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-ui-sm);
+}
+
+.ui-table th {
+  padding: 12px 18px;
+  color: var(--text-faint-label);
+  font-weight: 500;
+  text-align: left;
+}
+
+.ui-table td {
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-hairline);
+  vertical-align: middle;
+}
+
+.ui-mono {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ui-muted {
+  color: var(--text-muted);
+}
+
+.ui-small {
+  font-size: var(--font-size-ui-xs);
+}
+
+/* Meter: a 6 px used-share bar with its figure in words beneath. */
+.ui-meter__track {
+  height: 6px;
+  overflow: hidden;
+  background: var(--meter-track);
+  border-radius: var(--radius-pill);
+}
+
+.ui-meter__track > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+.ui-meter__label {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* Empty and loading states */
+.ui-empty {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 32px 18px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  text-align: center;
+}
+
+.ui-empty__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  background: var(--bg-icon);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-md);
+}
+
+.ui-empty > strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.ui-empty > span {
+  max-width: 44ch;
+}
+
+.ui-loading {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+}
+
+.ui-skeleton {
+  display: block;
+  height: 12px;
+  background: linear-gradient(90deg, var(--bg-row-active), var(--bg-surface-raised), var(--bg-row-active));
+  border-radius: var(--radius-sm);
+}
+
+.ui-skeleton:last-child {
+  width: 60%;
+}
+
+/* Segmented choice: a row of pills; the chosen one on the accent's ground. */
+.ui-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-pill);
+}
+
+.ui-segmented__option {
+  min-height: 34px;
+  padding: 0 14px;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-sm);
+}
+
+.ui-segmented__option.is-on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-deep);
+}
+
+.ui-segmented__option:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .ui-segmented__option {
+    min-height: var(--control-height);
+  }
+}
+
+@media (max-width: 720px) {
+  .ui-card__header,
+  .ui-card__body {
+    padding: var(--space-4);
+  }
+
+  .ui-card__body--flush {
+    padding: 0;
+  }
+
+  .ui-card__footer {
+    align-items: stretch;
+    padding: var(--space-4);
+  }
+
+  .ui-card__footer .ui-button-wrap,
+  .ui-card__footer .ui-button {
+    width: 100%;
+  }
+
+  .ui-row,
+  .ui-table th,
+  .ui-table td {
+    padding-inline: var(--space-4);
+  }
+}
+
+@media (forced-colors: active) {
+  .ui-card,
+  .ui-segmented__option.is-on {
+    border: 1px solid CanvasText;
+  }
+
+  .ui-trend > i.is-latest,
+  .ui-meter__track > i {
+    background: Highlight;
+  }
+}

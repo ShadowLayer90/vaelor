@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 import os
 import secrets
-import socket
 import sqlite3
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from contextlib import closing
 from pathlib import Path
@@ -21,13 +18,44 @@ from typing import Any, Callable, Dict, Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.exceptions import InvalidTag
 
+# The wire contract and the client live in the leaf module; re-exported here
+# because this is the spelling every importer of the broker uses.
+from .credential_broker_client import (  # noqa: F401 - re-exported
+    CREDENTIAL_NOT_FOUND,
+    MAX_REQUEST_BYTES,
+    REQUEST_TOO_LARGE,
+    CredentialBrokerClient,
+    CredentialError,
+)
 from .credential_profiles import validate_ssh_profile as _validate_ssh_profile
-from .runtime_paths import env_value, run_path
+# The connection tests live in their own module (split for the line ceiling);
+# `validate_compatible_profile` is re-exported because importers spell it here,
+# and `_compatible_request` keeps its old name so `models` reads it from this
+# module's namespace exactly as before.
+from .credential_provider_probe import (  # noqa: F401 - re-exported
+    MAX_SECRET_BYTES,
+    compatible_request as _compatible_request,
+    probe_provider,
+    validate_compatible_profile,
+)
+from . import served_endpoint_keys
+from .hosted_providers import (
+    HOSTED_COMPATIBLE,
+    HOSTED_KINDS,
+    HOSTED_PROVIDERS,
+    lease_profile as hosted_lease_profile,
+    list_models as hosted_list_models,
+    validate_hosted_profile,
+)
+from .model_credential_roles import (  # noqa: F401 - ASSISTANT_PURPOSE re-exported
+    ASSISTANT_PURPOSE,
+    role_refusal,
+)
+from .served_endpoint_keys import SERVED_ENDPOINT_PROVIDER
 
-
-MAX_SECRET_BYTES = 8192
-MAX_REQUEST_BYTES = 16384
 MAX_PROVIDER_RESPONSE_BYTES = 1024 * 1024
+#: How many chat models a model list returns (Anthropic's own list maximum).
+MAX_LISTED_MODELS = 1000
 PROVIDERS = {
     "openai": {
         "name": "OpenAI API",
@@ -55,11 +83,25 @@ PROVIDERS = {
         "name": "Application secret",
         "auth": "managed_secret",
     },
+    # Inbound, broker-minted endpoint key. Created ONLY through
+    # ``CredentialVault.mint``; ``put`` refuses it and ``capabilities`` hides it
+    # so the generic create route can never store a weak, unbound one.
+    SERVED_ENDPOINT_PROVIDER: served_endpoint_keys.PROVIDER_DESCRIPTOR,
+    # VD-206: the hosted services AI Chat may use, one kind each
+    # (`hosted_providers` owns the table and says why they are kinds).
+    **{
+        kind: {"name": facts["name"], "auth": "api_key"}
+        for kind, facts in HOSTED_PROVIDERS.items()
+    },
 }
 
 ASSIGNMENT_PROVIDERS = {
-    "deployment-agent": {"openai-compatible", "openai"},
-    "ai-chat": {"openai-compatible", "openai"},
+    # VD-207: the Assistant's own lease takes no external kind - OpenAI's row
+    # here was unreachable (the vault's role check refused it) and is gone.
+    "deployment-agent": {"openai-compatible"},
+    # VD-206 item 3: the hosted kinds serve AI Chat and nothing else; the
+    # Assistant's purpose above never lists them (VD-049, VD-201).
+    "ai-chat": {"openai-compatible", "openai", *HOSTED_KINDS},
     "model-download": {"huggingface"},
     "hosted-agent": {"openai"},
     "cluster-node": {"ssh"},
@@ -70,6 +112,11 @@ ASSIGNMENT_PROVIDERS = {
     "backup-offsite": {"application-secret"},
 }
 ASSIGNMENT_PURPOSES = set(ASSIGNMENT_PROVIDERS)
+
+#: VD-049 / VD-201 / VD-202: which credential may take the Assistant's lease and
+#: which may take AI Chat's is answered in `model_credential_roles` and enforced
+#: HERE, in `CredentialVault.activate`, not in each route - three routes once
+#: assigned the Assistant on their own (LESSONS 6).
 
 #: Alert channels each bind one managed secret (an SMTP password or webhook
 #: token) under a per-channel purpose ``alert-channel-<id>`` - a prefix family,
@@ -88,6 +135,8 @@ def purpose_provider_set(purpose: str) -> Optional[set]:
         return ASSIGNMENT_PROVIDERS[purpose]
     if purpose.startswith(ALERT_PURPOSE_PREFIX) and 0 < len(purpose) <= 80:
         return {"application-secret"}
+    if served_endpoint_keys.is_served_endpoint_purpose(purpose):
+        return {SERVED_ENDPOINT_PROVIDER}
     return None
 
 NON_CHAT_MODEL_MARKERS = (
@@ -102,109 +151,14 @@ def _is_chat_model_id(model_id: str) -> bool:
     return bool(lower) and not any(marker in lower for marker in NON_CHAT_MODEL_MARKERS)
 
 
-class CredentialError(ValueError):
-    """Safe error suitable for returning through the local broker protocol."""
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
-        return None
-
-
-def validate_compatible_profile(secret_value: str) -> Dict[str, str]:
-    """Validate and normalize an encrypted compatible-endpoint profile."""
-    try:
-        profile = json.loads(secret_value)
-    except (TypeError, json.JSONDecodeError) as error:
-        raise CredentialError("The compatible server profile is invalid.") from error
-    if not isinstance(profile, dict):
-        raise CredentialError("The compatible server profile is invalid.")
-
-    base_url = str(profile.get("base_url", "")).strip().rstrip("/")
-    model = str(profile.get("model", "")).strip()
-    api_key = str(profile.get("api_key", "")).strip()
-    if len(base_url) > 500 or len(model) > 200 or len(api_key) > MAX_SECRET_BYTES:
-        raise CredentialError("The compatible server profile is too large.")
-
-    parsed = urllib.parse.urlsplit(base_url)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise CredentialError("Enter a complete HTTP or HTTPS server URL without credentials or query text.")
-    try:
-        port = parsed.port
-    except ValueError as error:
-        raise CredentialError("The compatible server port is invalid.") from error
-    if port is not None and not 1 <= port <= 65535:
-        raise CredentialError("The compatible server port is invalid.")
-
-    try:
-        resolved = {
-            ipaddress.ip_address(item[4][0])
-            for item in socket.getaddrinfo(parsed.hostname, port or (443 if parsed.scheme == "https" else 80))
-        }
-    except (OSError, ValueError) as error:
-        raise CredentialError("The compatible server address could not be resolved.") from error
-    if not resolved or any(
-        not (address.is_private or address.is_loopback)
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_unspecified
-        for address in resolved
-    ):
-        raise CredentialError("For safety, compatible servers must use a private LAN or loopback address.")
-
-    return {"base_url": base_url, "model": model, "api_key": api_key}
+#: What `resolve_active` answers for a purpose nothing is assigned to. Named so
+#: a reader can tell "no lease" from "the broker could not be asked" - both
+#: arrive as `CredentialError` - without re-spelling the sentence (VD-127, B4).
+NO_ACTIVE_CREDENTIAL = "No credential is active for this purpose."
 
 
 def validate_ssh_profile(secret_value: str) -> Dict[str, Any]:
     return _validate_ssh_profile(secret_value, CredentialError)
-
-
-def _compatible_request(
-    profile: Dict[str, str],
-    path: str,
-    *,
-    payload: Optional[Dict[str, Any]] = None,
-    timeout: int = 20,
-) -> Dict[str, Any]:
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Vaelor-Credential-Broker/1",
-    }
-    if profile["api_key"]:
-        headers["Authorization"] = "Bearer {}".format(profile["api_key"])
-    data = None
-    method = "GET"
-    if payload is not None:
-        data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-        method = "POST"
-    request = urllib.request.Request(
-        "{}{}".format(profile["base_url"], path),
-        data=data,
-        headers=headers,
-        method=method,
-    )
-    opener = urllib.request.build_opener(_NoRedirect)
-    with opener.open(request, timeout=timeout) as response:
-        if not 200 <= response.status < 300:
-            raise CredentialError("The compatible server rejected the connection test.")
-        raw = response.read(1024 * 1024 + 1)
-    if len(raw) > 1024 * 1024:
-        raise CredentialError("The compatible server response was too large.")
-    try:
-        result = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CredentialError("The compatible server did not return valid JSON.") from error
-    if not isinstance(result, dict):
-        raise CredentialError("The compatible server returned an invalid response.")
-    return result
 
 
 class CredentialVault:
@@ -239,10 +193,17 @@ class CredentialVault:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")  # pairs-with: sqlite-foreign-keys-spaced
         self._ensure_schema(connection)
-        for suffix in ("", "-wal", "-shm"):
-            candidate = Path("{}{}".format(path, suffix))
-            if candidate.exists():
-                os.chmod(candidate, 0o600)
+        # The WAL sidecars exist only while a connection holds them: SQLite
+        # unlinks both when the last connection closes, so a sidecar seen a
+        # moment ago can be gone by the chmod (the broker's first live
+        # ``FileNotFoundError`` on ``-shm``, VD-127). A vanished sidecar is
+        # nothing to protect; the vault file itself was chmod'ed above and a
+        # failure there still raises.
+        for suffix in ("-wal", "-shm"):
+            try:
+                os.chmod("{}{}".format(path, suffix), 0o600)
+            except FileNotFoundError:
+                continue
         return connection
 
     def _ensure_schema(self, connection: sqlite3.Connection) -> None:
@@ -267,7 +228,9 @@ class CredentialVault:
                 updated_at INTEGER NOT NULL,
                 last_used_at INTEGER,
                 last_test_status TEXT,
-                last_tested_at INTEGER
+                last_tested_at INTEGER,
+                last4 TEXT,
+                revoked_at INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS broker_audit (
@@ -278,7 +241,6 @@ class CredentialVault:
                 provider TEXT NOT NULL,
                 result TEXT NOT NULL
             );
-
             CREATE TABLE IF NOT EXISTS credential_assignments (
                 purpose TEXT PRIMARY KEY,
                 credential_id TEXT NOT NULL,
@@ -310,6 +272,20 @@ class CredentialVault:
                 # keep NULL, which the UI reads as "date not recorded".
                 connection.execute(
                     "ALTER TABLE credentials ADD COLUMN last_tested_at INTEGER"
+                )
+            if "last4" not in columns:
+                # A served-endpoint key's last four characters are shown (never
+                # the key) so two keys on one endpoint are tellable apart; rows
+                # that predate minting keep NULL.
+                connection.execute(
+                    "ALTER TABLE credentials ADD COLUMN last4 TEXT"
+                )
+            if "revoked_at" not in columns:
+                # A served-endpoint key is revoked by stamping this column, not
+                # by deleting the row: the record stays for audit while the key
+                # stops being active. Rows that predate revoke keep NULL (live).
+                connection.execute(
+                    "ALTER TABLE credentials ADD COLUMN revoked_at INTEGER"
                 )
             connection.commit()
             self._schema_ready = True
@@ -343,6 +319,7 @@ class CredentialVault:
                     "oauth": False,
                 }
                 for provider_id, policy in PROVIDERS.items()
+                if provider_id != SERVED_ENDPOINT_PROVIDER
             ],
             "plaintext_export": False,
         }
@@ -371,6 +348,9 @@ class CredentialVault:
             "last_test_status": row["last_test_status"],
             "last_tested_at": row["last_tested_at"],
         }
+        metadata["last4"] = row["last4"] if "last4" in row.keys() else None
+        if row["provider"] == SERVED_ENDPOINT_PROVIDER:
+            metadata.update(served_endpoint_keys.metadata_view(row))
         metadata["active_for"] = active_for or []
         return metadata
 
@@ -385,7 +365,8 @@ class CredentialVault:
                 """
                 SELECT id, provider, label, fingerprint, version, owner,
                        created_at, updated_at,
-                       last_used_at, last_test_status, last_tested_at
+                       last_used_at, last_test_status, last_tested_at, last4,
+                       revoked_at
                 FROM credentials
                 """
             )
@@ -412,7 +393,12 @@ class CredentialVault:
             item = self._metadata(row, active.get(row["id"], []))
             item["selected_model"] = model_preferences.get(row["id"], "")
             result.append(item)
-        self._audit("credential.list")
+        # Review A11: a listing carries metadata and fingerprints, never a
+        # secret. An actor-less one is a service polling it - the mode watch
+        # every 30 s among them, about 5,760 rows a day - so only a listing
+        # made for a named person is audited; every lease still is.
+        if clean_actor:
+            self._audit("credential.list")
         return result
 
     def put(
@@ -424,6 +410,8 @@ class CredentialVault:
         owner: str = "",
     ) -> Dict[str, Any]:
         clean_provider = self._validate_provider(provider)
+        if clean_provider == SERVED_ENDPOINT_PROVIDER:
+            raise CredentialError(served_endpoint_keys.PUT_REJECTED)
         clean_label = str(label).strip()[:80] or PROVIDERS[clean_provider]["name"]
         secret_bytes = str(secret_value).strip().encode("utf-8")
         if len(secret_bytes) < 8 or len(secret_bytes) > MAX_SECRET_BYTES:
@@ -432,6 +420,8 @@ class CredentialVault:
             validate_compatible_profile(secret_bytes.decode("utf-8"))
         elif clean_provider == "ssh":
             validate_ssh_profile(secret_bytes.decode("utf-8"))
+        elif clean_provider == HOSTED_COMPATIBLE:
+            validate_hosted_profile(secret_bytes.decode("utf-8"))
         now = int(time.time())
         item_id = credential_id or "cred_{}".format(secrets.token_hex(12))
         clean_owner = str(owner or "").strip()[:120]
@@ -484,7 +474,8 @@ class CredentialVault:
                 """
                 SELECT id, provider, label, fingerprint, version, owner,
                        created_at, updated_at,
-                       last_used_at, last_test_status, last_tested_at
+                       last_used_at, last_test_status, last_tested_at, last4,
+                       revoked_at
                 FROM credentials WHERE id = ?
                 """,
                 (item_id,),
@@ -497,8 +488,50 @@ class CredentialVault:
         )
         return metadata
 
+    def mint(self, endpoint_id: str, label: str = "") -> Dict[str, Any]:
+        """Mint a fresh inbound endpoint key, revealing the plaintext ONCE.
+
+        The served-endpoint path lives in :mod:`vaelor.served_endpoint_keys`
+        (split out for the line ceiling); it uses this vault's own cipher,
+        connection and audit. The returned ``key`` is the one-time reveal - it
+        is never re-readable through ``list`` or any other verb.
+        """
+        return served_endpoint_keys.mint(self, endpoint_id, label)
+
+    def rotate(self, credential_id: str, endpoint_id: str = "") -> Dict[str, Any]:
+        """Rotate a served-endpoint key in place, revealing the new plaintext ONCE."""
+        return served_endpoint_keys.rotate(self, credential_id, endpoint_id)
+
+    def revoke(self, credential_id: str, endpoint_id: str = "") -> Dict[str, Any]:
+        """Mark a served-endpoint key revoked (kept for audit), never deleted."""
+        return served_endpoint_keys.revoke(self, credential_id, endpoint_id)
+
+    def endpoint_keys(self, endpoint_id: str) -> list:
+        """The active plaintext key set for a gate (see the leaf for the boundary)."""
+        return served_endpoint_keys.endpoint_keys(self, endpoint_id)
+
+    def import_key(
+        self, endpoint_id: str, key: str, label: str = ""
+    ) -> Dict[str, Any]:
+        """Import a GIVEN key as an endpoint's first key (migration only; see leaf)."""
+        return served_endpoint_keys.import_key(self, endpoint_id, key, label)
+
     def delete(self, credential_id: str) -> bool:
         with closing(self._connect()) as connection:
+            kind = connection.execute(
+                "SELECT provider FROM credentials WHERE id = ?",
+                (str(credential_id),),
+            ).fetchone()
+            if kind is not None and kind["provider"] == SERVED_ENDPOINT_PROVIDER:
+                # ACC-111: an endpoint key is revoked and KEPT (the audit rule
+                # `revoke` enforces); a generic delete would erase the record
+                # and pull the key out from under a running gate. Refused here,
+                # at the vault, so no caller of any route can get round it.
+                self._audit(
+                    "credential.delete", str(credential_id),
+                    SERVED_ENDPOINT_PROVIDER, "refused",
+                )
+                raise CredentialError(served_endpoint_keys.DELETE_REFUSED)
             connection.execute(
                 "DELETE FROM credential_assignments WHERE credential_id = ?",
                 (str(credential_id),),
@@ -525,26 +558,36 @@ class CredentialVault:
             raise CredentialError("This credential assignment is not supported.")
         with closing(self._connect()) as connection:
             row = connection.execute(
-                "SELECT id, provider FROM credentials WHERE id = ?",
+                """
+                SELECT c.id, c.provider, c.owner,
+                       COALESCE(p.selected_model, '') AS selected_model
+                FROM credentials c
+                LEFT JOIN credential_model_preferences p ON p.credential_id = c.id
+                WHERE c.id = ?
+                """,
                 (str(credential_id),),
             ).fetchone()
             if row is None:
-                raise CredentialError("Credential was not found.")
+                raise CredentialError(CREDENTIAL_NOT_FOUND)
             if row["provider"] not in providers:
-                raise CredentialError(
-                    "This credential provider cannot be used for that purpose."
+                raise CredentialError("This credential provider cannot be used for that purpose.")
+            # VD-049 / VD-201 / VD-202: the one place both leases are guarded.
+            refused = role_refusal(clean_purpose, row)
+            if not refused:
+                connection.execute(
+                    """
+                    INSERT INTO credential_assignments (purpose, credential_id, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(purpose) DO UPDATE SET
+                        credential_id=excluded.credential_id,
+                        updated_at=excluded.updated_at
+                    """,
+                    (clean_purpose, row["id"], int(time.time())),
                 )
-            connection.execute(
-                """
-                INSERT INTO credential_assignments (purpose, credential_id, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(purpose) DO UPDATE SET
-                    credential_id=excluded.credential_id,
-                    updated_at=excluded.updated_at
-                """,
-                (clean_purpose, row["id"], int(time.time())),
-            )
-            connection.commit()
+                connection.commit()
+        if refused:
+            self._audit("credential.activate", row["id"], row["provider"], "refused")
+            raise CredentialError(refused)
         self._audit("credential.activate", row["id"], row["provider"])
         return {"credential_id": row["id"], "purpose": clean_purpose}
 
@@ -585,12 +628,14 @@ class CredentialVault:
                 (clean_purpose,),
             ).fetchone()
         if row is None:
-            raise CredentialError("No credential is active for this purpose.")
+            raise CredentialError(NO_ACTIVE_CREDENTIAL)
         plaintext = self._decrypt(row)
         try:
             profile = (
                 validate_compatible_profile(plaintext)
                 if row["provider"] == "openai-compatible"
+                else hosted_lease_profile(row["provider"], plaintext)
+                if row["provider"] in HOSTED_KINDS
                 else {"token": plaintext}
             )
         finally:
@@ -616,15 +661,22 @@ class CredentialVault:
         with closing(self._connect()) as connection:
             row = connection.execute(
                 """
-                SELECT id, provider, label, nonce, ciphertext, version, owner
+                SELECT id, provider, label, nonce, ciphertext, version, owner,
+                       revoked_at
                 FROM credentials WHERE id = ?
                 """,
                 (str(credential_id),),
             ).fetchone()
         if row is None:
-            raise CredentialError("Credential was not found.")
+            raise CredentialError(CREDENTIAL_NOT_FOUND)
         if row["provider"] not in providers:
             raise CredentialError("This credential provider cannot be used for that purpose.")
+        if clean_purpose.startswith(served_endpoint_keys.SERVED_ENDPOINT_PURPOSE_PREFIX):
+            bound_endpoint = clean_purpose[len(served_endpoint_keys.SERVED_ENDPOINT_PURPOSE_PREFIX):]
+            if bound_endpoint != str(row["owner"]).strip().lower():
+                raise CredentialError("This endpoint key is bound to a different endpoint.")
+            if row["revoked_at"] is not None:
+                raise CredentialError("This endpoint key has been revoked.")
         if (
             clean_purpose == "custom-agent-connector"
             and (not str(actor).strip() or row["owner"] != str(actor).strip())
@@ -637,6 +689,8 @@ class CredentialVault:
                 if row["provider"] == "ssh"
                 else validate_compatible_profile(plaintext)
                 if row["provider"] == "openai-compatible"
+                else hosted_lease_profile(row["provider"], plaintext)
+                if row["provider"] in HOSTED_KINDS
                 else {"token": plaintext}
             )
         finally:
@@ -664,12 +718,18 @@ class CredentialVault:
                 (str(credential_id),),
             ).fetchone()
         if row is None:
-            raise CredentialError("Credential was not found.")
-        if row["provider"] not in {"openai", "openai-compatible"}:
+            raise CredentialError(CREDENTIAL_NOT_FOUND)
+        if row["provider"] not in {"openai", "openai-compatible", *HOSTED_KINDS}:
             raise CredentialError("This credential does not provide chat models.")
         plaintext = self._decrypt(row)
         try:
-            if row["provider"] == "openai-compatible":
+            if row["provider"] in HOSTED_KINDS:
+                # In the service's own order (Anthropic lists newest first),
+                # not sorted: the first listed is what the picker offers first.
+                payload = {"data": [
+                    {"id": model} for model in hosted_list_models(row["provider"], plaintext)
+                ]}
+            elif row["provider"] == "openai-compatible":
                 profile = validate_compatible_profile(plaintext)
                 payload = _compatible_request(profile, "/models")
             else:
@@ -685,24 +745,28 @@ class CredentialVault:
                     payload = json.loads(
                         response.read(MAX_PROVIDER_RESPONSE_BYTES).decode("utf-8")
                     )
+        except CredentialError:
+            raise  # a hosted service's refusal, already in the owner's words
         except urllib.error.HTTPError as error:
             if error.code in {401, 403}:
                 raise CredentialError("The provider rejected this credential.") from error
-            raise CredentialError(
-                "The provider returned HTTP {}.".format(error.code)
-            ) from error
-        except (urllib.error.URLError, TimeoutError, ValueError) as error:
+            raise CredentialError("The provider returned HTTP {}.".format(error.code)) from error
+        except (OSError, ValueError) as error:  # URLError, a timeout, TLS, bad JSON
             raise CredentialError("The model list could not be loaded.") from error
         finally:
             plaintext = ""
-        models = sorted({
+        listed = [
             str(item.get("id", "")).strip()
             for item in payload.get("data", [])
             if (
                 isinstance(item, dict)
                 and _is_chat_model_id(str(item.get("id", "")).strip())
             )
-        })
+        ]
+        models = (
+            list(dict.fromkeys(listed)) if row["provider"] in HOSTED_KINDS
+            else sorted(set(listed))
+        )
         if row["provider"] == "openai":
             models = [
                 model for model in models
@@ -720,11 +784,13 @@ class CredentialVault:
         return {
             "credential_id": row["id"],
             "provider": row["provider"],
-            "models": models[:200],
+            # OpenRouter lists several hundred; a cut at 200 made a model the
+            # owner typed unselectable (`select_model` checks this list).
+            "models": models[:MAX_LISTED_MODELS],
             "selected_model": selected_model,
             "selected_model_available": selected_model_available,
             "selection_required": (
-                row["provider"] == "openai-compatible"
+                row["provider"] in {"openai-compatible", *HOSTED_KINDS}
                 and bool(models)
                 and not selected_model_available
             ),
@@ -757,9 +823,7 @@ class CredentialVault:
             finally:
                 plaintext = ""
             if not result.get("ok"):
-                raise CredentialError(
-                    str(result.get("message", "The selected model did not pass its chat test."))
-                )
+                raise CredentialError(str(result.get("message", "The selected model did not pass its chat test.")))
         with closing(self._connect()) as connection:
             connection.execute(
                 """
@@ -806,7 +870,9 @@ class CredentialVault:
                 (str(credential_id),),
             ).fetchone()
         if row is None:
-            raise CredentialError("Credential was not found.")
+            raise CredentialError(CREDENTIAL_NOT_FOUND)
+        if row["provider"] == SERVED_ENDPOINT_PROVIDER:
+            raise CredentialError("Inbound endpoint keys are not connection-tested.")
         try:
             plaintext = self._decrypt(row)
         except CredentialError as error:
@@ -828,10 +894,10 @@ class CredentialVault:
             connection.execute(
                 """
                 UPDATE credentials
-                SET last_used_at = ?, last_test_status = ?, last_tested_at = ?
+                SET last_test_status = ?, last_tested_at = ?
                 WHERE id = ?
                 """,
-                (now, status, now, row["id"]),
+                (status, now, row["id"]),
             )
             connection.commit()
         self._audit("credential.test", row["id"], row["provider"], status)
@@ -845,150 +911,8 @@ class CredentialVault:
 
     @staticmethod
     def _test_provider(provider: str, secret_value: str) -> Dict[str, Any]:
-        if provider == "application-secret":
-            return {
-                "ok": True,
-                "message": "The encrypted application secret is available to approved deployments.",
-            }
-        if provider == "openai-compatible":
-            profile = validate_compatible_profile(secret_value)
-            try:
-                model_data = _compatible_request(profile, "/models")
-                models = model_data.get("data", [])
-                if not isinstance(models, list) or not models:
-                    return {"ok": False, "message": "The server did not report any loaded models."}
-                selected_model = profile["model"] or str(models[0].get("id", "")).strip()
-                if not selected_model:
-                    return {"ok": False, "message": "The server did not report a usable model ID."}
-                if profile["model"] and not any(
-                    isinstance(item, dict) and item.get("id") == selected_model
-                    for item in models
-                ):
-                    return {"ok": False, "message": "The selected model is not loaded on this server."}
-                chat = _compatible_request(
-                    profile,
-                    "/chat/completions",
-                    payload={
-                        "model": selected_model,
-                        "messages": [{"role": "user", "content": "Reply with OK."}],
-                        "temperature": 0,
-                        "max_tokens": 2,
-                    },
-                    timeout=45,
-                )
-                if not isinstance(chat.get("choices"), list):
-                    return {"ok": False, "message": "The chat-completions response was not compatible."}
-                return {
-                    "ok": True,
-                    "message": "Connected to {}. Models and chat completions are working.".format(selected_model),
-                }
-            except urllib.error.HTTPError as error:
-                if error.code in {401, 403}:
-                    return {"ok": False, "message": "The server rejected the API key."}
-                return {"ok": False, "message": "The server returned HTTP {}.".format(error.code)}
-            except (urllib.error.URLError, TimeoutError):
-                return {"ok": False, "message": "The compatible server could not be reached from this Vaelor node."}
-        policy = PROVIDERS[provider]
-        request = urllib.request.Request(
-            policy["test_url"],
-            headers={
-                policy["header"]: "{}{}".format(policy["prefix"], secret_value),
-                "Accept": "application/json",
-                "User-Agent": "Vaelor-Credential-Broker/1",
-            },
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=12) as response:
-                ok = 200 <= response.status < 300
-            return {
-                "ok": ok,
-                "message": "Provider accepted this credential." if ok else "Provider rejected this credential.",
-            }
-        except urllib.error.HTTPError as error:
-            if error.code in {401, 403}:
-                return {"ok": False, "message": "Provider rejected this credential."}
-            return {"ok": False, "message": "Provider returned HTTP {}.".format(error.code)}
-        except urllib.error.URLError:
-            return {"ok": False, "message": "Provider could not be reached from this device."}
-
-
-class CredentialBrokerClient:
-    """Small JSON-over-Unix-socket client. It never offers a plaintext get."""
-
-    def __init__(self, socket_path: Optional[str] = None, timeout_seconds: int = 60):
-        self.socket_path = socket_path or env_value(
-            "VAELOR_CREDENTIAL_BROKER_SOCKET", "PM_CREDENTIAL_BROKER_SOCKET",
-            run_path("credentiald.sock"),
-        )
-        self.timeout_seconds = timeout_seconds
-
-    def _request(self, operation: str, **payload) -> Any:
-        request_body = json.dumps(
-            {"operation": operation, "payload": payload}, separators=(",", ":")
-        ).encode("utf-8") + b"\n"
-        if len(request_body) > MAX_REQUEST_BYTES:
-            raise CredentialError("Credential broker request is too large.")
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.settimeout(self.timeout_seconds)
-        try:
-            connection.connect(self.socket_path)
-            connection.sendall(request_body)
-            response = b""
-            while b"\n" not in response and len(response) <= MAX_REQUEST_BYTES:
-                chunk = connection.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
-        except OSError as error:
-            raise CredentialError("Credential broker is unavailable.") from error
-        finally:
-            connection.close()
-        decoded = json.loads(response.split(b"\n", 1)[0].decode("utf-8"))
-        if not decoded.get("ok"):
-            raise CredentialError(decoded.get("error", "Credential broker rejected the request."))
-        return decoded.get("data")
-
-    def capabilities(self):
-        return self._request("capabilities")
-
-    def list(self, actor=None):
-        return self._request("list", actor=actor)
-
-    def put(self, provider, label, secret_value, credential_id=None, owner=""):
-        return self._request(
-            "put", provider=provider, label=label, secret=secret_value,
-            credential_id=credential_id, owner=owner,
-        )
-
-    def delete(self, credential_id):
-        return self._request("delete", credential_id=credential_id)
-
-    def test(self, credential_id):
-        return self._request("test", credential_id=credential_id)
-
-    def activate(self, credential_id, purpose):
-        return self._request(
-            "activate", credential_id=credential_id, purpose=purpose
-        )
-
-    def deactivate(self, purpose):
-        return self._request("deactivate", purpose=purpose)
-
-    def models(self, credential_id):
-        return self._request("models", credential_id=credential_id)
-
-    def select_model(self, credential_id, model):
-        return self._request(
-            "select_model", credential_id=credential_id, model=model
-        )
-
-    def resolve_active(self, purpose):
-        return self._request("resolve_active", purpose=purpose)
-
-    def resolve(self, credential_id, purpose, actor=""):
-        return self._request(
-            "resolve", credential_id=credential_id, purpose=purpose, actor=actor
-        )
+        """The production connection test (`vaelor.credential_provider_probe`)."""
+        return probe_provider(provider, secret_value, PROVIDERS.get(provider, {}))
 
 
 def main():

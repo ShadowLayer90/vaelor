@@ -4,9 +4,10 @@ import { modelDisplayName } from "../lib/modelIdentity";
 import type { Session } from "../types";
 import { AiChatComposer } from "./AiChatComposer";
 import { AiChatDetails } from "./AiChatDetails";
-import { blamedModel } from "./AiChatModelPicker";
+import { blamedModel, effectiveModel, reopenedChatModel } from "./AiChatModelPicker";
+import { AiChatProposalCard } from "./AiChatProposalCard";
 import { AiChatRail } from "./AiChatRail";
-import { AiChatToolbar } from "./AiChatToolbar";
+import { AiChatToolbar, type AgentsReading } from "./AiChatToolbar";
 import { AiChatThread, type AiChatRetrieval, type AiChatThreadMessage } from "./AiChatThread";
 import { DROPPED_CONNECTION_NOTICE, droppedConnectionSubject, useResumedAnswer } from "../hooks/useResumedAnswer";
 import type {
@@ -21,10 +22,12 @@ import type {
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TextPromptDialog } from "./TextPromptDialog";
 import { Button, Notice } from "./ui";
-import { destinations } from "../lib/destinations";
 import { downloadConversationMarkdown } from "../lib/aiChatExport";
-import { DOCUMENT_ACCEPT, prepareDocumentUpload } from "../lib/aiChatDocument";
+import { prepareDocumentUpload } from "../lib/aiChatDocument";
 import { conversationIdFromHash, useAiChatRoute } from "../hooks/useAiChatRoute";
+import { useModalAction } from "../hooks/useModalAction";
+import { useAiChatThinking } from "../hooks/useAiChatThinking";
+import { bytesIn } from "../lib/format";
 
 type DeleteTarget = {
   type: "conversation" | "collection";
@@ -66,13 +69,17 @@ export function AiChat({ session }: { session: Session }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [activeCollection, setActiveCollection] = useState("");
+  const collectionOpened = useRef(false);
   const [documents, setDocuments] = useState<AiChatDocument[]>([]);
   const [collectionName, setCollectionName] = useState("");
   const [collectionDescription, setCollectionDescription] = useState("");
   const [busy, setBusy] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNoticeText] = useState("");
+  const [noticeRefused, setNoticeRefused] = useState(false); // VD-189 N3: a refusal is an alert
+  const setNotice = useCallback((message: string, refused = false) => { setNoticeText(message); setNoticeRefused(refused); }, []);
   const [renameTitle, setRenameTitle] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
+  const dialogAction = useModalAction(); // VD-189: the rename/delete refusal renders in its dialog, not on the inert page.
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   const [agentProposal, setAgentProposal] = useState<AiChatAgentProposal | null>(null);
   const [agentRunSubmitted, setAgentRunSubmitted] = useState(false);
@@ -84,16 +91,12 @@ export function AiChat({ session }: { session: Session }) {
    * first — the same rule the model picker's `reading` state exists for.
    */
   const [agentsResolved, setAgentsResolved] = useState(false);
+  const [agentsReading, setAgentsReading] = useState<AgentsReading>({ failed: false, inactive: 0 });
   const [selectedAgentId, setSelectedAgentId] = useState("");
   /*
-   * Models the server could not run, and what it said about each.
-   *
-   * The picker lists everything the provider reports and nothing distinguishes
-   * a loaded model from an unloaded one - `/ai-chat/connections/<id>/models`
-   * returns bare ids - so choosing one that is not loaded produced "LM Studio
-   * rejected the chat request (HTTP 400)" with the picker still sitting
-   * silently on it. What the appliance has told us cannot run is remembered
-   * here and shown against the model itself until it answers.
+   * Models the server could not run, and what it said about each. The model
+   * list is bare ids, so a model that is not loaded looks like any other; what
+   * the appliance said cannot run is shown against the model until it answers.
    */
   const [modelFailures, setModelFailures] = useState<Record<string, string>>({});
   /*
@@ -114,6 +117,7 @@ export function AiChat({ session }: { session: Session }) {
    */
   const [viewTicket, setViewTicket] = useState(0);
   const [pending, setPending] = useState<{ ticket: number; model: string } | null>(null);
+  const thinking = useAiChatThinking(session.csrf_token, setup?.active_connection?.id ?? "", effectiveModel(models, selectedModel)); // VD-209
   const openThread = useCallback(() => {
     threadTicket.current += 1;
     setViewTicket(threadTicket.current);
@@ -137,7 +141,8 @@ export function AiChat({ session }: { session: Session }) {
       setSelectedModel(next.preference.model);
       setSelectedCollections(next.preference.collection_ids);
     }
-    if (!activeCollection && next.collections.length) setActiveCollection(next.collections[0].id);
+    // Only the first read opens a collection: "" after that is the reader's collapse, not "unset" (VD-200).
+    if (next.collections.length && !collectionOpened.current) { collectionOpened.current = true; setActiveCollection((current) => current || next.collections[0].id); }
     if (next.active_connection) {
       const result = await apiRequest<{ models: string[] }>(
         `/ai-chat/connections/${next.active_connection.id}/models`,
@@ -161,22 +166,30 @@ export function AiChat({ session }: { session: Session }) {
     } else {
       setModels([]);
     }
-  }, [activeCollection]);
+  }, []);
 
   useEffect(() => {
     void loadSetup().catch((error) => {
-      setNotice(error instanceof Error ? error.message : "AI Chat could not be loaded.");
+      setNotice(error instanceof Error ? error.message : "AI Chat could not be loaded.", true);
     });
+    // W4d-D17: the Assistant's agents are the ones AI Chat can propose
+    // (custom_profiles; the route defaults to that surface); an inactive one
+    // is counted, a failed read is said.
     void apiRequest<AiChatAgent[]>("/assistant/profiles")
-      .then((items) => setAgents(items.filter((item) => item.custom && item.enabled !== false)))
-      .catch(() => setAgents([]))
+      .then((items) => {
+        const customs = items.filter((item) => item.custom);
+        const active = customs.filter((item) => item.enabled !== false);
+        setAgents(active);
+        setAgentsReading({ failed: false, inactive: customs.length - active.length });
+      })
+      .catch(() => { setAgents([]); setAgentsReading({ failed: true, inactive: 0 }); })
       .finally(() => setAgentsResolved(true));
   }, [loadSetup]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadConversations().catch((error) => {
-        setNotice(error instanceof Error ? error.message : "Chat history could not be loaded.");
+        setNotice(error instanceof Error ? error.message : "Chat history could not be loaded.", true);
       });
     }, search ? 250 : 0);
     return () => window.clearTimeout(timer);
@@ -207,10 +220,11 @@ export function AiChat({ session }: { session: Session }) {
       { method: "PATCH", body: JSON.stringify({ model, collection_ids: collections }) },
       session.csrf_token,
     );
+    // Collections only: a chat names the model that answered in it (ACC-116).
     if (conversationId && !temporary) {
       await apiRequest(
         `/ai-chat/conversations/${conversationId}`,
-        { method: "PATCH", body: JSON.stringify({ model, collections }) },
+        { method: "PATCH", body: JSON.stringify({ collections }) },
         session.csrf_token,
       );
     }
@@ -227,7 +241,7 @@ export function AiChat({ session }: { session: Session }) {
       setNotice(`${connection.label} is now dedicated to AI Chat.`);
       await loadSetup();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Connection could not be activated.");
+      setNotice(error instanceof Error ? error.message : "Connection could not be activated.", true);
     } finally { setBusy(""); }
   };
 
@@ -238,7 +252,7 @@ export function AiChat({ session }: { session: Session }) {
       // The name the reader picked, not the file the server loads it from.
       setNotice(`This chat will use ${modelDisplayName(model)}.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Model choice could not be saved.");
+      setNotice(error instanceof Error ? error.message : "Model choice could not be saved.", true);
     }
   };
 
@@ -250,7 +264,7 @@ export function AiChat({ session }: { session: Session }) {
     try {
       await saveContext(selectedModel, next);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Knowledge choice could not be saved.");
+      setNotice(error instanceof Error ? error.message : "Knowledge choice could not be saved.", true);
     }
   };
 
@@ -259,7 +273,7 @@ export function AiChat({ session }: { session: Session }) {
     setTemporary(false);
     setConversationId(item.id);
     setOpenRecord(item);
-    setSelectedModel(item.model || setup?.preference.model || "");
+    setSelectedModel((current) => reopenedChatModel(item.model, current, models));
     /*
      * Resuming a chat must never silently switch retrieval off. A conversation
      * started before any collection existed carries an empty list; adopting it
@@ -337,6 +351,12 @@ export function AiChat({ session }: { session: Session }) {
     hasMessages: messages.length > 0,
     onNotice: setNotice,
     openConversation,
+    // A dead id is never kept under "New chat" for a send to fail on (ACC-108).
+    onMissing: () => {
+      newConversation();
+      setNotice("That chat no longer exists, or it belongs to another account. This is a new chat.");
+    },
+    onArchived: () => setShowArchived(true),
     temporary,
   });
 
@@ -369,19 +389,29 @@ export function AiChat({ session }: { session: Session }) {
     if (!conversationId || !renameTitle?.trim()) return;
     setBusy("rename");
     try {
-      await apiRequest(
+      if (!(await dialogAction.run(() => apiRequest(
         `/ai-chat/conversations/${conversationId}`,
         { method: "PATCH", body: JSON.stringify({ title: renameTitle.trim() }) },
         session.csrf_token,
-      );
+      )))) return;
       setRenameTitle(null);
       await loadConversations();
     } finally { setBusy(""); }
   };
 
-  const exportConversation = () => {
-    const conversation = conversations.find((item) => item.id === conversationId);
-    if (conversation) downloadConversationMarkdown(conversation, messages);
+  const exportConversation = async () => {
+    const conversation = conversations.find((item) => item.id === conversationId)
+      ?? (openRecord?.id === conversationId ? openRecord : undefined);
+    if (!conversation) return;
+    // Every turn, not the newest hundred the thread holds (ACC-112).
+    try {
+      const exported = await apiRequest<{
+        messages: AiChatThreadMessage[]; total: number; limit: number; truncated: boolean;
+      }>(`/ai-chat/conversations/${conversation.id}/export`);
+      downloadConversationMarkdown(conversation, exported.messages, exported);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The chat could not be exported.", true);
+    }
   };
 
   const forkConversation = async (message: AiChatThreadMessage) => {
@@ -397,7 +427,7 @@ export function AiChat({ session }: { session: Session }) {
       await openConversation(branch);
       setNotice("Branch created. The original chat is unchanged.");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The branch could not be created.");
+      setNotice(error instanceof Error ? error.message : "The branch could not be created.", true);
     } finally { setBusy(""); }
   };
 
@@ -430,7 +460,7 @@ export function AiChat({ session }: { session: Session }) {
   const regenerate = async (message: AiChatThreadMessage, content?: string) => {
     if (!conversationId || !message.id) return;
     const ticket = threadTicket.current;
-    const requestModel = selectedModel;
+    const requestModel = effectiveModel(models, selectedModel);
     setBusy("chat"); setNotice("");
     setPending({ ticket, model: requestModel });
     try {
@@ -441,7 +471,7 @@ export function AiChat({ session }: { session: Session }) {
         `/ai-chat/conversations/${conversationId}/regenerate`,
         {
           method: "POST",
-          body: JSON.stringify({ message_id: message.id, content }),
+          body: JSON.stringify({ message_id: message.id, content, model: requestModel, thinking: thinking.step || undefined }),
           timeoutMs: AI_CHAT_CLIENT_TIMEOUT_MS,
         },
         session.csrf_token,
@@ -483,7 +513,7 @@ export function AiChat({ session }: { session: Session }) {
       await loadSetup(true);
       setNotice("Knowledge collection created and enabled.");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Collection could not be created.");
+      setNotice(error instanceof Error ? error.message : "Collection could not be created.", true);
     } finally { setBusy(""); }
   };
 
@@ -529,7 +559,7 @@ export function AiChat({ session }: { session: Session }) {
     setBusy("document"); setNotice("");
     try {
       const body = await prepareDocumentUpload(
-        file, setup?.limits.document_bytes ?? 10 * 1024 * 1024);
+        file, setup?.limits.document_bytes ?? bytesIn(10, "MiB"));
       const collectionId = await ensureCollection();
       await apiRequest(
         `/ai-chat/collections/${collectionId}/documents`,
@@ -550,7 +580,7 @@ export function AiChat({ session }: { session: Session }) {
         ?? "My documents";
       setNotice(`${file.name} added to ${destination}. Vaelor can now cite it in answers.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Document could not be indexed.");
+      setNotice(error instanceof Error ? error.message : "Document could not be indexed.", true);
     } finally { setBusy(""); }
   };
 
@@ -571,7 +601,7 @@ export function AiChat({ session }: { session: Session }) {
       const path = deleteTarget.type === "conversation"
         ? `/ai-chat/conversations/${deleteTarget.id}`
         : `/ai-chat/collections/${deleteTarget.id}`;
-      await apiRequest(path, { method: "DELETE" }, session.csrf_token);
+      if (!(await dialogAction.run(() => apiRequest(path, { method: "DELETE" }, session.csrf_token)))) return;
       if (deleteTarget.type === "conversation") newConversation();
       if (deleteTarget.type === "collection") {
         setSelectedCollections((current) => current.filter((id) => id !== deleteTarget.id));
@@ -581,7 +611,7 @@ export function AiChat({ session }: { session: Session }) {
       await Promise.all([loadConversations(), loadSetup(true)]);
       setNotice(`${deleteTarget.name} deleted.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The item could not be deleted.");
+      setNotice(error instanceof Error ? error.message : "The item could not be deleted.", true);
     } finally { setBusy(""); }
   };
 
@@ -618,7 +648,7 @@ export function AiChat({ session }: { session: Session }) {
           : "Saved. Open it under Assistant, in the Agent runs filter, to approve and run it.",
       );
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "The agent run could not be prepared.");
+      setNotice(error instanceof Error ? error.message : "The agent run could not be prepared.", true);
     } finally {
       setBusy("");
     }
@@ -649,7 +679,8 @@ export function AiChat({ session }: { session: Session }) {
    */
   const submitQuestion = async (question: string, priorMessages: AiChatThreadMessage[]) => {
     const ticket = threadTicket.current;
-    const requestModel = selectedModel;
+    // The model the picker SHOWS (ACC-095): it reconciles via `effectiveModel`.
+    const requestModel = effectiveModel(models, selectedModel);
     const controller = new AbortController();
     abortSend.current = controller;
     stoppedByUser.current = false;
@@ -672,11 +703,11 @@ export function AiChat({ session }: { session: Session }) {
           body: JSON.stringify({
             message: question,
             conversation_id: temporary ? undefined : conversationId || undefined,
-            model: selectedModel,
+            model: requestModel,
             collection_ids: selectedCollections,
             temporary,
             history: temporary ? priorMessages : undefined,
-            agent_id: selectedAgentId || undefined,
+            agent_id: selectedAgentId || undefined, thinking: thinking.step || undefined,
             idempotency_key: globalThis.crypto?.randomUUID?.() ?? `ai-chat-${Date.now()}`, // VD-112: one key per send, reused by the api.ts transport retry so the appliance dedupes the turn.
           }),
           timeoutMs: AI_CHAT_CLIENT_TIMEOUT_MS,
@@ -809,14 +840,9 @@ export function AiChat({ session }: { session: Session }) {
     await submitQuestion(message.content, index < 0 ? messages : messages.slice(0, index));
   };
 
-  /*
-   * The dialog focuses and selects its field in an effect keyed on its
-   * handlers. Passing a fresh closure each render re-ran that effect after
-   * every keystroke, so the field re-selected its own contents and the next
-   * character replaced the last: typing "Cupboard box notes" saved as "s".
-   * Stable handlers keep the selection to the moment the dialog opens.
-   */
-  const closeRename = useCallback(() => setRenameTitle(null), []);
+  // A stable handler: a fresh closure re-ran the dialog's select-all effect on
+  // every keystroke, so typing "Cupboard box notes" saved as "s".
+  const closeRename = useCallback(() => { dialogAction.clear(); setRenameTitle(null); }, [dialogAction.clear]);
 
   /*
    * Searching filters the conversation list, and the header read its title
@@ -830,20 +856,17 @@ export function AiChat({ session }: { session: Session }) {
   // The composer uses a non-empty prop only to enable explicit agent routing;
   // ordinary chat still sends the empty selected model and receives its normal error.
   const composerModel = selectedModel || selectedAgentId || "agent-delegation";
-  const noticeIsError = /could not|did not|failed|too long|exceeded|stopped waiting|rejected|lost the connection|error|unavailable/i.test(notice);
+  const noticeIsError = noticeRefused || /could not|did not|failed|too long|exceeded|stopped waiting|rejected|lost the connection|error|unavailable/i.test(notice);
+  const administrator = session.user.role === "administrator";
   return (
     <div className={focusMode ? "ai-chat-page ai-chat-page--focus" : "ai-chat-page"}>
-      <header className="page-heading ai-chat-page__heading">
-        <div><h1>{destinations["ai-chat"].name}</h1><p>{destinations["ai-chat"].descriptor}. The Assistant is a separate destination.</p></div>
-      </header>
-      {notice && <Notice className="ai-chat-notice" severity={noticeIsError ? "danger" : "info"}><span>{notice}</span><Button aria-label="Dismiss notification" className="ai-chat-notice__dismiss" onClick={() => setNotice("")} type="button" variant="quiet">×</Button></Notice>}
-      <div className={detailsOpen ? "ai-chat-workspace has-details" : "ai-chat-workspace"}>
+      <div className={detailsOpen ? "ai-chat-workspace has-details" : "ai-chat-workspace"} {...(focusMode ? { role: "region", "aria-label": "AI Chat, focus view" } : {})}>
         <AiChatRail
           conversationId={conversationId}
           conversations={conversations}
           onArchive={() => void archiveConversation()}
           onDelete={() => current && setDeleteTarget({ type: "conversation", id: current.id, name: current.title })}
-          onExport={exportConversation}
+          onExport={() => void exportConversation()}
           onNew={() => newConversation(false)}
           onOpen={(item) => void openConversation(item)}
           onRename={() => setRenameTitle(current?.title ?? "")}
@@ -854,19 +877,24 @@ export function AiChat({ session }: { session: Session }) {
           showArchived={showArchived}
           temporary={temporary}
         />
-        <section className="ai-chat-main">
+        <section aria-label="Chat" className="ai-chat-main">
           <AiChatToolbar
             agents={agents}
             agentsResolved={agentsResolved}
+            agentsReading={{ ...agentsReading, administrator }}
+            archived={Boolean(current?.archived)}
             busy={busy !== ""}
             // `undefined` until `/ai-chat/setup` answers and again while a
             // connection is being activated: at both moments Vaelor does not
             // know what this machine can run, and the picker says so.
             connection={setup && busy !== "connection" ? setup.active_connection : undefined}
+            connectionBusy={busy === "connection"}
+            connections={setup?.connections ?? []}
             detailsOpen={detailsOpen}
             focusMode={focusMode}
             modelFailures={modelFailures}
             models={models}
+            onActivateConnection={(connection) => void activateConnection(connection)}
             onChooseModel={(model) => void chooseModel(model)}
             onSelectAgent={(id) => {
               setSelectedAgentId(id);
@@ -875,11 +903,15 @@ export function AiChat({ session }: { session: Session }) {
             }}
             onToggleDetails={() => setDetailsOpen((value) => !value)}
             onToggleFocus={() => setFocusMode((value) => !value)}
+            clustering={{ refusals: setup?.connection_refusals ?? {}, clusterId: setup?.cluster_credential_id ?? "" }}
             selectedAgentId={selectedAgentId}
             selectedModel={selectedModel}
             subtitle={temporary ? "No history will be saved" : selectedCollections.length ? "Cited knowledge enabled" : "General model knowledge"}
+            temporary={temporary}
+            thinking={thinking}
             title={temporary ? "Temporary chat" : current?.title || "New chat"}
           />
+          {notice && <Notice className="ai-chat-notice" severity={noticeIsError ? "danger" : "info"}><span>{notice}</span><Button aria-label="Dismiss notification" className="ai-chat-ghost ai-chat-notice__dismiss" onClick={() => setNotice("")} type="button" variant="quiet">Dismiss</Button></Notice>}
           <AiChatThread
             busy={busy === "chat"}
             canModify={!temporary && Boolean(conversationId)}
@@ -893,40 +925,17 @@ export function AiChat({ session }: { session: Session }) {
             onStop={stopGeneration}
             onSuggestion={setInput}
             resumed={resumed}
-          />
-          {agentProposal && (
-            <section className="assistant-proposal" aria-label="Custom agent run proposal">
-              <span>
-                <small>Custom agent · version {agentProposal.profile_version} · approval required</small>
-                <strong>{agentProposal.profile_name}</strong>
-                <p>{agentProposal.task}</p>
-                <small>
-                  {agentProposal.capabilities.length
-                    ? `Capabilities: ${agentProposal.capabilities.join(", ")}`
-                    : "Capabilities: none listed"}
-                </small>
-                <small>
-                  {agentProposal.app_grants.length
-                    ? agentProposal.app_grants.map((grant) => {
-                      const operations = grant.operations.map((operation) => operation.name).join(", ");
-                      return `${grant.app_name}: ${operations || "no operations listed"}`;
-                    }).join(" · ")
-                    : "App access: none granted"}
-                </small>
-                <small>
-                  {agentProposal.integrations.length
-                    ? `Integrations: ${agentProposal.integrations.join(", ")}`
-                    : "Integrations: none"}
-                </small>
-              </span>
-              <div>
-                <Button disabled={busy !== "" || agentRunSubmitted} onClick={() => void reviewAgentRun()} type="button" variant="primary">{agentRunSubmitted ? "Saved for review" : "Review agent run"}</Button>
-                {agentRunSubmitted && (
-                  <Button onClick={openAgentRun} type="button" variant="quiet">Open this run</Button>
-                )}
-              </div>
-            </section>
-          )}
+          >
+            {agentProposal && (
+              <AiChatProposalCard
+                busy={busy !== ""}
+                onOpenRun={openAgentRun}
+                onReview={() => void reviewAgentRun()}
+                proposal={agentProposal}
+                submitted={agentRunSubmitted}
+              />
+            )}
+          </AiChatThread>
           <AiChatComposer
             busy={busy === "chat"}
             collections={setup?.collections ?? []}
@@ -935,7 +944,6 @@ export function AiChat({ session }: { session: Session }) {
             onFile={(file) => void ingestFile(file)}
             onOpenDetails={() => setDetailsOpen(true)}
             onSubmit={(event) => void send(event)}
-            onToggleCollection={(id) => void toggleCollection(id)}
             selectedCollections={selectedCollections}
             temporary={temporary}
             value={input}
@@ -959,12 +967,13 @@ export function AiChat({ session }: { session: Session }) {
             onFile={(file) => void ingestFile(file)}
             onToggleCollection={(id) => void toggleCollection(id)}
             selectedCollections={selectedCollections}
+            session={session}
             setup={setup}
           />
         )}
       </div>
       <TextPromptDialog
-        busy={busy === "rename"}
+        busy={busy === "rename"} error={dialogAction.error}
         description="Use a short name that will be easy to find later."
         label="Chat name"
         onCancel={closeRename}
@@ -975,10 +984,10 @@ export function AiChat({ session }: { session: Session }) {
         value={renameTitle ?? ""}
       />
       <ConfirmDialog
-        busy={busy === "delete"}
-        confirmLabel="Delete permanently"
+        busy={busy === "delete"} error={dialogAction.error}
+        confirmLabel="Delete permanently" irreversible
         description={deleteTarget?.type === "collection" ? "All indexed files and chunks in this collection will be permanently deleted. Saved chats remain." : "This conversation and every message in it will be permanently deleted."}
-        onCancel={() => setDeleteTarget(null)}
+        onCancel={() => { dialogAction.clear(); setDeleteTarget(null); }}
         onConfirm={() => void confirmDelete()}
         open={Boolean(deleteTarget)}
         title={`Delete ${(deleteTarget?.name || "item").replace(/[.!?,;:]+$/, "")}?`}

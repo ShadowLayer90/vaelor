@@ -53,7 +53,7 @@ const operationAuditFixture = {
       resource_id: 'nginx-welcome',
       type: 'compose.backup',
     },
-    remote_addr: '192.168.0.72',
+    remote_addr: '10.20.30.72',
     result: 'success',
     target: 'job-42',
   }],

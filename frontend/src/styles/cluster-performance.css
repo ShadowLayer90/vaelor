@@ -1,0 +1,484 @@
+/*
+ * Cluster > Performance, the diagnostics (VD-200, the
+ * ClusterPerformanceDiagnostics and ClusterPerformanceAdvanced boards): one
+ * four-column grid of the boards' cards, each a title over a quiet second
+ * line with at most one pill, and one stat-cell size throughout (72 px, a
+ * label of two lines at most over its value). Tokens only.
+ */
+
+.cluster-perf {
+  min-width: 0;
+  display: grid;
+  gap: 20px;
+}
+
+.cluster-perf__diagnostics {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.cluster-perf__diagnostics-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cluster-perf__diagnostics-head h2 {
+  margin: 0;
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.cluster-perf__diagnostics-head p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* ---- The grid: four columns, cards span 1, 2 or 4 and may take two rows ---- */
+
+.perf-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 10px;
+}
+
+.perf-span-1 { grid-column: span 1; }
+.perf-span-2 { grid-column: span 2; }
+.perf-span-4 { grid-column: 1 / -1; }
+.perf-rows-2 { grid-row: span 2; }
+
+/* ---- The card ---- */
+
+.perf-card {
+  min-width: 0;
+}
+
+.perf-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.perf-card__titles {
+  min-width: 0;
+}
+
+.perf-card__titles h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.perf-card__titles p {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.perf-card__status {
+  text-transform: capitalize;
+}
+
+.perf-card__head > .status-pill,
+.perf-card__head > .perf-pill-group,
+.perf-card__head > .ui-button-wrap {
+  flex: 0 0 auto;
+}
+
+.perf-card__head .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.perf-pill-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.perf-card__body {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px;
+  overflow-wrap: anywhere;
+}
+
+.perf-card__body p {
+  margin: 0;
+}
+
+.perf-lead {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.perf-muted,
+.perf-empty {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.perf-empty {
+  font-size: var(--font-size-ui-sm);
+}
+
+.perf-note {
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  background: var(--bg-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.perf-mono,
+.perf-code {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.perf-code {
+  display: block;
+  margin-top: var(--space-2);
+  padding: 12px 14px;
+  overflow-x: auto;
+  color: var(--text-primary);
+  background: var(--bg-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+}
+
+.perf-section-label {
+  color: var(--text-unread);
+  font-size: var(--font-size-ui-xs);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+/* ---- The one stat cell ---- */
+
+.perf-kv {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--border-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: var(--radius-md);
+}
+
+.perf-kv > div {
+  min-width: 0;
+  height: 72px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--bg-kv);
+}
+
+.perf-kv dt {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.perf-kv dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Requests by way in ---- */
+
+.perf-doors,
+.perf-models,
+.perf-uncollected__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.perf-doors {
+  border-top: 1px solid var(--border-list);
+}
+
+.perf-door {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.perf-door:first-child {
+  border-top: 0;
+}
+
+.perf-door__name {
+  flex: 0 0 150px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+}
+
+.perf-door__text {
+  min-width: 0;
+  display: grid;
+  flex: 1 1 auto;
+  gap: 2px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.perf-door > .status-pill {
+  flex: 0 0 auto;
+}
+
+.perf-models > li {
+  overflow: hidden;
+  font-size: var(--font-size-ui-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.perf-uncollected__list {
+  display: grid;
+  gap: 6px;
+  font-size: var(--font-size-ui-xs);
+}
+
+.perf-uncollected__list strong {
+  font-weight: 500;
+}
+
+/* ---- Advanced: the per-machine table ---- */
+
+.perf-table-scroll {
+  overflow-x: auto;
+}
+
+.perf-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  font-size: var(--font-size-ui-sm);
+}
+
+.perf-table th,
+.perf-table td {
+  padding: 10px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.perf-table thead th {
+  padding-block: 8px;
+  color: var(--text-faint-label);
+  font-weight: 500;
+}
+
+.perf-table tbody th {
+  font-weight: 400;
+}
+
+.perf-table tbody tr {
+  border-top: 1px solid var(--border-hairline);
+}
+
+.perf-table .perf-table__verdict {
+  min-width: 220px;
+  white-space: normal;
+}
+
+/* ---- Advanced: model usage and the profile ---- */
+
+.perf-usage {
+  display: grid;
+  gap: 10px;
+}
+
+.perf-usage + .perf-usage {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-list);
+}
+
+.perf-usage__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.perf-usage__name {
+  min-width: 0;
+  font-size: var(--font-size-ui);
+}
+
+.perf-usage__name strong {
+  font-weight: 500;
+}
+
+.perf-usage__name .perf-muted {
+  font-size: var(--font-size-ui-xs);
+}
+
+.perf-captures {
+  border-top: 1px solid var(--border-list);
+}
+
+.perf-capture {
+  padding: 8px 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.perf-capture:first-child {
+  border-top: 0;
+}
+
+.perf-capture__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.perf-capture__text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.perf-capture__text strong {
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+}
+
+.perf-capture__details {
+  margin-top: 6px;
+  font-size: var(--font-size-ui-xs);
+}
+
+.perf-capture__details > summary {
+  min-height: 24px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.perf-capture__details ol {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.perf-capture__details li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.perf-capture__details .perf-kv {
+  margin-top: 6px;
+}
+
+.perf-profile__symbol-pct,
+.perf-profile__offcpu-us,
+.perf-profile__kernel-us,
+.perf-profile__kernel-cat-pct {
+  min-width: 56px;
+  font-family: var(--font-family-data);
+}
+
+.perf-profile__kernel-cat-text {
+  display: grid;
+}
+
+.perf-profile__kernel-cat-desc {
+  color: var(--text-muted);
+}
+
+/* ---- Narrower screens ---- */
+
+@media (max-width: 1200px) {
+  .perf-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .perf-rows-2 {
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .perf-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .perf-span-1,
+  .perf-span-2 {
+    grid-column: 1 / -1;
+  }
+
+  .perf-kv {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .perf-card__head,
+  .perf-card__body {
+    padding: var(--space-4);
+  }
+
+  .perf-door {
+    flex-wrap: wrap;
+  }
+
+  .perf-door__name {
+    flex-basis: 100%;
+  }
+
+  .perf-capture__details > summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+
+  .perf-card__head .ui-button {
+    min-height: 44px;
+  }
+}

@@ -1,0 +1,461 @@
+/*
+ * Cluster > Activity (VD-200, the ClusterActivity and ClusterActivityAlerts
+ * boards). Tokens only; 12 px is the floor for every text (VD-191).
+ */
+
+/* Operations and the audit trail side by side; one column below 1100 px. */
+.cl-act__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  /* Cards in one row share one height, so their footers and actions line up
+     (polish cause 7; LESSONS 6). The card is a flex column whose body grows. */
+  align-items: stretch;
+  min-width: 0;
+}
+
+@media (max-width: 1200px) {
+  .cl-act__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.cl-act__chips {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-list);
+}
+
+.cl-act__note {
+  padding: 14px 18px;
+}
+
+.cl-act__empty {
+  margin: 0;
+  padding: 18px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-act__op-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cl-act__op {
+  border-bottom: 1px solid var(--border-list);
+}
+
+.cl-act__op.is-open {
+  background: var(--bg-row-active);
+}
+
+.ui-button.cl-act__op-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 72px;
+  padding: 14px 18px;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ui-button.cl-act__op-row:hover {
+  background: var(--bg-hover);
+}
+
+.ui-button.cl-act__op-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.cl-act__op-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cl-act__op-text strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.cl-act__op-text span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.cl-act__op-side {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  max-width: 300px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-act__op-side .status-pill {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
+
+@media (max-width: 720px) {
+  .ui-button.cl-act__op-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .cl-act__op-side {
+    grid-column: 2;
+    grid-auto-flow: column;
+    justify-content: space-between;
+    align-items: center;
+    max-width: none;
+  }
+}
+
+.cl-act__op-detail {
+  display: grid;
+  gap: 12px;
+  padding: 0 18px 16px calc(18px + 34px + 14px);
+  font-size: var(--font-size-ui-sm);
+}
+
+@media (max-width: 720px) {
+  .cl-act__op-detail {
+    padding-left: 18px;
+  }
+}
+
+.cl-act__technical summary {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  cursor: pointer;
+}
+
+.cl-act__technical .cl-facts {
+  margin-top: 10px;
+}
+
+.cl-act__technical code {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.cl-act__owner:empty {
+  display: none;
+}
+
+.cl-act__pager {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+/* The audit trail's search, in the card header. */
+.cl-act__search {
+  position: relative;
+  width: min(100%, 260px);
+}
+
+.cl-act__search > svg {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  z-index: 1;
+  /* ICON_SIZE.inline: an even size also keeps the -50% lift on a whole pixel. */
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.cl-act__search .ui-field {
+  margin: 0;
+}
+
+/* A header-toolbar search, not a form field: the compact height on a desktop
+   and the full touch target on a phone or touch screen (the token says which). */
+.cl-act__search .ui-control {
+  block-size: var(--control-height-compact);
+  min-height: 0;
+  padding-left: calc(14px + 16px + 8px);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-act__audit .ui-card__header {
+  flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+  .cl-act__search {
+    width: 100%;
+  }
+}
+
+.cl-act__audit-action {
+  display: grid;
+  gap: 2px;
+}
+
+.cl-act__audit-action strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.cl-act__audit-action span,
+.cl-act__target {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.cl-act__target code {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-family-data);
+}
+
+/* A phone's tap target is 44 px, the two disclosure summaries included
+   (VD-200 review S6: they were 16 px tall). */
+@media (max-width: 720px) {
+  .cl-act__technical summary,
+  .cl-act__target summary {
+    box-sizing: border-box;
+    min-height: 44px;
+    padding-block: 12px;
+  }
+}
+
+.cl-act__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  text-decoration: none;
+}
+
+.cl-act__link:hover {
+  color: var(--accent-text);
+}
+
+/* ICON_SIZE.inline. */
+.cl-act__link svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Alerts: three cards side by side, one column on narrow screens. */
+.cl-alerts__title {
+  margin: 0;
+  font-size: var(--font-size-heading-sm);
+  font-weight: 500;
+}
+
+.cl-alerts__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  /* Cards in one row share one height, so their footers and actions line up
+     (polish cause 7; LESSONS 6). The card is a flex column whose body grows. */
+  align-items: stretch;
+  min-width: 0;
+}
+
+@media (max-width: 1200px) {
+  .cl-alerts__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.cl-alerts__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cl-alerts__pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .cl-alerts__pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.cl-alerts__lead {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.cl-alerts__lead p,
+.cl-alerts .cl-card__body > p.cl-meta {
+  margin: 0;
+}
+
+.cl-alerts__items {
+  display: grid;
+  gap: 12px;
+}
+
+.cl-alerts__item {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  background: var(--bg-control);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+}
+
+.cl-alerts__item-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cl-alerts__item-top > div {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.cl-alerts__item-top small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-alerts__item-top h3 {
+  margin: 2px 0 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.cl-alerts__item p {
+  margin: 0;
+}
+
+.cl-alerts__reading {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.cl-alerts__grants {
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+/* The delivery channels card: the Assistant's panel, headless, in a Cluster
+   card a third of the row wide. Its own list and form stack in one column. */
+.cl-alerts__channels {
+  min-width: 0;
+}
+
+.cl-alerts__channels .ar-channels__body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.cl-alerts__channels .ar-step__hint {
+  margin: 0;
+}
+
+/* The audit table's time and result never break mid-word. */
+.cl-act__audit .ui-table td:nth-child(3),
+.cl-act__audit .ui-table td:nth-child(4) {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .cl-act__audit .ui-card__actions {
+    flex: 1 1 100%;
+  }
+}
+
+/* The audit card stacks by its own width: beside the operations card at
+   1280 px it is about 480 px wide, where four columns once scrolled the table
+   sideways inside the card and left the action ~85 px. Below 600 px each event
+   is a block - the action and target across the card, the time and result
+   under them, never beside the content. */
+.cl-act__audit .ui-table-scroll {
+  container-type: inline-size;
+}
+
+@container (max-width: 599px) {
+  .cl-act__audit .ui-table,
+  .cl-act__audit .ui-table tbody {
+    display: block;
+  }
+
+  .cl-act__audit .ui-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .cl-act__audit .ui-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-hairline);
+  }
+
+  .cl-act__audit .ui-table td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+
+  .cl-act__audit .ui-table td:nth-child(1),
+  .cl-act__audit .ui-table td:nth-child(2) {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+
+/* These are Button primitives drawn as the board draws them: the wrapper
+   spans the row, and the primitive's own weight and radius give way. */
+.ui-button-wrap:has(> .ui-button.cl-act__op-row) {
+  display: grid;
+}
+
+.ui-button.cl-act__op-row {
+  min-width: 0;
+  font-weight: 400;
+}
+
+.ui-button.cl-act__op-row,
+.ui-button.cl-act__op-row:hover:not(:disabled) {
+  border-radius: 0;
+  border-color: transparent;
+}

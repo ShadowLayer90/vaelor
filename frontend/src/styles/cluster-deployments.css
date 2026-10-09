@@ -1,0 +1,667 @@
+/*
+ * Cluster > Deployments (VD-200, the ClusterDeployments, ClusterDeploymentsModels,
+ * ClusterDialogsManage and ClusterDialogsConfirm boards): the filter bar, the
+ * deployments table with its explanation rows, the retained data rows, the
+ * endpoint and model library cards, and the service manager's tabbed dialog.
+ * Tokens only; the building blocks are styles/cluster.css.
+ */
+
+/* Filter chips on the left, Deploy an agent on the right. */
+.cl-dep-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.cl-dep-bar .ui-button,
+.cl-card__header .ui-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cl-dep-bar .ui-button svg,
+.cl-card__header .ui-button svg {
+  flex: 0 0 auto;
+}
+
+
+/* The Deployments card's GPU clustering line. */
+.cl-dep-mode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 18px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-list);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-dep-pad {
+  padding: 12px 18px 0;
+}
+
+/* The deployments table. Its box is the container the row stacks by, so the
+   sidebar's share of the viewport is counted. */
+.cl-dep-scroll {
+  container-type: inline-size;
+}
+
+.cl-dep-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-dep-table th {
+  padding: 12px 18px;
+  color: var(--text-faint-label);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.cl-dep-table td {
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-hairline);
+  vertical-align: top;
+}
+
+.cl-dep-table tr.cl-dep-sub td {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.cl-dep-sub .ui-notice {
+  margin: 0;
+}
+
+.cl-dep-sub ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.cl-dep-sub code {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-dep-name {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cl-dep-name > strong {
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.cl-dep-name > span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.cl-dep-name .cl-tags {
+  margin-top: 6px;
+}
+
+/* An outline pill without a dot (Auto-unload, Thinks before answering). */
+.cl-dep-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-xs);
+  white-space: nowrap;
+}
+
+/* "backed by gpu-model": the model's name in the model (info) hue. */
+.cl-dep-backing {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  color: var(--info-text);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-dep-where {
+  color: var(--text-secondary);
+}
+
+.cl-dep-address {
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* One line, cut with an ellipsis; the cell's title keeps the whole address.
+   Wrapped, a long address took the name's room and broke it letter by letter. */
+.cl-dep-address__text {
+  display: block;
+  max-width: 30ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The type tag and the status pill are one line each. */
+.cl-dep-table .cl-tag,
+.cl-dep-table .status-pill {
+  white-space: nowrap;
+}
+
+.cl-dep-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.cl-dep-actions .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+/* Unload, Load and Remove are the board's plain text actions; Manage is outlined. */
+.cl-dep-actions .ui-button--quiet:not(:hover):not(:focus-visible) {
+  border-color: transparent;
+  background: none;
+}
+
+/* Below about 900 px of table (a phone, a tablet, a narrow window beside the
+   sidebar) six columns left the name and the actions a few pixels and broke
+   them letter by letter: each row is drawn as a block, its notes in full. */
+@container (max-width: 899px) {
+  .cl-dep-table,
+  .cl-dep-table tbody {
+    display: block;
+  }
+
+  .cl-dep-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .cl-dep-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 14px 16px;
+    border-top: 1px solid var(--border-hairline);
+  }
+
+  .cl-dep-table tr.cl-dep-sub {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .cl-dep-table td,
+  .cl-dep-table tr.cl-dep-sub td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+
+  .cl-dep-table td.cl-dep-cell--name,
+  .cl-dep-table td.cl-dep-cell--actions,
+  .cl-dep-table tr.cl-dep-sub td {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .cl-dep-table td.cl-dep-address {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .cl-dep-address__text {
+    max-width: 100%;
+  }
+
+  .cl-dep-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .cl-dep-actions .ui-button {
+    min-height: 44px;
+  }
+}
+
+/* Retained data rows. */
+.cl-dep-retained > li {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.cl-dep-retained .cl-rows__text > strong {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-sm);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .cl-dep-retained > li {
+    flex-wrap: wrap;
+  }
+}
+
+/* Endpoint cards: label | value | Copy rows, then the keys. */
+.cl-ep-rows {
+  display: grid;
+  margin: 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.cl-ep-rows > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 134px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-list);
+}
+
+.cl-ep-rows dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cl-ep-rows dd {
+  display: contents;
+}
+
+.cl-ep-rows code {
+  min-width: 0;
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.cl-ep-rows .ui-button {
+  min-height: 36px;
+}
+
+@media (max-width: 720px) {
+  .cl-ep-rows > div {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .cl-ep-rows dt {
+    grid-column: 1 / -1;
+  }
+
+  .cl-ep-rows .ui-button {
+    min-height: 44px;
+  }
+}
+
+.cl-ep-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 14px;
+}
+
+.cl-ep-section-head > h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.cl-ep-keys {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cl-ep-keys > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.cl-ep-keys > li:first-child {
+  border-top: 0;
+}
+
+.cl-ep-keys .cl-rows__text {
+  flex: 1 1 220px;
+}
+
+.cl-ep-mint {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.cl-ep-mint > .ui-field,
+.cl-ep-mint > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .cl-ep-mint {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.cl-ep-mono {
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+/* Model library: Cache onto option cards, one box per machine. */
+.cl-lib-targets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cl-lib-targets > legend {
+  float: left;
+  margin-right: 4px;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-lib-targets .cl-opt {
+  align-items: center;
+}
+
+/* Centred here, so the checkbox drops the 3 px top margin that lines it up
+   with a first text line elsewhere; with it the box sat 1.5 px below the
+   label's centre (polish audit, row centres). */
+.cl-lib-targets .cl-opt > input {
+  margin: 0;
+}
+
+.cl-lib-node {
+  display: grid;
+  gap: 2px;
+  padding: 12px 14px;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+.cl-lib-node > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.cl-lib-node > header h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.cl-lib-models {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cl-lib-models > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 0;
+}
+
+.cl-lib-models .cl-rows__text {
+  flex: 1 1 220px;
+}
+
+/* The service manager: a wide dialog whose header carries the image and the
+   replicas pill, the key/value grid and tabs, and the review actions fixed at
+   its foot. */
+
+.cl-svc-tabs .ui-tab-set__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 14px;
+}
+
+.cl-svc-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: 12px;
+}
+
+.cl-svc-label-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 120px) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .cl-svc-label-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cl-svc-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+.cl-svc-list > li {
+  display: grid;
+  grid-template-columns: minmax(100px, 150px) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-list);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cl-svc-list > li:first-child {
+  border-top: 0;
+}
+
+.cl-svc-list strong {
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.cl-svc-list span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.cl-svc-list .cl-svc-mono {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+@media (max-width: 720px) {
+  .cl-svc-list > li {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cl-svc-output {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.cl-svc-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.cl-svc-section-head > strong,
+.cl-svc-section-head > h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+}
+
+.cl-svc-backups {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cl-svc-backups > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-list);
+}
+
+/* The researched app's member services. */
+.cl-grp-members {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cl-grp-members > li {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+}
+
+.cl-grp-members__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cl-grp-members__head > code {
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* The one-time key reveal. */
+.cl-reveal-icon {
+  display: flex;
+  justify-content: center;
+}
+
+.cl-reveal-value {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cl-reveal-value > code {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .cl-reveal-value {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.cl-reveal-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--warning-text);
+}
+
+.cl-reveal-warning svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+/* A row's tone line keeps its colour over the rows' muted detail line. */
+.cl-rows__text > .cl-lib-use {
+  color: var(--info-text);
+}
+
+.cl-rows__text > .cl-warn-text {
+  color: var(--warning-text);
+}
+
+.cl-rows__text > .cl-ep-mono {
+  color: var(--text-primary);
+}
+
+/* Copy is a plain text action, as the board draws it. */
+.cl-ep-rows .ui-button--quiet:not(:hover):not(:focus-visible) {
+  border-color: transparent;
+  background: none;
+}
+
+.cl-svc-labels {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}

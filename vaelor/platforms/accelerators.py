@@ -36,14 +36,12 @@ from .base import read_number, text
 # Re-exported: moved to `graphics_software` at the thousand-line split
 # (software inventory there, sysfs discovery here); callers of either keep working.
 from .graphics_software import (  # noqa: F401
-    GPU_GFX_POWER_FIELD,
-    _amd_smi_field,
-    _amd_smi_numbers,
-    _tool_output,
-    gpu_gfx_power_watts,
-    mesa_installation,
-    rocm_installation,
+    ACCESS_BANNER, FREQUENCY_UNITS, GPU_GFX_POWER_FIELD, PERCENT_UNITS, POWER_UNITS,
+    VENDOR_TOOL_TIMEOUT_SECONDS,
+    _amd_smi_field, _amd_smi_numbers, _tool_output, gpu_gfx_power_watts,
+    integrated_amd_gpu, json_after_banner, mesa_installation, rocm_installation,
 )
+
 
 
 CARD_NAME = re.compile(r"^card\d+$")
@@ -124,7 +122,18 @@ def _hwmon_readings(device_root: Path) -> Dict[str, Any]:
     temperature = read_number(hwmon / "temp1_input")
     if temperature is not None:
         readings["temperature_c"] = round(temperature / 1000, 1)
-        readings["temperature_label"] = text(hwmon / "temp1_label") or "edge"
+        # The driver's own name for the sensor ("edge", "junction", ...), or ""
+        # when it publishes none; `gpu_temperature.sensor_from_label` names it.
+        readings["temperature_label"] = text(hwmon / "temp1_label")
+        # The sensor's own limits, when the driver publishes any (millidegrees).
+        limits = {
+            name: round(value / 1000, 1)
+            for name, value in (("warning_c", read_number(hwmon / "temp1_crit")),
+                                ("critical_c", read_number(hwmon / "temp1_emergency")))
+            if value is not None
+        }
+        if limits:
+            readings["temperature_limits"] = limits
     # power1_average is the smoothed reading the vendor tools report; fall back
     # to the instantaneous one when the driver only exposes that.
     for attribute in ("power1_average", "power1_input"):
@@ -132,6 +141,11 @@ def _hwmon_readings(device_root: Path) -> Dict[str, Any]:
         if micro_watts is not None and micro_watts > 0:
             readings["power_watts"] = round(micro_watts / 1_000_000, 1)
             break
+    # A board power cap: published by a discrete card's driver, not by an
+    # integrated part's (`gpu_telemetry.hwmon_power_is_gpu_power`).
+    cap = read_number(hwmon / "power1_cap")
+    if cap is not None and cap > 0:
+        readings["power_cap_watts"] = round(cap / 1_000_000, 1)
     frequency = read_number(hwmon / "freq1_input")
     if frequency is not None and frequency > 0:
         readings["clock_mhz"] = round(frequency / 1_000_000)
@@ -405,17 +419,68 @@ def device_grants(
 #: amd-smi's total absence is the only true "not installed".
 ROCM_AMD_SMI = "/opt/rocm/bin/amd-smi"
 
+#: AMD's amd-smi package on its own (VD-194, measured on the worker 2026-10-04):
+#: only the ``amdrocm-core<series>-gfx…`` package registers ``/opt/rocm/bin`` and
+#: the ``/usr/bin/amd-smi`` alternative, so a machine that has only
+#: ``amdrocm-amdsmi<series>`` has AMD's build at this path and nowhere else.
+#: The series is read from the installed package, never from a constant, so a
+#: newer series installed because the pinned one is gone is still found.
+ROCM_CORE_AMD_SMI = "/opt/rocm/core-{series}/bin/amd-smi"
+AMD_SMI_PACKAGE_PREFIX = "amdrocm-amdsmi"
+DPKG_STATUS = "/var/lib/dpkg/status"
+
+
+def _is_series(text: str) -> bool:
+    """``<major>.<minor>``, digits only (``7.14``)."""
+    parts = text.split(".")
+    return len(parts) == 2 and all(part.isascii() and part.isdigit() for part in parts)
+
+
+def _series_key(series: str) -> tuple:
+    return tuple(int(part) for part in series.split("."))
+
+
+def installed_amd_smi_series(status_path: str = DPKG_STATUS) -> Optional[str]:
+    """The newest ``amdrocm-amdsmi<series>`` dpkg holds installed, or ``None``.
+
+    Read from dpkg's own status file, with no subprocess: the GPU sampler
+    resolves amd-smi every sample, under a sandbox with no capabilities.
+    """
+    try:
+        with open(status_path, "r", encoding="utf-8", errors="replace") as handle:
+            stanzas = handle.read().split("\n\n")
+    except OSError:
+        return None
+    found = []
+    for stanza in stanzas:
+        fields = dict(line.split(": ", 1) for line in stanza.splitlines()
+                      if ": " in line and not line.startswith(" "))
+        name = fields.get("Package", "")
+        series = name[len(AMD_SMI_PACKAGE_PREFIX):]
+        if (name.startswith(AMD_SMI_PACKAGE_PREFIX) and _is_series(series)
+                and fields.get("Status", "").endswith(" installed")):
+            found.append(series)
+    return max(found, key=_series_key) if found else None
+
 
 def resolve_amd_smi(
     finder: Callable[[str], Optional[str]] = shutil.which,
     rocm_amd_smi: Optional[str] = None,
+    core_amd_smi: Optional[str] = None,
 ) -> Optional[str]:
-    """The ``amd-smi`` to run, ROCm build first (see :data:`ROCM_AMD_SMI`), then
-    ``finder`` on PATH; ``rocm_amd_smi`` overrides the ROCm path, read at call
-    time so a test can redirect it without binding it into a default at import."""
+    """The ``amd-smi`` to run: the ROCm build at :data:`ROCM_AMD_SMI` first,
+    then AMD's package alone at :data:`ROCM_CORE_AMD_SMI` for the installed
+    series, then ``finder`` on PATH (Ubuntu's build, which publishes no APU
+    field). ``rocm_amd_smi`` and ``core_amd_smi`` override the two paths, read
+    at call time so a test can redirect them without binding them at import."""
     candidate = rocm_amd_smi if rocm_amd_smi is not None else ROCM_AMD_SMI
     if os.access(candidate, os.X_OK):
         return candidate
+    if core_amd_smi is None:
+        series = installed_amd_smi_series()
+        core_amd_smi = ROCM_CORE_AMD_SMI.format(series=series) if series else ""
+    if core_amd_smi and os.access(core_amd_smi, os.X_OK):
+        return core_amd_smi
     return finder("amd-smi")
 
 
@@ -440,129 +505,45 @@ def enrich_from_vendor_tool(
     poll path goes through :func:`cached_vendor_tool_metrics`, which holds the
     result for :data:`VENDOR_TOOL_CACHE_SECONDS` and reports its own age.
     """
+    # ``failure`` says WHICH way the read failed (`gpu_vendor_status` turns it
+    # into a status code); ``banner`` says the access banner preceded the output.
     executable = resolve_amd_smi(finder)
     if not executable:
-        return {"available": False, "reason": "amd-smi is not installed.", "metrics": {}}
+        return {"available": False, "reason": "amd-smi is not installed.", "metrics": {}, "failure": "absent"}
     try:
         result = runner(
             [executable, "metric", "--json"],
-            capture_output=True, text=True, check=False, timeout=5,
+            capture_output=True, text=True, check=False, timeout=VENDOR_TOOL_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        return {"available": False, "reason": str(error), "metrics": {}}
+        timed_out = isinstance(error, subprocess.TimeoutExpired)
+        return {
+            "available": False, "reason": str(error), "metrics": {},
+            "failure": "timeout" if timed_out else "unreadable",
+        }
     if getattr(result, "returncode", 1) != 0:
         return {
             "available": False,
             "reason": "amd-smi exited with status {}.".format(result.returncode),
-            "metrics": {},
+            "metrics": {}, "failure": "unreadable",
         }
     parsed = _json_body(result.stdout)
     if parsed is None:
         return {
             "available": False,
             "reason": "amd-smi returned output that is not JSON.",
-            "metrics": {},
+            "metrics": {}, "failure": "unreadable",
         }
-    return {"available": True, "reason": "", "metrics": parsed}
+    return {
+        "available": True, "reason": "", "metrics": parsed,
+        "banner": ACCESS_BANNER in (result.stdout or ""),
+    }
 
 
-def _json_body(output: str) -> Any:
-    """Parse ``amd-smi --json`` output that may be preceded by a banner.
-
-    Measured: a reader outside the ``render`` group gets 535 bytes of
-    "Permission needed to access required GPU device node(s)" on *stdout*,
-    ahead of a complete and valid JSON document, and ``amd-smi`` still exits 0.
-    ``json.loads`` threw, the whole result was discarded, and everything
-    downstream — including the NPU power and activity fields, which need no GPU
-    device node at all — read as though the tool were not installed. The banner
-    is a fact about one account's groups; refusing the reading over it turns
-    that into a claim about the hardware.
-    """
-    text_out = output or ""
-    brace = text_out.find("{")
-    for candidate in (text_out, text_out[brace:] if brace > 0 else ""):
-        if not candidate.strip():
-            continue
-        try:
-            return json.loads(candidate)
-        except ValueError:
-            continue
-    return None
-
-
-def accelerator_telemetry(
-    accelerators: Optional[List[Dict[str, Any]]] = None,
-    sys_root: str = "/sys",
-    finder: Callable[[str], Optional[str]] = shutil.which,
-    runner: Callable[..., Any] = subprocess.run,
-    *,
-    now: Optional[float] = None,
-) -> Dict[str, Any]:
-    """Return the ``gpu_*`` telemetry keys for the primary accelerator.
-
-    Keys are omitted entirely when the underlying sysfs attribute is absent.
-    A missing sensor is not zero, and reporting ``0`` for an unreadable GPU
-    temperature is how a dashboard ends up claiming a running GPU is at 0 °C.
-
-    Power is sourced by capability (see :func:`_add_gpu_power`): hwmon for a
-    discrete card, the ``amd-smi`` graphics channel for an integrated Radeon.
-    ``finder`` and ``runner`` reach that tool and let a test inject it; the poll
-    path takes the default cached reader.
-    """
-    records = (
-        discover_accelerators(sys_root) if accelerators is None else accelerators
-    )
-    if not records:
-        return {}
-    primary = records[0]
-    mapping = (
-        ("gpu_temperature_c", "temperature_c"),
-        ("gpu_clock_mhz", "clock_mhz"),
-        ("gpu_busy_percent", "busy_percent"),
-        ("gpu_vram_used_bytes", "vram_used_bytes"),
-        ("gpu_vram_total_bytes", "vram_total_bytes"),
-        ("gpu_gtt_used_bytes", "gtt_used_bytes"),
-        ("gpu_gtt_total_bytes", "gtt_total_bytes"),
-    )
-    telemetry: Dict[str, Any] = {}
-    for key, source in mapping:
-        value = primary.get(source)
-        if value is not None:
-            telemetry[key] = value
-    _add_gpu_power(telemetry, primary, finder, runner, now)
-    if telemetry:
-        telemetry["gpu_name"] = primary.get("name")
-    return telemetry
-
-
-def _add_gpu_power(
-    telemetry: Dict[str, Any],
-    primary: Dict[str, Any],
-    finder: Callable[[str], Optional[str]],
-    runner: Callable[..., Any],
-    now: Optional[float],
-) -> None:
-    """Set ``gpu_power_watts`` from the channel that is correct for this part.
-
-    On an integrated Radeon, ``amd-smi`` :data:`GPU_GFX_POWER_FIELD` is the
-    graphics engine's own draw; the hwmon ``power1_average`` this module reads
-    for a discrete card is SoC package power there and must NOT stand in for it
-    (LESSONS 4 / VD-040 — the NPU_POWER_SUBSTITUTION_WARNING class). When the
-    gfx channel is unreadable the reading is omitted, never back-filled with the
-    package number.
-    """
-    integrated = primary.get("unified_memory") is True and primary.get("vendor") == "AMD"
-    if integrated:
-        metrics = cached_vendor_tool_metrics([primary], finder, runner, now=now)
-        gfx = gpu_gfx_power_watts(metrics.get("metrics")) if metrics.get("available") else None
-        if gfx is not None:
-            telemetry["gpu_power_watts"] = gfx
-            telemetry["gpu_power_source"] = GPU_GFX_POWER_FIELD
-        return
-    power = primary.get("power_watts")
-    if power is not None:
-        telemetry["gpu_power_watts"] = power
-        telemetry["gpu_power_source"] = "hwmon power1_average"
+#: ``amd-smi --json`` output may be preceded by a permission banner on stdout
+#: (measured: the tool still exits 0 and the document is complete). The reader
+#: that skips it lives in `graphics_software`, where the profiler shares it.
+_json_body = json_after_banner
 
 
 def _group_members(name: str) -> Optional[List[str]]:
@@ -665,7 +646,7 @@ def npu_activity_percent(metrics: Any) -> Optional[float]:
     Returns ``None`` when the field is absent. It is never reported as zero on
     the strength of a missing measurement.
     """
-    numbers = _amd_smi_numbers(_amd_smi_field(metrics, NPU_ACTIVITY_FIELD))
+    numbers = _amd_smi_numbers(_amd_smi_field(metrics, NPU_ACTIVITY_FIELD), PERCENT_UNITS)
     return round(max(numbers), 1) if numbers else None
 
 
@@ -678,13 +659,13 @@ def npu_power_watts(metrics: Any) -> Optional[float]:
     publishes it, and a measured 2.15 W on a Ryzen AI Max is what proved the
     constant wrong. Absence is now decided by looking, every time.
     """
-    numbers = _amd_smi_numbers(_amd_smi_field(metrics, NPU_POWER_FIELD))
+    numbers = _amd_smi_numbers(_amd_smi_field(metrics, NPU_POWER_FIELD), POWER_UNITS)
     return round(max(numbers), 2) if numbers else None
 
 
 def npu_clock_mhz(metrics: Any) -> Optional[float]:
     """Neural-processor clock frequency from ``amd-smi metric`` output."""
-    numbers = _amd_smi_numbers(_amd_smi_field(metrics, NPU_CLOCK_FIELD))
+    numbers = _amd_smi_numbers(_amd_smi_field(metrics, NPU_CLOCK_FIELD), FREQUENCY_UNITS)
     return round(max(numbers)) if numbers else None
 
 
@@ -731,16 +712,6 @@ def configured_graphics_memory(sys_root: str = "/sys") -> Dict[str, Any]:
         "source": "hp-bioscfg/{}".format(GRAPHICS_MEMORY_ATTRIBUTE),
         "reason": "",
     }
-
-
-#: Fields worth taking from the rest of ``amd-smi metric``. Deliberately not
-#: the 16 per-core power, clock and C0 values: 48 numbers per poll is a cost
-#: with no reader, and anything wanting them can ask for a one-off report.
-AMD_SMI_HEALTH_FIELDS = (
-    ("gpu_soc_temperature_c", "soc_temperature"),
-    ("gpu_dram_bandwidth_gbps", "dram_bandwidth"),
-    ("system_power_watts", "psys"),
-)
 
 
 #: Telemetry key for neural-processor utilisation. Named separately from the
@@ -998,3 +969,8 @@ def accelerator_summary(
             "npu": device_grants(["npu"]),
         },
     }
+
+
+# Moved to `gpu_telemetry` at the thousand-line limit (VD-147 review); re-exported
+# so every caller of `accelerators.accelerator_telemetry` keeps working.
+from .gpu_telemetry import accelerator_telemetry, hwmon_power_is_gpu_power  # noqa: E402,F401

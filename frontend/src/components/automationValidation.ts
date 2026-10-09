@@ -23,5 +23,15 @@ export const triggerLimits: Record<string, [number, number]> = {
   fan_failure: [1, 1],
 };
 
+// The signals a per-worker alert can be built on, mirroring the `worker` flags on
+// TRIGGER_SOURCES in vaelor/automations.py. A worker also reports disk, network
+// and fan readings (VD-205 item 6), but no worker alert signal is derived from
+// them yet, and service failures and the fan-failure signal are controller-only,
+// so the target selector limits the source list to these when a worker is picked.
+export const workerCapableSources = ["cpu_temperature", "memory_percent"];
+
+export const isWorkerCapableSource = (source: string) =>
+  workerCapableSources.includes(source);
+
 export const isValidTriggerThreshold = (source: string, value: number) =>
   Boolean(triggerLimits[source] && Number.isFinite(value) && value >= triggerLimits[source][0] && value <= triggerLimits[source][1]);

@@ -31,6 +31,7 @@ from .model_calibration import (
     unmeasured_profile,
 )
 from .runtime_paths import state_path
+from .hosted_providers import OFF_MACHINE_KINDS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -284,7 +285,7 @@ def calibrate_if_unmeasured(connection: Optional[Mapping[str, str]]) -> bool:
     """
     if not connection or not connection.get("base_url"):
         return False
-    if connection.get("provider") == "openai":
+    if connection.get("provider") in OFF_MACHINE_KINDS:
         # A hosted frontier endpoint bills for the probe. Measuring one stays
         # something an operator asks for, never something a restart buys.
         return False

@@ -43,6 +43,105 @@ EXCLUDED_MOUNT_PREFIXES = ("/boot", "/snap", "/var/snap", "/var/lib/docker")
 MINIMUM_REPORTED_VOLUME_BYTES = 4 * 1024 ** 3
 
 
+def filesystem_bytes(
+    path: str, *, disk_usage: Callable[[str], Any] = shutil.disk_usage,
+) -> Optional[dict[str, int]]:
+    """Total, used and free bytes of the filesystem holding ``path``, or ``None``.
+
+    The same ``shutil.disk_usage`` the controller's storage answer
+    (`linux_storage`) reads, so a worker's "free" means what the controller's
+    does. On Linux that is ``statvfs``: total is ``f_blocks * f_frsize``, used
+    is ``(f_blocks - f_bfree) * f_frsize``, and free is ``f_bavail * f_frsize``
+    - what an unprivileged writer may still use - so ``used + free`` falls
+    short of ``total`` by the filesystem's reserved blocks. ``None`` when the
+    filesystem cannot be read or reports no size: unread, never zero bytes
+    (VD-205 item 6).
+    """
+    try:
+        usage = disk_usage(path)
+        total = int(usage.total)
+        used = int(usage.used)
+        free = int(usage.free)
+    except (OSError, AttributeError, TypeError, ValueError):
+        return None
+    if total <= 0:
+        return None
+    return {"total_bytes": total, "used_bytes": used, "free_bytes": free}
+
+
+def is_physical_interface(sys_root: str, name: str) -> bool:
+    """Whether the kernel ties network interface ``name`` to a hardware device.
+
+    The rule is the kernel's own: a NIC backed by a device - Ethernet, Wi-Fi,
+    a Thunderbolt network link, a USB adapter - has a ``device`` link under
+    ``/sys/class/net/<name>``; a software interface does not. That excludes
+    loopback, Docker's bridges and ``veth`` pairs, ``br-*``, ``virbr*``,
+    ``tun``/``tap``, WireGuard and bonds without a name list to keep current.
+    Counting them would double-count: container traffic crosses its ``veth``,
+    its bridge and then the physical NIC, and a bond's traffic is its members'.
+    """
+    if not name or name in {".", "..", "lo"} or "/" in name:
+        return False
+    return (Path(sys_root) / "class" / "net" / name / "device").exists()
+
+
+def physical_interface_counters(
+    proc_root: str = "/proc", sys_root: str = "/sys",
+) -> dict[str, tuple[int, int]]:
+    """``{interface: (received_bytes, sent_bytes)}`` for the physical NICs.
+
+    Read from ``/proc/net/dev``; an interface failing
+    :func:`is_physical_interface` or carrying an unparseable line is left out.
+    Empty when the counters cannot be read at all.
+    """
+    try:
+        text = (Path(proc_root) / "net" / "dev").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    counters: dict[str, tuple[int, int]] = {}
+    for line in text.splitlines()[2:]:
+        if ":" not in line:
+            continue
+        name, raw = line.split(":", 1)
+        name = name.strip()
+        if not is_physical_interface(sys_root, name):
+            continue
+        fields = raw.split()
+        try:
+            counters[name] = (int(fields[0]), int(fields[8]))
+        except (IndexError, ValueError):
+            continue
+    return counters
+
+
+def network_rates(
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+    elapsed_seconds: float,
+) -> dict[str, float]:
+    """Received and sent bytes per second between two counter reads, or ``{}``.
+
+    No rate - not a zero, not a negative - when there is nothing to measure:
+    no physical interface, no time between the reads, an interface that came
+    or went between them, or a counter that went backwards (a 32-bit wrap or a
+    driver reset). A link that moved no bytes between two good reads is a
+    measured 0 and is reported (VD-205 item 6).
+    """
+    if not before or set(before) != set(after) or not elapsed_seconds > 0:
+        return {}
+    received = sent = 0
+    for name, (first_rx, first_tx) in before.items():
+        last_rx, last_tx = after[name]
+        if last_rx < first_rx or last_tx < first_tx:
+            return {}
+        received += last_rx - first_rx
+        sent += last_tx - first_tx
+    return {
+        "net_rx_bytes_per_second": round(received / elapsed_seconds, 1),
+        "net_tx_bytes_per_second": round(sent / elapsed_seconds, 1),
+    }
+
+
 class LinuxTelemetryProvider:
     def __init__(
         self,

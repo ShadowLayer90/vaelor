@@ -1,0 +1,382 @@
+/*
+ * Activity (VD-200, the Activity, ActivityOperation, ActivityAudit and
+ * ActivityCheckpoints boards): the filter pills, the list beside the selected
+ * operation, the audit table and the restore points card.
+ */
+
+.acty-page,
+.acty-operations {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Filters: outline pills with their count; the chosen one is solid orange. */
+.acty-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ui-button.acty-filter {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui);
+  cursor: pointer;
+}
+
+.ui-button.acty-filter:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.ui-button.acty-filter:focus-visible {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--accent-deep);
+  outline: none;
+}
+
+.acty-filter__count {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ui-button.acty-filter--on {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.ui-button.acty-filter--on:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.acty-filter--on .acty-filter__count {
+  color: var(--text-on-accent);
+}
+
+/* The list and the selected operation side by side; stacked on a phone. */
+.acty-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.acty-split--list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.acty-row--static {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.acty-row--static:first-child {
+  border-top: 0;
+}
+
+.acty-list .ui-button-wrap {
+  display: block;
+}
+
+.ui-button.acty-row {
+  width: 100%;
+  flex-wrap: wrap;
+  min-height: 0;
+  justify-content: flex-start;
+  border-radius: 0;
+  font-weight: 400;
+  transform: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  color: var(--text-primary);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--border-list);
+  cursor: pointer;
+}
+
+.acty-list .ui-button-wrap:first-child .acty-row {
+  border-top: 0;
+}
+
+.ui-button.acty-row:hover:not(:disabled) {
+  border-color: var(--border-list);
+  background: var(--bg-row-hover);
+}
+
+.ui-button.acty-row:focus-visible {
+  border-color: var(--border-list);
+  box-shadow: none;
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.ui-button.acty-row--selected,
+.ui-button.acty-row--selected:hover:not(:disabled) {
+  background: var(--bg-row-active);
+  box-shadow: inset 0 0 0 1px var(--border-row-active);
+}
+
+.acty-row__text {
+  flex: 1 1 150px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.acty-row__text strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.acty-row__text small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.acty-row .status-pill {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.acty-list__notice {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+}
+
+.acty-list__notice p,
+.acty-list__empty {
+  margin: 0;
+}
+
+.acty-list__empty {
+  padding: 16px 18px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+/* The selected operation: its own header, then the shared owner view drawn
+   flat inside this card rather than as a second card. */
+.acty-detail .ui-card__titles {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+}
+
+.acty-detail .ui-card__titles > p {
+  display: contents;
+}
+
+.acty-detail__icon {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+}
+
+.acty-detail__eyebrow {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.acty-detail .ui-card__titles > h2 {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.acty-detail .ui-card__body {
+  padding: 0;
+}
+
+.acty-detail .ui-card__body > .ui-notice {
+  margin: 16px 18px 0;
+}
+
+.acty-detail__owner > .operation-owner {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.acty-detail__owner > .operation-owner > .ui-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+}
+
+.acty-detail__note {
+  margin: 0;
+}
+
+.acty-detail__technical {
+  padding-top: 14px;
+  border-top: 1px solid var(--border-row);
+}
+
+.acty-detail__technical summary {
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+  cursor: pointer;
+}
+
+.acty-detail__technical code {
+  font-family: var(--font-family-data);
+}
+
+/* Audit: the search in the card header, a quiet table beneath. */
+.acty-audit .ui-card__header {
+  flex-wrap: wrap;
+}
+
+.acty-search {
+  position: relative;
+  width: min(100%, 350px);
+}
+
+.acty-search .ui-field {
+  gap: 0;
+}
+
+.acty-search__icon {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  z-index: 1;
+  color: var(--text-muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.acty-search .acty-search__input {
+  min-height: 38px;
+  padding-left: 36px;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui);
+}
+
+.acty-table-wrap {
+  overflow-x: auto;
+}
+
+.acty-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-ui-sm);
+}
+
+.acty-table th {
+  padding: 12px 18px;
+  color: var(--text-faint-label);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.acty-table td {
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-hairline);
+  vertical-align: middle;
+}
+
+.acty-table td:first-child {
+  color: var(--text-primary);
+}
+
+.acty-table__wrap {
+  overflow-wrap: anywhere;
+}
+
+.acty-table .audit-target summary {
+  cursor: pointer;
+}
+
+.acty-table .audit-target code {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.acty-restore-points .ui-card__actions .ui-button {
+  gap: 8px;
+}
+
+@media (max-width: 1024px) {
+  .acty-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A phone reads each audit event as a short card rather than a wide row. */
+@media (max-width: 720px) {
+  .ui-button.acty-filter {
+    min-height: 44px;
+  }
+
+  .ui-button.acty-row {
+    padding-inline: var(--space-4);
+  }
+
+  .acty-search {
+    width: 100%;
+  }
+
+  .acty-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .acty-table,
+  .acty-table tbody,
+  .acty-table tr,
+  .acty-table td {
+    display: block;
+  }
+
+  .acty-table tr {
+    padding: 12px var(--space-4);
+    border-top: 1px solid var(--border-hairline);
+  }
+
+  .acty-table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 3px 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .acty-table td::before {
+    content: attr(data-label);
+    color: var(--text-faint-label);
+    text-align: left;
+  }
+}

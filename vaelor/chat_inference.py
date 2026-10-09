@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import socket
 import time
@@ -11,6 +12,9 @@ import urllib.request
 from typing import Any, Dict, Optional
 
 from .credential_broker import CredentialError
+from .credential_use import note_credential_use
+from .usage_rollup import SOURCE_AI_CHAT
+from .gpu_serving_target import AI_CHAT_HELD_BY_CLUSTER, gpu_cluster_mode_active
 from .inference_client import (
     MAX_INFERENCE_SECONDS,
     inference_timeout,
@@ -23,8 +27,33 @@ from .model_profiles import (
     reasoning_headroom_tokens,
 )
 from .model_reachability import note_inference_outcome, recorded_failures
+from .managed_local_credentials import PREFIX as MANAGED_LOCAL_PREFIX
+from .model_credential_roles import (
+    AI_CHAT_NEVER_ON_THE_ASSISTANT_NPU, ai_chat_may_use, ai_chat_may_use_lease,
+)
 from .provider_runtime import assistant_budget, managed_local_connection
-from .local_inference_gate import LocalModelBusy, local_inference_slot
+from .session_affinity import session_headers
+from .chat_hosted import HostedChatError, answer_hosted, read_thinking
+from .chat_thinking import (
+    ThinkingSettingError,
+    plan as thinking_plan,
+    refusal_sentence,
+    refused_setting,
+    thinking_result,
+    thinking_view,
+)
+from .hosted_transport import error_type_of, redact
+from .hosted_providers import HOSTED_ANSWER_TOKENS, HOSTED_KINDS
+from .local_inference_gate import (
+    LocalModelBusy,
+    cluster_inference_slot,
+    local_inference_slot,
+)
+
+logger = logging.getLogger(__name__)
+
+#: What AI Chat answers when nothing it may use holds its lease.
+CHOOSE_AN_AI_CHAT_CONNECTION = "Choose an AI Chat connection before sending a message."
 
 
 OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -98,135 +127,12 @@ def managed_local_answer_tokens(connection) -> int:
 MANAGED_LOCAL_CHAT_SECONDS = 120
 
 
-# Reasoning models narrate to themselves before answering. Whether that
-# narration reaches the user depends entirely on the serving stack, and when it
-# does it arrives glued to the reply - "The user asks ... Must explain how to
-# check.I don't have access to your sensors" - which reads as the assistant
-# talking about the user in the third person. These are the shapes that can be
-# separated deterministically; see visible_answer for the shape that cannot.
-_CLOSING_REASONING_TAG = re.compile(
-    r"<\s*/\s*(?:think|thinking|reason|reasoning|analysis|scratchpad)\s*>",
-    re.IGNORECASE,
+# The reasoning-tag and memory text helpers live in `chat_answer_text` (split
+# for the line ceiling, VD-206); re-exported because importers spell them here.
+from .chat_answer_text import (  # noqa: E402,F401 - re-exported
+    neutralized_memory,
+    visible_answer,
 )
-_REASONING_TAG = re.compile(
-    r"<\s*/?\s*(?:think|thinking|reason|reasoning|analysis|scratchpad)\s*>",
-    re.IGNORECASE,
-)
-# The harmony format used by gpt-oss models labels each segment with a channel.
-# Only the final channel is meant to be read.
-_HARMONY_FINAL = re.compile(
-    r"<\|channel\|>\s*final\s*<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|\Z)",
-    re.IGNORECASE | re.DOTALL,
-)
-_HARMONY_HIDDEN = re.compile(
-    r"<\|channel\|>\s*(?:analysis|commentary)\s*<\|message\|>"
-    r".*?(?:<\|end\|>|<\|return\|>|(?=<\|channel\|>)|\Z)",
-    re.IGNORECASE | re.DOTALL,
-)
-_HARMONY_MARKER = re.compile(r"<\|[a-z_]+\|>", re.IGNORECASE)
-# A complete narration block, matched by its own tag name so `<think>...
-# </thinking>` is not treated as a pair.
-_REASONING_BLOCK = re.compile(
-    r"<\s*(think|thinking|reason|reasoning|analysis|scratchpad)\s*>"
-    r".*?<\s*/\s*\1\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
-# Fenced and inline code, where a reasoning tag is content the user asked
-# about rather than narration the serving stack emitted.
-_CODE_REGION = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`", re.DOTALL)
-
-
-def _code_spans(text: str):
-    return [(match.start(), match.end()) for match in _CODE_REGION.finditer(text)]
-
-
-def _replace_outside_code(pattern, replacement: str, text: str) -> str:
-    """Apply a substitution everywhere except inside code."""
-    spans = _code_spans(text)
-    if not spans:
-        return pattern.sub(replacement, text)
-    result = []
-    cursor = 0
-    for start, end in spans:
-        result.append(pattern.sub(replacement, text[cursor:start]))
-        result.append(text[start:end])
-        cursor = end
-    result.append(pattern.sub(replacement, text[cursor:]))
-    return "".join(result)
-
-
-def _first_close_outside_code(text: str):
-    spans = _code_spans(text)
-    for match in _CLOSING_REASONING_TAG.finditer(text):
-        if not any(start <= match.start() < end for start, end in spans):
-            return match
-    return None
-
-
-def visible_answer(content: str, reasoning: str = "") -> str:
-    """Return only the part of a completion the user is meant to read.
-
-    Three separable cases are handled: a harmony `final` channel, a closed
-    reasoning tag, and a server that returns the scratchpad in its own field
-    and *also* prepends it to the content.
-
-    Every rule here is bounded so it can only ever remove narration. Complete
-    blocks are removed in place, so a model that narrates twice keeps both
-    pieces of real answer between them. A dangling close - the shape a serving
-    stack leaves when it swallows the opening tag - cuts at the *first* one,
-    because everything after the last one is only the tail of a multi-block
-    reply. A close with nothing after it is not a cut at all, or
-    "Answer here.</think>" would return nothing. And a tag inside a code fence
-    or inline code is text the user asked about: `</think>` in a snippet about
-    reasoning tags stays exactly where it is.
-
-    A model that emits untagged reasoning into a plain content string is not
-    separable here - there is no marker to cut on, and guessing at sentence
-    boundaries would truncate real answers. That case needs the serving stack
-    to label its output.
-    """
-    text = str(content or "")
-    final = _HARMONY_FINAL.search(text)
-    if final:
-        text = final.group(1)
-    else:
-        text = _HARMONY_HIDDEN.sub("", text)
-    text = _HARMONY_MARKER.sub("", text)
-    text = _replace_outside_code(_REASONING_BLOCK, "", text)
-    closing = _first_close_outside_code(text)
-    if closing and text[closing.end():].strip():
-        text = text[closing.end():]
-    elif closing:
-        text = text[:closing.start()]
-    text = _replace_outside_code(_REASONING_TAG, "", text)
-    narration = str(reasoning or "").strip()
-    if narration:
-        candidate = text.lstrip()
-        if candidate.startswith(narration):
-            text = candidate[len(narration):]
-    return text.strip()
-
-
-# Curated memory is reviewed content, but it is still text that was typed into
-# this appliance, and it must not be able to write the structure of the prompt
-# it lands in. Two shapes matter. An [S#] marker claims to be a citation into a
-# retrieved passage the user can open in the citation list - and a forged one
-# is not in that list, so the user is shown a reference they cannot check. A
-# block heading claims the text after it is a different kind of input
-# altogether, which is how one memory could append its own "Retrieved sources:"
-# section containing whatever it liked. Both are removed, and each memory is
-# flattened to a single line so it cannot introduce structure at all.
-_CITATION_MARKER = re.compile(r"\[\s*S\s*\d+\s*\]", re.IGNORECASE)
-_PROMPT_HEADING = re.compile(
-    r"(?:retrieved\s+sources|saved\s+appliance\s+memory[^:\n]*)\s*:", re.IGNORECASE
-)
-
-
-def neutralized_memory(content: str) -> str:
-    """One memory, reduced to something that can only be read as a memory."""
-    text = _CITATION_MARKER.sub("[citation removed]", str(content or ""))
-    text = _PROMPT_HEADING.sub("(heading removed)", text)
-    return " ".join(text.split())
 
 
 class ChatInferenceError(ValueError):
@@ -234,16 +140,139 @@ class ChatInferenceError(ValueError):
         super().__init__(message)
         self.code = code
         self.status = status
+        # The model the failed request was actually sent to, once one was
+        # chosen; "" when it failed before that. Set by `answer`, so a caller
+        # names the model that failed rather than the one its picker shows.
+        self.model = ""
+
+
+def _failed_turn(item) -> bool:
+    """Whether a stored or client-held turn is a recorded failure notice."""
+    metadata = item.get("metadata")
+    return item.get("failed") is True or (
+        isinstance(metadata, dict) and metadata.get("failed") is True
+    )
+
+
+def conversational_history(history):
+    """The earlier turns a model should be shown as the conversation so far.
+
+    A failed request is stored as an assistant turn reading "This request
+    failed: ..." so a reload can offer Retry (`rag_chat.MESSAGE_METADATA_KEYS`).
+    It is not something the model said, and handing it back as the model's own
+    earlier answer taught the model it had failed, and quoted an error to it as
+    context (ACC-112). The failure and the question it never answered are both
+    left out: the question is still unanswered, and it will be asked again as
+    the new message when the reader retries.
+    """
+    kept = []
+    for item in history or []:
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+            continue
+        if item.get("role") == "assistant" and _failed_turn(item):
+            if kept and kept[-1].get("role") == "user":
+                kept.pop()
+            continue
+        kept.append(item)
+    return kept
+
+
+#: The error code `activate` answers while the cluster holds the lease, and
+#: the status: a 409, because the request was well-formed and the appliance's
+#: current state is what refuses it. The sentence is the gate module's.
+AI_CHAT_HELD_CODE = "chat_connection_held_by_cluster"
+AI_CHAT_HELD_STATUS = 409
+
+#: What AI Chat answers while a scaled-to-zero cluster model is being woken
+#: (G3b, BL-1): a 503, because the request is well-formed and the model is
+#: simply not resident yet. The wake was already enqueued when this fires, so
+#: the client's retry a minute on lands on the warm model.
+AI_CHAT_WAKING_CODE = "chat_model_waking"
+AI_CHAT_WAKING_STATUS = 503
+AI_CHAT_WAKING_MESSAGE = (
+    "The GPU cluster model was scaled to zero while idle and is being woken; "
+    "this can take a minute. Retry shortly."
+)
+
+#: What AI Chat answers in Mode B while the cluster holds no lease for it: the
+#: cluster is loading, or its model was unloaded by hand (W4d-D26). AI Chat is
+#: never parked on the NPU Assistant meanwhile, so this is the honest answer
+#: rather than "choose a connection", which the cluster forbids in Mode B.
+AI_CHAT_CLUSTER_NOT_SERVING_CODE = "chat_cluster_not_serving"
+AI_CHAT_CLUSTER_NOT_SERVING = (
+    "GPU clustering serves AI Chat, and its model is not serving right now: it "
+    "is still loading, or it was unloaded in Cluster > Deployments. Load it "
+    "there, or retry once it has finished loading."
+)
+
+#: The resource ``service.name`` AI-Chat spans carry, kept distinct from the
+#: gateway's ``vaelor-inference-gateway`` so Phoenix files the two serving paths
+#: apart even though both front the same cluster deployment (Observability
+#: Unit 2). A single hyphenated token, so it never joins the shared-sentence
+#: duplication scan.
+AI_CHAT_TRACE_SERVICE_NAME = "vaelor-ai-chat"
+
+#: The usage-meter identity one AI-Chat answer records under. AI Chat is the
+#: operator's own web surface rather than an API-token caller, so a fixed
+#: synthetic key stands in for the "who" dimension while the deployment
+#: dimension stays the real cluster lease credential id. The label names the
+#: traffic source on the per-key usage view and is spelled apart from the bare
+#: navigation label so it stays a single-module literal.
+AI_CHAT_USAGE_KEY_ID = "ai-chat"
+AI_CHAT_USAGE_LABEL = "AI Chat (cluster)"
+
+
+def _usage_tokens(value) -> int:
+    """A token count coerced to a non-negative int, 0 for anything unreadable.
+
+    The upstream ``usage`` object should carry integers, but a null or a
+    garbled field must degrade to zero rather than raise into the recording
+    path, which is best-effort and must never disturb the answer.
+    """
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 class ChatInference:
-    def __init__(self, broker, timeout_seconds: Optional[int] = None):
+    def __init__(
+        self,
+        broker,
+        timeout_seconds: Optional[int] = None,
+        *,
+        cluster_mode_active=gpu_cluster_mode_active,
+        cluster_wake=None,
+        tracer=None,
+        inference_metrics=None,
+        usage_meter=None,
+        thinking_capabilities=None,
+    ):
         self.broker = broker
+        # VD-209: the capability cache (None: the shared one in chat_thinking).
+        self._thinking_capabilities = thinking_capabilities
         self._configured_timeout = (
             None
             if timeout_seconds is None
             else max(10, min(int(timeout_seconds), MAX_INFERENCE_SECONDS))
         )
+        # The one reading of the GPU serving mode file, injectable so the
+        # refusal is driven in tests without a state root.
+        self._cluster_mode_active = cluster_mode_active
+        # G3b (BL-1): a zero-arg seam that, when the ai-chat lease names a
+        # scaled-to-zero cluster deployment, enqueues a warm load and returns
+        # its name; None (the default) leaves AI Chat untouched. The control
+        # plane injects it, holding the job store and the cluster/mode records.
+        self._cluster_wake = cluster_wake
+        # Observability Unit 2 (items b + h): AI Chat POSTs the balancer
+        # directly and never reaches the /inference/v1 gateway, so the gateway's
+        # own collectors never saw its traffic. The same three are injected here
+        # and recorded best-effort at the answer seams, only for the Mode B
+        # cluster case. Each defaults to None so existing callers and tests are
+        # unaffected and a missing collector is simply a no-op.
+        self._tracer = tracer
+        self._inference_metrics = inference_metrics
+        self._usage_meter = usage_meter
 
     @property
     def timeout_seconds(self) -> int:
@@ -284,12 +313,74 @@ class ChatInference:
         try:
             return [
                 item for item in self.broker.list()
-                if item.get("provider") in {"openai", "openai-compatible"}
+                if item.get("provider") in {"openai", "openai-compatible", *HOSTED_KINDS}
             ]
         except CredentialError as error:
             raise ChatInferenceError(str(error)) from error
 
+    def choices(self):
+        """The connections AI Chat may be pointed at (VD-210 owner rule).
+
+        ``connections()`` less every one the vault refuses AI Chat - the
+        Assistant's NPU model - asked of the vault's own predicate
+        (``ai_chat_may_use``), never a hostname or a private marker test
+        (LESSONS 6 / 14). AI Chat's picker and the Assistant's account of AI
+        Chat both read this. A Pi's shared CPU model carries no NPU marker and
+        stays. ``connections()`` itself stays whole: it also describes engines.
+        """
+        return [item for item in self.connections() if ai_chat_may_use(item)]
+
+    def _refuse_a_lease_ai_chat_may_not_use(self, lease) -> None:
+        """Never send AI Chat to the Assistant's NPU model (VD-210 owner rule).
+
+        A lease written before VD-202 can still name it: the vault refuses the
+        assignment but still resolves an old one. It reads here as no model
+        chosen, with the reason, and the row is left for the owner's next pick
+        to replace - never rewritten behind them.
+        """
+        try:
+            listed = self.broker.list()
+        except CredentialError as error:
+            raise ChatInferenceError(str(error)) from error
+        if not ai_chat_may_use_lease(lease, listed):
+            raise ChatInferenceError(
+                AI_CHAT_NEVER_ON_THE_ASSISTANT_NPU + " " + CHOOSE_AN_AI_CHAT_CONNECTION
+            )
+
+    def assignment_refusal(self, credential_id: str = "") -> str:
+        """Why AI Chat cannot take ``credential_id`` right now, or ``""``.
+
+        VD-210: AI Chat's model is the owner's choice while the GPU cluster
+        serves. Only this machine's own GPU model (a managed-local credential)
+        is refused in Mode B: its llama.cpp is stopped while the cluster holds
+        the GPU, and a lease on it was what the failure-watch read as
+        "relaunch llama.cpp" beside the serving vLLM (VD-127). Every other
+        connection - hosted, a network server, the cluster's own balancer -
+        may be picked, and the reconcile no longer re-pins ``ai-chat``. Asked
+        with no credential, it answers ``""``: the picker as a whole is open.
+        """
+        if self.cluster_mode_active() and str(credential_id).startswith(MANAGED_LOCAL_PREFIX):
+            return AI_CHAT_HELD_BY_CLUSTER
+        return ""
+
+    def cluster_mode_active(self) -> bool:
+        """Whether the GPU is clustered (Mode B), guarded so a read never raises.
+
+        The one reading this runtime takes of the serving mode, public so the
+        engine-status route asks the same question the chat path does rather
+        than opening the mode file a second way.
+        """
+        try:
+            return bool(self._cluster_mode_active())
+        except Exception:  # noqa: BLE001 - a mode read must never fail a caller
+            return False
+
     def activate(self, credential_id: str):
+        refusal = self.assignment_refusal(credential_id)
+        if refusal:
+            raise ChatInferenceError(
+                refusal, code=AI_CHAT_HELD_CODE, status=AI_CHAT_HELD_STATUS
+            )
         try:
             return self.broker.activate(credential_id, "ai-chat")
         except CredentialError as error:
@@ -301,6 +392,14 @@ class ChatInference:
         except CredentialError as error:
             raise ChatInferenceError(str(error)) from error
         if isinstance(listing, dict):
+            # A model Vaelor serves itself is ONE model, pinned on its
+            # credential; FastFlowLM's /v1/models advertises its whole catalog,
+            # installed or not, and the picker offered all of it (W4d-D26).
+            pinned = str(listing.get("selected_model") or "")
+            if pinned and str(credential_id).startswith(MANAGED_LOCAL_PREFIX):
+                listing = {**listing, "models": [
+                    model for model in listing.get("models", []) if model == pinned
+                ]}
             failures = self.known_bad_models()
             # An endpoint advertising a model is not the same as that model
             # answering. Anything already measured to fail is marked here, so
@@ -353,9 +452,13 @@ class ChatInference:
         try:
             lease = self.broker.resolve_active("ai-chat")
         except CredentialError as error:
-            raise ChatInferenceError(
-                "Choose an AI Chat connection before sending a message."
-            ) from error
+            if self.cluster_mode_active():
+                raise ChatInferenceError(
+                    AI_CHAT_CLUSTER_NOT_SERVING,
+                    code=AI_CHAT_CLUSTER_NOT_SERVING_CODE, status=503,
+                ) from error
+            raise ChatInferenceError(CHOOSE_AN_AI_CHAT_CONNECTION) from error
+        self._refuse_a_lease_ai_chat_may_not_use(lease)
         if lease.get("provider") == "openai":
             connection = {
                 **lease, "base_url": OPENAI_BASE_URL,
@@ -368,18 +471,179 @@ class ChatInference:
             raise ChatInferenceError("The AI Chat connection is incomplete.")
         return connection
 
+    def thinking(self, model: str = "") -> Dict[str, Any]:
+        """The thinking control for the active connection and ``model`` (VD-209)."""
+        connection = self._connection(model)
+        chosen = str(connection.get("model") or "")
+        capability, reason = read_thinking(connection, chosen, self._thinking_capabilities)
+        return thinking_view(connection, chosen, capability, reason)
+
+    def _records_cluster_inference(self, connection) -> bool:
+        """Whether one answer belongs on the cluster observability stores.
+
+        Only the Mode B cluster-inference case is recorded: a GPU cluster holds
+        the ai-chat lease and serves it through the managed-local balancer, so
+        the deployment dimension (the lease credential id) names a real cluster
+        deployment. Mode A - an NPU or single-node managed model, or a hosted
+        provider - has no cluster deployment, so its panels stay honestly empty.
+        The gate read is itself guarded: reading it must never fail an answer.
+        """
+        try:
+            return self.cluster_mode_active() and bool(
+                managed_local_connection(connection)
+            )
+        except Exception:  # noqa: BLE001 - a gate read must never fail an answer
+            return False
+
+    def _emit_chat_span(self, *, model, status, duration_ms, prompt_tokens,
+                        completion_tokens, response_bytes=0):
+        """Ship one AI-Chat OTLP span, swallowing every fault.
+
+        A no-op when no tracer is wired; the emitter is otherwise fire-and-forget
+        off-thread, and this guard means even building the call cannot raise into
+        the answer. The span carries the AI-Chat service name so Phoenix keeps it
+        apart from the gateway's.
+        """
+        if self._tracer is None:
+            return
+        try:
+            self._tracer.emit(
+                model=str(model or ""), status=status, duration_ms=duration_ms,
+                streaming=False, prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens, response_bytes=response_bytes,
+            )
+        except Exception:  # noqa: BLE001 - tracing must never disturb the answer
+            logger.debug("AI-Chat span emit was dropped", exc_info=True)
+
+    def _record_chat_red(self, *, status, duration_ms, prompt_tokens,
+                         completion_tokens, response_bytes=0):
+        """Fold one AI-Chat request into the RED store, swallowing every fault.
+
+        A no-op when no metrics store is wired. Non-streaming always, since AI
+        Chat reads the whole body before recording; a store fault degrades to
+        "not recorded" and can never fail the answer already being returned.
+        Recorded under AI Chat's own source: the owner's conversations are not
+        external API traffic, and Settings counts only the gateway's (ACC-046).
+        """
+        if self._inference_metrics is None:
+            return
+        try:
+            self._inference_metrics.record(
+                status=status, duration_ms=duration_ms, streaming=False,
+                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                response_bytes=response_bytes, source=SOURCE_AI_CHAT,
+            )
+        except Exception:  # noqa: BLE001 - metrics must never disturb the answer
+            logger.debug("AI-Chat RED record was dropped", exc_info=True)
+
+    def _meter_chat_usage(self, *, deployment, prompt_tokens, completion_tokens):
+        """Accrue one served AI-Chat answer into the usage meter, best-effort.
+
+        A no-op when no meter is wired. Called only on success, mirroring the
+        gateway, which never meters a failed request. The deployment dimension
+        is the lease credential id; the key is the fixed AI-Chat identity. A
+        meter fault degrades to "not counted" and never fails the answer.
+        """
+        if self._usage_meter is None:
+            return
+        try:
+            self._usage_meter.record(
+                key_id=AI_CHAT_USAGE_KEY_ID, deployment=deployment,
+                label=AI_CHAT_USAGE_LABEL, prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+        except Exception:  # noqa: BLE001 - metering must never disturb the answer
+            logger.debug("AI-Chat usage metering was dropped", exc_info=True)
+
+    def _record_cluster_success(self, connection, model, body, duration_ms,
+                                response_bytes):
+        """Record span + RED + metering for one served cluster AI-Chat answer.
+
+        Mirrors the gateway's non-stream success seam. AI Chat is non-streaming,
+        so the usage object is read straight off the parsed body; a missing or
+        malformed usage degrades to zero tokens and the request is still
+        recorded. ``response_bytes`` is the length of the raw upstream body
+        already read, so the RED throughput panel counts AI-Chat bytes rather
+        than undercounting them at zero. Each store is guarded in its helper.
+        """
+        usage = body.get("usage") if isinstance(body, dict) else None
+        usage = usage if isinstance(usage, dict) else {}
+        prompt_tokens = _usage_tokens(usage.get("prompt_tokens"))
+        completion_tokens = _usage_tokens(usage.get("completion_tokens"))
+        self._emit_chat_span(
+            model=model, status=200, duration_ms=duration_ms,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            response_bytes=response_bytes,
+        )
+        self._record_chat_red(
+            status=200, duration_ms=duration_ms,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            response_bytes=response_bytes,
+        )
+        self._meter_chat_usage(
+            deployment=str(connection.get("credential_id") or ""),
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+        )
+
+    def _record_cluster_failure(self, model, status, duration_ms):
+        """Record an error span + RED for one failed cluster AI-Chat answer.
+
+        Mirrors the gateway's error seam: the request is counted and an error
+        span emitted, but it is never metered, because a failed answer produced
+        no usage. Zero tokens against the failing status.
+        """
+        self._emit_chat_span(
+            model=model, status=status, duration_ms=duration_ms,
+            prompt_tokens=0, completion_tokens=0,
+        )
+        self._record_chat_red(
+            status=status, duration_ms=duration_ms,
+            prompt_tokens=0, completion_tokens=0,
+        )
+
     def answer(
         self, message: str, *, model: str = "", history=None, retrieved=None,
-        memories=None,
+        memories=None, session_key: str = "", thinking=None,
     ) -> Dict[str, Any]:
+        """Answer one AI Chat turn.
+
+        ``thinking`` (VD-209) is the owner's step, or a function from the
+        connection's credential id to it; `chat_thinking.plan` decides what,
+        if anything, that sends to this model.
+
+        ``session_key`` (VD-157) names the conversation to the cluster's
+        replica balancer, so its turns stay on the replica that already holds
+        their prompt. It is sent only to a model this appliance serves.
+        """
         clean = str(message).strip()
         if not clean or len(clean) > 8000:
             raise ChatInferenceError("AI Chat messages must be 1–8,000 characters.")
         connection = self._connection(model)
+        # G3b (BL-1): the resolved ai-chat lease may name a cluster deployment
+        # that scale-to-zero unloaded, or one whose wake load is still in
+        # flight. Either way the seam returns the name; answer an honest 503
+        # rather than posting into the not-yet-live loopback endpoint, and the
+        # retry lands on the warm model.
+        if self._cluster_wake is not None and self._cluster_wake():
+            raise ChatInferenceError(
+                AI_CHAT_WAKING_MESSAGE,
+                code=AI_CHAT_WAKING_CODE, status=AI_CHAT_WAKING_STATUS,
+            )
         provider_label = str(
             connection.get("label") or "The selected AI Chat connection"
         )
         selected_model = connection.get("model", "")
+        hosted = connection.get("provider") in HOSTED_KINDS
+        if hosted and not selected_model:
+            # VD-206: never "the first model listed" for a hosted service. That
+            # rule suits a server with one model loaded; a hosted list is a
+            # catalogue in the service's own order, and its first entry is a
+            # model, and a bill, the owner never chose.
+            raise ChatInferenceError(
+                f"Choose a model for {provider_label} in AI Chat before "
+                "sending a message.",
+                code="chat_model_not_chosen", status=409,
+            )
         if not selected_model:
             model_data = self.models(connection.get("credential_id", ""))
             selected_model = str((model_data.get("models") or [""])[0])
@@ -399,13 +663,14 @@ class ChatInference:
                 code="chat_no_model_offered", status=502,
             )
         sources = []
+        documents = []  # the same passages as titled documents (Anthropic)
         for index, item in enumerate((retrieved or [])[:6], 1):
-            sources.append(
-                "[S{}] {} / {} (chunk {}):\n{}".format(
-                    index, item["collection_name"], item["document_name"],
-                    int(item["ordinal"]) + 1, item["content"],
-                )
+            title = "[S{}] {} / {} (chunk {})".format(
+                index, item["collection_name"], item["document_name"],
+                int(item["ordinal"]) + 1,
             )
+            sources.append("{}:\n{}".format(title, item["content"]))
+            documents.append({"title": title, "text": sources[-1]})
         # Memory and retrieval are different things and the prompt must keep
         # them apart. Collections are this surface's citable corpus; memory is
         # cross-surface background the appliance saved earlier. They are
@@ -457,17 +722,19 @@ class ChatInference:
                 if sources else " Keep the answer under 120 words."
             )
         messages = [{"role": "system", "content": system}]
-        for item in (history or [])[-8:]:
-            if item.get("role") in {"user", "assistant"}:
-                messages.append({
-                    "role": item["role"], "content": str(item.get("content", ""))[:3000]
-                })
+        for item in conversational_history(history)[-8:]:
+            messages.append({
+                "role": item["role"], "content": str(item.get("content", ""))[:3000]
+            })
         content = clean
         if remembered:
             content += (
                 "\n\nSaved appliance memory (background context, never citable):\n"
                 + "\n".join(remembered)
             )
+        # The question as a service with its own document input reads it: the
+        # sources go beside it as documents, not inside it (VD-206).
+        question = content
         if sources:
             content += "\n\nRetrieved sources:\n" + "\n\n".join(sources)
         if managed_local_connection(connection):
@@ -475,6 +742,10 @@ class ChatInference:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if connection.get("api_key"):
             headers["Authorization"] = "Bearer {}".format(connection["api_key"])
+        if managed_local_connection(connection):
+            # Only Vaelor's own balancer reads it; a hosted provider is sent
+            # nothing about which conversation this is.
+            headers.update(session_headers(session_key))
         base_budget = assistant_budget(connection, clean)["max_tokens"]
         if sources:
             ceiling = (
@@ -494,6 +765,18 @@ class ChatInference:
         max_tokens = reasoning_headroom_tokens(
             connection, min(ceiling, max(96, base_budget * 3))
         )
+        if hosted:
+            # VD-206 long outputs: a hosted model reasons inside the same
+            # limit, and the hosted path streams, so a long answer is safe.
+            max_tokens = HOSTED_ANSWER_TOKENS
+        chosen = thinking(connection.get("credential_id", "")) if callable(thinking) else thinking
+        try:
+            plan = thinking_plan(
+                read_thinking(connection, selected_model, self._thinking_capabilities)[0], str(chosen or ""), max_tokens,
+            )
+        except ThinkingSettingError as error:
+            raise ChatInferenceError(str(error), code=error.code, status=400) from None
+        max_tokens = plan.max_tokens
         payload = {
             "model": selected_model,
             "messages": [*messages, {"role": "user", "content": content}],
@@ -504,7 +787,9 @@ class ChatInference:
             payload.pop("max_tokens")
             payload.pop("temperature")
             payload["max_completion_tokens"] = max_tokens
-            payload["reasoning_effort"] = "low"
+        # The step's own fields, and only for a model that takes them: an
+        # OpenAI model with no reasoning (gpt-4.1) is sent no reasoning_effort.
+        payload.update(plan.body)
         if managed_local_connection(connection):
             payload["chat_template_kwargs"] = {"enable_thinking": False}
         request = urllib.request.Request(
@@ -519,26 +804,52 @@ class ChatInference:
         outcome = {**connection, "model": selected_model}
 
         def failed(error: ChatInferenceError) -> ChatInferenceError:
+            error.model = selected_model
             note_inference_outcome(outcome, ok=False, detail=str(error))
+            if self._records_cluster_inference(connection):
+                self._record_cluster_failure(
+                    selected_model, error.status,
+                    (time.monotonic() - start) * 1000,
+                )
             return error
 
         # Read the budget once so the number in a timeout message is always the
         # number the request was actually given.
         timeout = self.timeout_for(connection)
+        # #223 / VD-085: a managed local model runs one generation at a time
+        # and this urlopen holds a control-plane worker for its whole duration.
+        # The slot is held only across the network call, then released before
+        # parsing; a caller that cannot get it is refused fast (below) rather
+        # than piling onto a worker and saturating the pool, which is what
+        # turned a busy model into "the node is unreachable" for everyone.
+        # Remote providers are not gated, and neither is the GPU cluster: in
+        # Mode B the loopback address is the cluster's balancer in front of
+        # vLLM, which batches concurrent requests by design, so the Pi's
+        # one-at-a-time slot refused a second chat the engine would have
+        # served (ACC-105). It still has a bound of its own - several at once,
+        # not unlimited - because every waiting chat holds a worker.
+        slot = (
+            cluster_inference_slot() if self._records_cluster_inference(connection)
+            else local_inference_slot(connection)
+        )
         # Wall-clock across the model call is the most faithful "time to
         # complete"; the model's own usage/timings fill in TTFT and tok/s.
         start = time.monotonic()
         try:
-            # #223 / VD-085: a managed local model runs one generation at a
-            # time and this urlopen holds a control-plane worker for its whole
-            # duration. The slot is held only across the network call, then
-            # released before parsing; a caller that cannot get it is refused
-            # fast (below) rather than piling onto a worker and saturating the
-            # pool, which is what turned a busy model into "the node is
-            # unreachable" for everyone. Remote providers are not gated.
-            with local_inference_slot(connection):
-                with urllib.request.urlopen(request, timeout=timeout) as response:
-                    body = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
+            if hosted:
+                # Checked, pinned HTTPS (`hosted_transport`), never urlopen. A
+                # hosted answer is never cluster traffic, so its size is unused.
+                _size, body = answer_hosted(
+                    connection, payload=payload, system=system,
+                    history=messages[1:], question=question, sources=documents,
+                    max_tokens=max_tokens, timeout=timeout, thinking=plan,
+                )
+                raw_body = b""
+            else:
+                with slot:
+                    with urllib.request.urlopen(request, timeout=timeout) as response:
+                        raw_body = response.read(2 * 1024 * 1024)
+                        body = json.loads(raw_body.decode("utf-8"))
             performance = normalize_performance(body, time.monotonic() - start)
             choice = body["choices"][0]
             returned = choice["message"]
@@ -547,15 +858,30 @@ class ChatInference:
                 returned["content"],
                 returned.get("reasoning_content") or returned.get("reasoning") or "",
             )
+            thought = thinking_result(plan, returned.get("reasoning"), body.get("thinking_seconds"))
+        except HostedChatError as error:
+            raise failed(ChatInferenceError(
+                str(error), code=error.code, status=error.status,
+            )) from None
         except LocalModelBusy as error:
             # A truthful 503 the frontend renders as a body, not a bare
             # connection reset it can only call "the node is unavailable"
-            # (#223). Recorded as a failed outcome so the busy state is visible,
-            # not silent.
-            raise failed(ChatInferenceError(
+            # (#223). NOT passed through `failed()`: Vaelor refused the request
+            # itself and nothing reached the model, so recording it as the
+            # model's failure marked a working model bad in the picker, made
+            # the readiness probe call the server unreachable, and counted as
+            # cluster error traffic. The 503 and its sentence are the signal.
+            raise ChatInferenceError(
                 str(error), code="chat_model_busy", status=503,
-            )) from error
+            ) from error
         except urllib.error.HTTPError as error:
+            _kind, detail = error_type_of(error)
+            detail = redact(detail, str(connection.get("api_key") or ""))
+            if refused_setting(plan, error.code, detail):
+                raise failed(ChatInferenceError(
+                    refusal_sentence(provider_label, selected_model, plan, detail),
+                    code=ThinkingSettingError.code, status=502,
+                )) from None
             raise failed(ChatInferenceError(
                 f"{provider_label} rejected the chat request (HTTP {error.code}). "
                 "Confirm the model is loaded and supports OpenAI-compatible chat completions, then retry.",
@@ -615,6 +941,13 @@ class ChatInference:
         if not retrieved:
             answer = re.sub(r"\s*\[S\d+\]", "", answer).strip()
         note_inference_outcome(outcome, ok=True)
+        # The connection's credential answered: that is a use (ACC-107).
+        note_credential_use(connection, broker=self.broker)
+        if self._records_cluster_inference(connection):
+            self._record_cluster_success(
+                connection, selected_model, body,
+                (time.monotonic() - start) * 1000, len(raw_body),
+            )
         return {
             "answer": answer[:12000],
             "model": selected_model,
@@ -628,9 +961,14 @@ class ChatInference:
             # finished. Surfaced honestly so the caller can say so rather than
             # presenting a truncated reply as complete. (An *empty* length stop
             # was already raised above as a reasoning-budget failure.)
-            "truncated": finish_reason == "length",
+            # So is one longer than the 12,000 characters kept here, which a
+            # long hosted answer can reach (VD-206: never cut silently).
+            "truncated": finish_reason == "length" or len(answer) > 12000,
             # Compact per-answer timing (total, TTFT, prefill/decode tok/s) from
             # the model's own usage/timings plus the wall-clock. Empty when a
             # provider reports nothing, and the frontend then shows no line.
             "performance": performance,
+            # VD-209 item 4: the thinking summary the provider returned, with
+            # its measured duration; empty when none came back.
+            "thinking": thought,
         }

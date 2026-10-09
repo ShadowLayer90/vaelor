@@ -1,6 +1,8 @@
-import { destinations } from "../lib/destinations";
+import { AssistantBarActions, useAssistantPlace } from "./assistantBar";
+import { ASSISTANT_TAB_PLACES } from "./AssistantNavigationTabs";
 import { AssistantRunHistory, type RunHistoryFilter } from "./AssistantRunHistory";
-import { Notice, type NoticeSeverity } from "./ui";
+import { Icon } from "./Icon";
+import { Button, Notice, PageHeader, type NoticeSeverity } from "./ui";
 import type { AgentTask, Automation, HandoffTarget, Trigger } from "./agentTypes";
 import type { Session } from "../types";
 
@@ -71,15 +73,21 @@ export function AssistantHistoryPanel({
   taskView: "recent" | "archive";
   triggers: Trigger[];
 }) {
+  useAssistantPlace([ASSISTANT_TAB_PLACES.history]);
   return (
-    <div id="history-panel" role="tabpanel">
-      <div className="page-heading agent-heading">
-        <div>
-          <h1>{destinations.assistant.name}</h1>
-          <p>History · Every appliance check, agent run, and automatic run this appliance has produced, with the evidence it used.</p>
-        </div>
-      </div>
-      {notice && <Notice severity={noticeSeverity}>{notice}</Notice>}
+    <div className="as-panel ah-panel" id="history-panel" role="tabpanel">
+      {/* The tab's one bar action: re-read the runs now rather than at the
+          next poll. The model pill beside it is the Assistant's own. */}
+      <AssistantBarActions>
+        <Button className="ah-reload" onClick={onRefresh} type="button">
+          <Icon name="refresh" size={16} />
+          Reload
+        </Button>
+      </AssistantBarActions>
+      <PageHeader
+        subtitle="Every appliance check, agent run, and automatic run this appliance has produced, with the evidence it used."
+        title="Every run, with its evidence"
+      />
       <AssistantRunHistory
         automaticTaskIds={automaticTaskIds}
         automations={automations}
@@ -89,6 +97,7 @@ export function AssistantHistoryPanel({
         filter={filter}
         handoffSelections={handoffSelections}
         handoffTargets={handoffTargets}
+        notice={notice ? <Notice severity={noticeSeverity}>{notice}</Notice> : null}
         onArchiveFinished={onArchiveFinishedTasks}
         onDiscuss={onDiscussTask}
         onFilterChange={onFilterChange}

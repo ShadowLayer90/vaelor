@@ -18,9 +18,30 @@ hardware layer must not learn.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
+from . import model_reachability
 from .provider_runtime import managed_local_connection
+
+#: What the record says when the Assistant is deployed on this NPU but its
+#: model server is not answering. Plain words: the owner reads this sentence
+#: under "Used by", followed by the probe's own reason when it has one.
+NOT_ANSWERING_REASON = (
+    "The Assistant's model server on this neural processor is not answering."
+)
+
+#: A raw endpoint address inside a probe's reason. Stripped from owner copy:
+#: a loopback URL names nothing the owner can act on.
+_ADDRESS = re.compile(r"https?://[^\s]*[^\s.,;:)]")
+
+
+def _down_reason(probe: Dict[str, Any]) -> str:
+    detail = str(
+        probe.get("model_availability_reason") or probe.get("detail") or ""
+    ).strip()
+    detail = _ADDRESS.sub("its local address", detail)
+    return "{} {}".format(NOT_ANSWERING_REASON, detail).strip()
 
 
 def annotate_npu_serving(
@@ -39,17 +60,34 @@ def annotate_npu_serving(
     records = [dict(record) for record in neural_accelerators or []]
     if not records:
         return records
-    served = _served_model(callbacks)
-    if served:
-        # Only the primary NPU is the one flm-real binds to; a second device
-        # stays honestly idle rather than inheriting the first one's model.
+    deployed = _deployed_lease(callbacks)
+    if deployed is None:
+        return records
+    pinned, lease = deployed
+    # Deployed is not serving (ACC-100). The System screen said "Serving the
+    # Assistant" off the lease and the files alone while flm-real was down and
+    # the Assistant tab, which probes, said unreachable. The same probe the
+    # Assistant's status uses decides it here, so the two screens agree.
+    try:
+        probe = model_reachability.probe_connection(lease)
+    except (AttributeError, OSError, TypeError, ValueError) as error:
+        probe = {"reachable": False, "detail": str(error)}
+    # Only the primary NPU is the one flm-real binds to; a second device
+    # stays honestly idle rather than inheriting the first one's model.
+    if probe.get("reachable") and probe.get("offering_models") is not False:
         records[0]["serving_assistant"] = True
-        records[0]["serving_model"] = served
+        records[0]["serving_model"] = pinned
+    else:
+        records[0]["assistant_down"] = True
+        records[0]["assistant_model"] = pinned
+        records[0]["assistant_down_reason"] = _down_reason(probe)
     return records
 
 
-def _served_model(callbacks: Dict[str, Any]) -> Optional[str]:
-    """The served model tag when the Assistant is deployed on the NPU, else ``None``.
+def _deployed_lease(callbacks: Dict[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """``(tag, lease)`` when the Assistant is deployed on the NPU, else ``None``.
+
+    Deployed, not serving: whether the server answers is the caller's probe.
 
     The bridge-free signal is the active ``deployment-agent`` credential -- the
     very lease the executor's restart-on-boot reconcile keys on (VD-001): a
@@ -89,4 +127,4 @@ def _served_model(callbacks: Dict[str, Any]) -> Optional[str]:
         return None
     if not discover_npu_serving(pinned).get("available"):
         return None
-    return pinned
+    return pinned, dict(lease)

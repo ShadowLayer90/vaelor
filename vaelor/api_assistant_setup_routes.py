@@ -8,6 +8,7 @@ import re
 from flask import g, request
 
 from .assistant_action_requests import (
+    change_action,
     decline_sentence,
     detect_action_requests,
     outstanding_actions,
@@ -15,6 +16,8 @@ from .assistant_action_requests import (
 from .assistant_acting_wiring import operator_act_scopes
 from .assistant_answer_presentation import navigation_steps
 from .assistant_intents import chat_destination, select_tools
+from .assistant_log_answers import logs_arguments
+from .assistant_machine_names import as_records, machine_directory, machines_named, unknown_bare_name, unknown_machine
 from .assistant_machine_brief import machine_brief
 from .assistant_memory import AssistantMemoryError
 from .assistant_tools import AssistantToolError
@@ -22,6 +25,7 @@ from .chat_grounding import memory_grounding_allowed
 from .chat_inference import ChatInferenceError
 from .chat_turn_dedupe import IN_FLIGHT_STATUS, in_flight_error
 from .live_readings import one_reading_per_answer
+from .telemetry_ingest_status import ingest_status
 from .local_inference_gate import BUSY_MESSAGE, LocalModelBusy
 from .model_profiles import (
     calibrate_in_background,
@@ -29,12 +33,17 @@ from .model_profiles import (
     model_profile,
 )
 from .model_footprint import normalise_platform
-from .model_reachability import probe_connection
+from .model_reachability import probe_selected_model
 from .model_shortcomings import model_facts
+from .provider_runtime import model_capability
 from .copilot_setup import copilot_setup_status, hardware_inventory
 from .credential_broker import CredentialError
+from .credential_listing import redact_agent_status_for_role, setup_connection_reports
+from .gpu_cluster_mode_state import ClusterModeStore
 from .custom_agent_routing import custom_agent_proposal
-from .api_common import ApiContext, assistant_model_status, payload as _payload
+from .api_common import (
+    CREDENTIAL_BROKER_UNAVAILABLE, ApiContext, assistant_model_status, payload as _payload,
+)
 from .api_credential_routes import register_credential_routes
 
 
@@ -148,10 +157,9 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
         # "MODEL READY" while every request through it failed.
         if status.get("configured"):
             connection = active_model_connection(mode)
-            try:
-                probe = probe_connection(connection)
-            except (AttributeError, OSError, TypeError, ValueError):
-                probe = {"reachable": True, "detail": "", "endpoint": ""}
+            # One guarded probe for this route and `assistant_model_status`:
+            # a check that raises is not answering, never reachable (ACC-136).
+            probe = probe_selected_model(lambda: connection)
             status["reachable"] = bool(probe.get("reachable"))
             status["unreachable_reason"] = (
                 "" if probe.get("reachable") else str(probe.get("detail", ""))
@@ -188,7 +196,9 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
                 int(profile.get("context_tokens") or 0)
                 or int(profile.get("context") or 0),
             )
-        return _payload(status)
+        # VD-204 (LESSONS 24): a viewer gets no connection name and no server
+        # address; the model's name and every state stay.
+        return _payload(redact_agent_status_for_role(status, g.auth_session.role))
 
     @blueprint.post("/agent/model/calibrate")
     @require_auth("administrator", csrf=True)
@@ -239,6 +249,13 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
                         provider["available"] = True
             except CredentialError:
                 pass
+        # VD-049 / VD-201 / V-R2-gap2: whose model each lease names, reported
+        # and never moved; names only for the roles VD-204 allows. The mode
+        # record says whether an empty AI Chat is a cluster switch in progress.
+        modes = callbacks.get("cluster_mode_store") or ClusterModeStore()
+        setup.update(setup_connection_reports(
+            broker, g.auth_session.role, CREDENTIAL_BROKER_UNAVAILABLE, modes.read(),
+        ))
         return _payload(setup)
 
     @blueprint.post("/copilot/install-npu-model")
@@ -310,11 +327,17 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
             )
         body = request.get_json(silent=True) or {}
         choice = str(body.get("intelligence_choice", "")).strip().lower()
-        if choice not in {"basic", "local", "provider"}:
+        # VD-049 / VD-201 item 2: the Assistant runs Vaelor's model or built-in
+        # basic mode; "provider" (an outside model) is no longer a choice. A value
+        # an older release stored is still read back, never written anew.
+        if choice not in {"basic", "local"}:
             return _payload(
                 error={
                     "code": "invalid_intelligence_choice",
-                    "message": "Choose built-in help, a local model, or a connected provider.",
+                    "message": (
+                        "Choose built-in basic mode or Vaelor's own model. A model "
+                        "you connect is used in AI Chat, not by the Assistant."
+                    ),
                 },
                 status=400,
             )
@@ -342,7 +365,7 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
     # to keep this one under the 1,000-line production ceiling (VD-111). They
     # share the background-calibration helper, threaded in so activation and
     # model selection still measure the new model exactly as before.
-    register_credential_routes(context, start_model_calibration)
+    register_credential_routes(context)
 
     @blueprint.post("/assistant/chat")
     @require_auth("operator", csrf=True)
@@ -387,7 +410,12 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
             custom_store = callbacks.get("custom_agents")
             proposed_agent_task = _custom_agent_proposal(
                 message,
-                custom_store.list(g.auth_session.username, include_disabled=False)
+                [
+                    agent for agent in custom_store.list(
+                        g.auth_session.username, include_disabled=False
+                    )
+                    if str(agent.get("surface", "assistant")) == "assistant"
+                ]
                 if custom_store is not None else [],
             )
             # Word-boundary intent matching so ordinary phrasing ("running hot",
@@ -399,6 +427,16 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
             # about its current state.
             action_requests = detect_action_requests(message)
             available_tools = registry.names()
+            # VD-205 item 2: a question naming a machine reads the cluster
+            # digest, so it is answered from that machine and no other.
+            machines = machine_directory(getattr(registry, "callbacks", None) or {})
+            if machines_named(message, machines) and "cluster.digest" in available_tools:
+                selected.add("cluster.digest")
+            # Review round 3 (N-B1): a capitalised "the X" that names no machine
+            # is checked against the app and service inventory before it is
+            # asked about as a missing machine.
+            if unknown_machine(message, machines) or unknown_bare_name(message, machines):
+                selected.update(("workloads.inventory", "services.status"))
             for action in action_requests:
                 tool_name = "{}.status".format(action["area"])
                 if tool_name in available_tools:
@@ -414,6 +452,9 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
                             tool_name,
                             {"limit": 8}
                             if tool_name in {"jobs.recent", "recovery.checkpoints"}
+                            # Review S7: the journal tool needs the service
+                            # the question names (the control plane if none).
+                            else logs_arguments(message) if tool_name == "logs.service"
                             else {},
                             actor=g.auth_session.username,
                             administrator=g.auth_session.role == "administrator",
@@ -492,6 +533,19 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
                     "machine_brief": brief,
                     "facts": facts,
                     "telemetry_history_range": callbacks.get("telemetry_history_range"),
+                    # Who is in the cluster, by name, for resolving a machine
+                    # in the question (VD-205 item 2). Never sent to a model.
+                    "machines": as_records(machines),
+                    # What a machine's history question reads its events
+                    # from (VD-205 item 3): serving starts and stops, the
+                    # telemetry repair audit, and fired alerts.
+                    "history_sources": {
+                        "model_usage": callbacks.get("model_usage"),
+                        "audit_between": getattr(security, "audit_between", None),
+                        "automations": callbacks.get("automations"),
+                        # A worker's newest refused or discarded post (FOLLOWUP VD205-c).
+                        "ingest_status": ingest_status,
+                    },
                     "specialist_results": specialist_results,
                     "matched_skills": matched_skills,
                     # A question this appliance holds no evidence for is sent
@@ -563,11 +617,13 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
                     *[decline_sentence(action) for action in outstanding],
                 ]).strip()
                 answer["suggested_actions"] = [
-                    "Open {} to change {}.".format(action["screen"], action["subject"])
-                    for action in outstanding
+                    change_action(action) for action in outstanding
                 ] + list(answer.get("suggested_actions") or [])
                 answer["unperformed_actions"] = outstanding
-            for skill in matched_skills:
+            # Review B5: guidance is claimed only when its text reached the
+            # model that wrote this answer.
+            sent = set(answer.pop("skills_sent", None) or [])
+            for skill in [item for item in matched_skills if item["slug"] in sent]:
                 answer["evidence"].append({
                     "source": "skill.{}".format(skill["slug"]),
                     "summary": "Applied reviewed {} guidance (version {}).".format(
@@ -579,6 +635,19 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
             # Every screen the answer names is emitted as a real hash route the
             # frontend can render as a link, alongside the human sentence.
             answer["next_steps"] = navigation_steps(answer, outstanding)
+            # Which model wrote this answer, recorded with it (ACC-103). The
+            # transcript labelled every past answer with the tier selected
+            # NOW, so changing the model relabelled answers it never wrote.
+            answer["model_label"] = ""
+            if answer.get("source") == "connected-model":
+                try:
+                    answer["model_label"] = model_capability(
+                        agent.connection(mode)
+                    )["label"]
+                except (AttributeError, CredentialError, OSError, ValueError):
+                    # Unread, so unrecorded: the transcript then says the
+                    # answer came from a model without naming a tier.
+                    answer["model_label"] = ""
             reply = assistant_store.append_message(
                 conversation["id"],
                 g.auth_session.username,
@@ -596,6 +665,7 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
                     # reloaded transcript shows what the live answer did. Empty
                     # for a grounded answer that never reached the model.
                     "performance": answer.get("performance") or {},
+                    "model_label": answer["model_label"],
                 },
             )
             # The save rides the write that already exists (owner's design,

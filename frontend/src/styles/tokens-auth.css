@@ -9,8 +9,14 @@
     Inter, "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   --font-family-data:
     "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-  --font-size-body-sm: 0.875rem;
-  --font-size-data-sm: 0.8125rem;
+  /* UX-A11, owner decision 2026-10-03: the compact desktop density stays
+     (81.25% root below), but no text is smaller than 12 px. At that root
+     these were 11.4 px and 10.6 px; floored here, on the tokens, so a raised
+     browser font still raises them and a phone (16 px root) is unchanged at
+     14 px and 13 px. Held by styles/typeFloor.test.ts and the contract's
+     type_floor clause. */
+  --font-size-body-sm: max(12px, 0.875rem);
+  --font-size-data-sm: max(12px, 0.8125rem);
   --font-size-body: 1rem;
   --font-size-body-lg: 1.125rem;
   --font-size-heading-sm: 1.25rem;
@@ -33,9 +39,8 @@
   --bg-sidebar: #070707;
   --bg-surface: #0b0b0b;
   --bg-surface-raised: #101010;
-  --bg-surface-warm: #100b08;
   --bg-hover: #151515;
-  --border-subtle: #202020;
+  --border-subtle: #1f1f1f;
   --border-default: #2a2a2a;
   --border-strong: #3a3a3a;
   --text-primary: #f5f5f5;
@@ -46,33 +51,133 @@
   --accent-deep: #401800;
   --accent-soft: #1e0c00;
   --accent-glow: rgb(255 101 0 / 18%);
-  --ambient-orange: rgb(255 101 0 / 22%);
-  --ambient-green: rgb(34 197 94 / 10%);
-  --ambient-trace: rgb(255 101 0 / 46%);
-  --panel-highlight: rgb(255 255 255 / 5%);
+  --panel-highlight: var(--card-edge);
   --success: #22c55e;
-  --success-soft: #06190d;
+  --success-soft: #04140a;
   --info: #38bdf8;
-  --info-soft: rgb(56 189 248 / 8%);
-  --info-border: rgb(56 189 248 / 32%);
+  --info-soft: #06141c;
+  --info-border: var(--info-line);
   --warning: #f59e0b;
-  --warning-soft: rgb(245 158 11 / 8%);
+  --warning-soft: #1a1204;
   --danger: #ef4444;
-  --danger-strong: #c81e1e;
-  --danger-soft: #1d0808;
-  --danger-hover: #dc2626;
+  /* A danger fill carries --text-on-danger at 4.5:1 or better, at rest and
+     under the pointer, so hover darkens. --danger-text is the outline colour
+     (pill, banner, outline button) and never lands on a fill (UX-A1: a menu's
+     .danger-text on a solid danger button read 3.97:1). Held by
+     src/styles/dangerTokenContrast.test.ts. */
+  --danger-strong: #b91c1c;
+  --danger-soft: #1a0606;
+  --danger-hover: #991b1b;
   --success-border: #14532d;
   --warning-border: #78350f;
   --danger-border: #7f1d1d;
   --success-text: #bbf7d0;
-  --danger-text: #fecaca;
-  --button-light-hover: #d8d8d8;
+  --danger-text: #fca5a5;
   --text-on-danger: #ffffff;
-  --chart-success-fill: #062413;
-  --chart-warning-fill: #281800;
-  --chart-danger-fill: #270909;
+  /* A sparkline's area is the banner ground of its tone (VD-200 boards). */
+  --chart-success-fill: var(--success-soft);
+  --chart-warning-fill: var(--warning-soft);
+  --chart-danger-fill: var(--danger-soft);
+  /*
+   * Chart series (VD-163). Three node slots and no more: a fourth node is
+   * never given a generated hue, it goes through the chart's chooser. The
+   * hexes were run through the dataviz palette validator on --bg-surface
+   * (dark mode, all pairs, protan/deutan/tritan) and pass every check. Do not
+   * change one without re-running it. Status colours never mark a series.
+   */
+  --chart-series-1: #3987e5;
+  --chart-series-2: #d55181;
+  --chart-series-3: #8f9e2a;
+  --chart-series-aggregate: var(--text-secondary);
+  --chart-grid: var(--border-subtle);
+  --chart-axis-text: var(--text-muted);
+  /* 1.73:1 as --border-strong; --text-muted reaches 3:1 on --bg-surface. */
+  --chart-crosshair: var(--text-muted);
+  --chart-threshold: var(--text-muted);
+  --chart-event: var(--text-muted);
   --focus: #7dd3fc;
   --overlay: rgb(0 0 0 / 78%);
+
+  /*
+   * The redesign's surfaces (VD-200, the mockup's states sheet). A card is a
+   * near-black fill that darkens downward, a hairline border and one lit top
+   * edge; rows inside it are split by a fainter line. Nothing here glows.
+   */
+  --bg-card-top: #0e0e0e;
+  --bg-card: #0a0a0a;
+  --bg-control: #080808;
+  --border-card: #1f1f1f;
+  --border-row: #181818;
+  --card-edge: rgb(255 255 255 / 4%);
+  --surface-card: linear-gradient(180deg, var(--bg-card-top), var(--bg-card));
+  --shadow-card-edge: inset 0 1px 0 var(--card-edge);
+  --radius-pill: 999px;
+  /* The selected item of a segmented choice, on the accent's own ground. */
+  --accent-text: #ffb27a;
+  /*
+   * A status pill is a hairline outline, a word and a dot, and the word and the
+   * dot are one value: each tone sets the word's colour, the outline and the
+   * dot's halo together. Grey means "not read, old, paused or stopped" and says
+   * which in words; green means only "read just now and fine".
+   */
+  --success-halo: rgb(34 197 94 / 15%);
+  --warning-halo: rgb(245 158 11 / 15%);
+  --danger-halo: rgb(239 68 68 / 15%);
+  --info-halo: rgb(56 189 248 / 15%);
+  --warning-text: #fcd34d;
+  --info-text: #bae6fd;
+  --info-line: #0c4a6e;
+  --dot-off: #5a5a5a;
+  /* The dashed "not read" dot and the dashed outline of an old reading:
+     5.7:1 on --bg-card (held by stateTokenContrast.test.ts). */
+  --text-unread: #8a8a8a;
+  /* The section eyebrow grey of the redesign (Overview / AI / Manage, table
+     heads): 4.5:1 or better on --bg-sidebar, both ends of the card, and the
+     raised, icon and hover grounds it also lands on (#7b7b7b read 4.39:1 on
+     --bg-icon in the polish audit). */
+  --text-faint-label: #858585;
+  /* A field's outline (WCAG 1.4.11, 3:1 against the field and every surface a
+     field sits on; --border-default is 1.4:1), and the brighter outline under
+     the pointer, which stays 3:1 against the hovered fill. */
+  --border-field: #626262;
+  --border-field-hover: #767676;
+  --border-hairline: #161616;
+  --bg-row-active: #141414;
+  --border-row-active: #262626;
+  --bg-icon: #131313;
+  --border-icon: #222222;
+  --bg-spark: #2a2a2a;
+  /* The board's remaining surfaces (DESIGN_TOKENS.md): list rows split by a
+     fainter line than the card header's, the key/value grid's gaps and
+     cells, the sidebar's edge, the meter track, a button's own fill and the
+     dark text on the orange primary. */
+  --border-list: #151515;
+  --bg-row-hover: #101010;
+  --border-kv: #1a1a1a;
+  --bg-kv: #0b0b0b;
+  --border-sidebar: #1a1a1a;
+  --meter-track: #1a1a1a;
+  --bg-button: #0f0f0f;
+  --text-on-accent: #120700;
+  /* An inactive rail or health icon (VD-200, IconsHugeicons: 45% white, as
+     in the reference template); the current page's icon is --accent. */
+  --icon-muted: #737373;
+
+  /*
+   * The redesign's fixed type sizes (VD-200, the mockup boards). The shell and
+   * Home are drawn to the boards in pixels, so they do not shrink with the
+   * compact desktop root (81.25%) the other pages still use; none is under the
+   * 12 px floor (VD-191).
+   */
+  --font-size-ui-xs: 12px;
+  --font-size-ui-sm: 13px;
+  --font-size-ui: 14px;
+  --font-size-ui-lg: 15px;
+  --font-size-ui-xl: 16px;
+  --font-size-display: 30px;
+  --font-size-stat: 34px;
+  --font-size-stat-sm: 26px;
+  --space-page-end: 48px;
 
   /*
    * Stacking order. Before these existed, every overlay picked its own number
@@ -102,8 +207,33 @@
   --radius-md: 9px;
   --radius-lg: 12px;
   --radius-status: 2px;
+  /* One height for every field control, so a row of fields lines up whether or
+     not a field carries hint text. 44px is the touch-target floor and does not
+     shrink at compact density. */
+  --control-height: 44px;
+  /* A compact control - a segmented toggle, a filter chip - that sits in a
+     row of text rather than a form. It may be shorter than a field on a
+     desktop, never under 24px (WCAG 2.5.8), and on a phone or a touch screen it
+     is the full touch target (UX-A2: the Cluster Easy/Advanced toggle was
+     21px tall, its filter chips 29px). */
+  --control-height-compact: 32px;
+  /* The least a target may be that is not a control - a disclosure's summary,
+     a text link in a card header, a legend toggle: 24 px on a desktop (WCAG
+     2.5.8) and the full touch target on a phone or a touch screen (polish
+     audit cause 10). One token, so a screen rule that sizes its own target
+     cannot keep the desktop floor on a phone. */
+  --target-min: 24px;
+  /* One line height for field help text — hint, error, disabled reason,
+     counter — so a hint that wraps to two lines keeps the same rhythm as one
+     that fits on a single line. */
+  --line-height-hint: 1.4;
   --sidebar-width: 252px;
   --topbar-height: 64px;
+  /* The phone navigation bar's measured height, published on <html> by the
+     Sidebar (hooks/useMobileNavClearance.ts) when a raised text size gives the
+     bar a second row (W8-D2). Zero until measured: the stylesheet never lets
+     the page's clearance fall below one row (--mobile-nav-clearance). */
+  --mobile-nav-bar-height: 0px;
   --page-max: 1320px;
 
   /* Smallest size permitted for meaningful interface copy. */
@@ -119,6 +249,18 @@
 html {
   min-width: 320px;
   background: var(--bg-canvas);
+  /* WCAG 2.4.11 (UX-A9): the topbar is sticky, so a control scrolled into view
+     by keyboard focus landed under it - Cluster > Deployments' filter chips
+     were focused where the topbar covered them. Every scroll-into-view stops
+     below the topbar instead. */
+  scroll-padding-top: calc(var(--topbar-height) + var(--space-4));
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  :root {
+    --control-height-compact: var(--control-height);
+    --target-min: var(--control-height);
+  }
 }
 
 /*
@@ -144,8 +286,8 @@ html {
     --space-7: 32px;
     --space-8: 38px;
     --space-10: 51px;
-    --sidebar-width: 202px;
-    --topbar-height: 52px;
+    --sidebar-width: 232px;
+    --topbar-height: 64px;
     --page-max: 1440px;
     --font-size-heading-md: clamp(22px, 2.2vw, 30px);
   }
@@ -160,9 +302,7 @@ body {
   min-height: 100vh;
   margin: 0;
   overflow-x: hidden;
-  background:
-    radial-gradient(circle at 82% 4%, var(--accent-glow), transparent 24rem),
-    var(--bg-canvas);
+  background: var(--bg-canvas);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
 }
@@ -250,77 +390,6 @@ button:disabled {
 
 /* Authentication */
 
-.auth-shell {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: minmax(560px, 1.12fr) minmax(460px, 0.88fr);
-  background:
-    linear-gradient(var(--border-subtle) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border-subtle) 1px, transparent 1px),
-    var(--bg-canvas);
-  background-size: 72px 72px;
-}
-
-.auth-intro,
-.auth-access {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: clamp(var(--space-6), 6vw, 96px);
-}
-
-.auth-intro {
-  position: relative;
-  min-height: 100vh;
-  overflow: clip;
-  border-right: 1px solid var(--border-default);
-}
-
-.auth-intro::before {
-  position: absolute;
-  width: 1px;
-  height: 42%;
-  right: 16%;
-  bottom: 0;
-  pointer-events: none;
-  background: linear-gradient(transparent, var(--accent-deep));
-  box-shadow: 72px 0 0 rgb(255 101 0 / 5%), 144px 0 0 rgb(255 101 0 / 3%);
-  content: "";
-}
-
-.auth-intro > * {
-  position: relative;
-}
-
-.auth-intro__brand {
-  position: absolute;
-  top: clamp(var(--space-6), 5vw, 72px);
-  left: clamp(var(--space-6), 6vw, 96px);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.auth-intro__brand > div:last-child {
-  display: grid;
-  gap: 2px;
-}
-
-.auth-intro__brand strong {
-  font-size: 15px;
-  letter-spacing: 0.01em;
-}
-
-.auth-intro__brand span {
-  color: var(--text-muted);
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.auth-intro__mark,
 .brand-glyph,
 .topbar__mark {
   display: grid;
@@ -333,270 +402,6 @@ button:disabled {
   letter-spacing: -0.08em;
 }
 
-.auth-intro__mark {
-  width: 44px;
-  height: 44px;
-  font-size: var(--font-size-body-sm);
-}
-
-.auth-intro__mark svg {
-  width: 28px;
-  height: 28px;
-}
-
-.auth-intro__overline,
-.auth-card__heading > span {
-  margin: 0 0 var(--space-4);
-  color: var(--accent);
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.auth-intro__content {
-  width: min(100%, 720px);
-  display: grid;
-  align-content: center;
-}
-
-.auth-intro__statement {
-  margin-top: clamp(72px, 8vh, 108px);
-}
-
-.auth-intro h1 {
-  max-width: 680px;
-  margin: 0;
-  font-size: clamp(46px, 4.5vw, 68px);
-  font-weight: var(--weight-bold);
-  line-height: 1;
-  letter-spacing: -0.045em;
-}
-
-.auth-intro__copy {
-  max-width: 590px;
-  margin: var(--space-4) 0 0;
-  color: var(--text-secondary);
-  font-size: 16px;
-  line-height: 1.6;
-}
-
-.auth-convergence {
-  width: min(100%, 650px);
-  margin-top: var(--space-6);
-  background: rgb(7 7 7 / 82%);
-  border: 1px solid var(--border-default);
-  box-shadow: 14px 14px 0 rgb(0 0 0 / 22%);
-}
-
-.auth-convergence__header {
-  min-height: 42px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: 0 var(--space-4);
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-subtle);
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.auth-convergence__header span:last-child {
-  color: var(--success);
-}
-
-.auth-convergence__map {
-  display: grid;
-  grid-template-columns: minmax(122px, 0.8fr) minmax(96px, 0.65fr) minmax(190px, 1.35fr);
-  align-items: stretch;
-  min-height: 188px;
-  padding: var(--space-5);
-}
-
-.auth-convergence__sources {
-  display: grid;
-  grid-template-rows: repeat(4, 1fr);
-  gap: var(--space-2);
-}
-
-.auth-convergence__sources span {
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  padding: 0 var(--space-3);
-  color: var(--text-secondary);
-  background: var(--bg-canvas);
-  border: 1px solid var(--border-subtle);
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.auth-convergence__rail {
-  position: relative;
-  display: grid;
-  grid-template-rows: repeat(4, 1fr);
-  align-items: center;
-}
-
-.auth-convergence__rail::after {
-  position: absolute;
-  top: 12%;
-  right: 0;
-  bottom: 12%;
-  width: 1px;
-  background: var(--accent);
-  box-shadow: 0 0 16px var(--accent-glow);
-  content: "";
-}
-
-.auth-convergence__rail i {
-  position: relative;
-  display: block;
-  height: 1px;
-  background: linear-gradient(90deg, var(--border-strong), var(--accent));
-}
-
-.auth-convergence__rail i::after {
-  position: absolute;
-  top: 50%;
-  right: -3px;
-  width: 7px;
-  height: 7px;
-  margin-top: -3px;
-  background: var(--accent);
-  content: "";
-}
-
-.auth-convergence__core {
-  display: grid;
-  place-content: center;
-  justify-items: start;
-  gap: var(--space-2);
-  padding-left: var(--space-6);
-  background:
-    linear-gradient(90deg, rgb(255 101 0 / 10%), transparent 72%),
-    var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-left: 0;
-}
-
-.auth-convergence__core svg {
-  width: 30px;
-  height: 30px;
-  color: var(--accent);
-}
-
-.auth-convergence__core span {
-  font-size: 17px;
-  font-weight: var(--weight-bold);
-}
-
-.auth-convergence__core small {
-  color: var(--text-muted);
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.auth-intro__footer {
-  position: absolute;
-  right: clamp(var(--space-6), 6vw, 96px);
-  bottom: clamp(var(--space-6), 5vw, 72px);
-  left: clamp(var(--space-6), 6vw, 96px);
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-4);
-  color: var(--text-muted);
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.auth-access {
-  min-height: 100vh;
-  align-items: center;
-  background:
-    radial-gradient(circle at 100% 0%, var(--accent-glow), transparent 46%),
-    rgb(5 5 5 / 88%);
-}
-
-.auth-access__frame {
-  width: min(100%, 560px);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  box-shadow: 18px 18px 0 rgb(0 0 0 / 32%);
-}
-
-.auth-access__status {
-  min-height: 54px;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 0 var(--space-5);
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--font-size-body-sm);
-}
-
-.auth-access__status > span {
-  width: 7px;
-  height: 7px;
-  background: var(--success);
-  box-shadow: 0 0 12px rgb(34 197 94 / 65%);
-}
-
-.auth-access__status strong {
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.auth-access__status small {
-  color: var(--text-muted);
-  font-size: var(--font-size-body-sm);
-}
-
-.auth-card {
-  padding: clamp(var(--space-5), 4vw, var(--space-8));
-}
-
-.auth-card__heading h2 {
-  margin: 0;
-  font-size: clamp(30px, 3.4vw, 40px);
-  line-height: 1.12;
-  letter-spacing: -0.04em;
-}
-
-.auth-card__heading p {
-  max-width: 460px;
-  margin: var(--space-3) 0 var(--space-6);
-  color: var(--text-secondary);
-  line-height: 1.6;
-}
-
-.auth-card form {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.auth-card label {
-  margin-top: var(--space-2);
-  color: var(--text-secondary);
-  font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
-}
-
 /*
  * The auth fields are the `Input` primitive (`AuthScreen` renders `<Input>`),
  * so their geometry and focus ring come from `.ui-control` like every other
@@ -606,12 +411,6 @@ button:disabled {
  * var(--accent-deep)` (~#401800), a near-invisible focus indicator on the black
  * card. Dropping it lets the primitive's standard, visible focus ring apply.
  */
-
-.field-hint {
-  margin: calc(var(--space-1) * -1) 0 0;
-  color: var(--text-muted);
-  font-size: var(--font-size-body-sm);
-}
 
 .form-error {
   margin: var(--space-2) 0 0;
@@ -626,32 +425,4 @@ button:disabled {
 .ui-button--wide {
   width: 100%;
   margin-top: var(--space-4);
-}
-
-.auth-card__security {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  color: var(--text-muted);
-  background: var(--bg-canvas);
-  border-top: 1px solid var(--border-subtle);
-  font-size: var(--font-size-body-sm);
-}
-
-.auth-card__security svg {
-  flex: 0 0 auto;
-  margin-top: 2px;
-  color: var(--accent);
-}
-
-.auth-card__security span {
-  display: grid;
-  gap: 2px;
-  line-height: 1.45;
-}
-
-.auth-card__security strong {
-  color: var(--text-secondary);
-  font-size: var(--font-size-body-sm);
 }

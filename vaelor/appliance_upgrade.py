@@ -62,6 +62,9 @@ from typing import Any, Callable, Dict, List, Optional
 from packaging.version import InvalidVersion, Version
 
 from .appliance_recovery import START_SERVICES, STOP_SERVICES
+from .build_provenance import write_installed_record
+from .state_root_layout import settle_after_install
+from .www_v2_orphans import MODULE as ORPHAN_SWEEP
 from .runtime_paths import env_value, jobs_group_id, run_path, state_path
 
 try:
@@ -90,7 +93,8 @@ RESULT_PATH = Path(
 #: a failed apply can restore it. The installer populates it for the first
 #: upgrade; a successful apply rewrites it.
 #:
-#: It sits DIRECTLY under ``/var/lib/vaelor`` (``vaelor:vaelor 0750``): the
+#: It sits DIRECTLY under ``/var/lib/vaelor`` (``root:vaelor``, sticky, write for
+#: the ``vaelor`` account alone through an ACL - `vaelor.state_root_layout`): the
 #: executor user ``vaelor-workloads`` is only in group ``vaelor``, so it has r-x
 #: on the parent and NO write - it can neither create, rewrite, nor unlink a
 #: child here. The broker runs as root and creates this dir ``root:root 0700``
@@ -153,14 +157,22 @@ VENV_ROOT = env_value("VAELOR_UPGRADE_VENV", "PM_UPGRADE_VENV", "/opt/vaelor/ven
 #: scripts, and crash-loops with ``ModuleNotFoundError``. The control plane
 #: survives only because it runs as ``vaelor``, a ``vaelor-jobs`` member.
 #: Found and reproduced on the Pi (#178 / VD-102, LESSONS 6). ``a+rX`` only ADDS
-#: world read (and directory/already-executable traverse); it never clears a
-#: bit, so an intentionally-restricted file is not weakened - and it matches
-#: exactly the umask-022 result the installer already leaves. The post-install
-#: chmod, not a change to the unit's ``UMask``, is the fix: the unit's own
-#: files (socket, plan, result) are ``os.chmod``-ed explicitly, so ``UMask``
-#: governs nothing but this reinstall, and a surgical chmod cannot regress a
-#: hardening directive elsewhere in the unit.
-NORMALIZE_PERMS = ("/bin/chmod", "-R", "a+rX")
+#: world read (and directory/already-executable traverse), so an
+#: intentionally-restricted file is not weakened.
+#:
+#: The same umask leaves the tree GROUP-WRITABLE by ``vaelor-jobs`` (the
+#: executor's primary group), while root brokers import this package and run
+#: its bin scripts. Every non-root ``vaelor-jobs`` service runs
+#: ``ProtectSystem=strict``, so ``/opt`` is read-only to them today; ``go-w``
+#: is defence in depth so that stays true if a unit's sandbox ever changes
+#: (LESSONS 18 / W8-P1: who can reach the code is not a fixed list). Together the two clauses give exactly the umask-022 result the installer
+#: leaves. ``chmod -R`` does not follow symlinks met in the walk, so the venv's
+#: ``python`` and ``lib64`` links and anything they point at are untouched. The
+#: post-install chmod, not a change to the unit's ``UMask``, is the fix: the
+#: unit's own files (socket, plan, result) are ``os.chmod``-ed explicitly, so
+#: ``UMask`` governs nothing but this reinstall, and a surgical chmod cannot
+#: regress a hardening directive elsewhere in the unit.
+NORMALIZE_PERMS = ("/bin/chmod", "-R", "a+rX,go-w")
 REFRESH_COMMAND = (
     env_value(
         "VAELOR_REFRESH_MODELS", "PM_REFRESH_MODELS",
@@ -337,6 +349,7 @@ def record_current_wheel(
     sha256: str,
     byte_length: int,
     directory: Path = RETAINED_DIR,
+    build_record: Optional[Path] = None,
 ) -> None:
     """Retain the verified wheel plus its integrity metadata in a root-only dir.
 
@@ -371,6 +384,14 @@ def record_current_wheel(
         },
         mode=0o600,
     )
+    # The world-readable record of which BUILD is installed (W4d-D8), written
+    # from the same verified bytes. Best effort: a record that cannot be written
+    # leaves the previous one, which `installed_build` then reports as stale by
+    # its content digest rather than vouching for the wrong build.
+    try:
+        write_installed_record(retained_wheel, build_record)
+    except (OSError, ValueError):  # absence-ok: a stale record reads as stale, not as this build
+        pass
 
 
 def last_result(path: Path = RESULT_PATH) -> Optional[Dict[str, Any]]:
@@ -476,6 +497,44 @@ def _pip_reinstall(runner: Callable[..., Any], wheel: Path) -> None:
     # this reason - a group-only reinstall of the OLD wheel that then could not
     # start vnc-gateway. See NORMALIZE_PERMS.
     _run(runner, [*NORMALIZE_PERMS, VENV_ROOT], timeout=120)
+    _clear_stale_frontend(runner)
+    # ACC-063 review B1: the state-root layout the INSTALLED package expects,
+    # here for the same both-directions reason. Never fatal: a box whose
+    # filesystem refuses ACLs still upgrades, its GPU launch says why, and the
+    # hardware bridge the restart below brings up runs the layout again.
+    try:
+        settle_after_install(
+            lambda argv: _run(runner, argv, timeout=120),
+            _bundled_units_dir().parent, VENV_ROOT + "/bin/python",
+        )
+    except Exception:  # noqa: BLE001 - the layout never decides an upgrade
+        pass
+
+
+def _clear_stale_frontend(runner: Callable[..., Any]) -> None:
+    """Remove frontend files the just-installed wheel did not ship (W8-P1).
+
+    ``pip --force-reinstall`` removes only what the previous ``RECORD`` listed,
+    so hot-patched or older-build files under ``vaelor/www_v2`` survive it. The
+    INSTALLED package's own sweep is run, as ``settle_after_install`` runs its
+    layout, so a rollback to a release without one simply skips it. This
+    function is the running broker's code, so the first in-product upgrade INTO
+    a release that has it does not sweep; the installer and every later upgrade
+    do. ``-I`` keeps the broker's working directory off ``sys.path``. Never
+    fatal: the sweep refuses on its own when it cannot trust the file list, and
+    a leftover frontend file never decides an upgrade. Its report goes to this
+    unit's journal.
+    """
+    if not (_bundled_units_dir().parent / "www_v2_orphans.py").is_file():
+        return
+    try:
+        output = _run(runner, [VENV_ROOT + "/bin/python", "-I", "-m", ORPHAN_SWEEP],
+                      timeout=120)
+    except (UpgradeFailure, OSError, subprocess.SubprocessError) as error:
+        print("Stale frontend files were not all cleared: {}".format(error), flush=True)
+        return
+    if output.strip():
+        print(output.rstrip(), flush=True)
 
 
 def _same_version(left: str, right: str) -> bool:

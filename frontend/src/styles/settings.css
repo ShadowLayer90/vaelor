@@ -1,0 +1,811 @@
+/*
+ * Settings (VD-200, the Settings, Connections, Recovery, SettingsSessions and
+ * SettingsBackup boards): two-column card layouts, list rows with their
+ * controls on the right, the access-level choice, the backup steps and the
+ * last-resort cards.
+ */
+
+.stg-page,
+.stg-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stg-page {
+  gap: 20px;
+}
+
+.stg-two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  /* Cards in one row share one height, so their footers and actions line up
+     (polish cause 7; LESSONS 6). The card is a flex column whose body grows. */
+  align-items: stretch;
+}
+
+/* Only --even pairs are peers (Recovery's two last-resort cards, the API
+   panel and its neighbour). Accounts pairs a list with a stack of two cards:
+   stretched, the list card stood about 400 px taller than its rows at 1440
+   (polish review R8), so each side there keeps its own height. */
+.stg-two-col:not(.stg-two-col--even) > * {
+  align-self: start;
+}
+
+.stg-count {
+  padding: 3px 9px;
+}
+
+/* Rows */
+.stg-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.ui-card__body--flush > .stg-row:first-child {
+  border-top: 0;
+}
+
+.stg-row__text {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stg-row__text strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.stg-row__text small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.stg-row--account .stg-row__text {
+  flex-basis: 140px;
+}
+
+.stg-row__reason {
+  color: var(--text-faint-label);
+}
+
+.stg-row__error {
+  color: var(--danger-text) !important;
+}
+
+.stg-row__controls,
+.stg-row__end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.stg-row__end {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.stg-row__end small {
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-avatar {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  background: var(--bg-icon);
+  border: 1px solid var(--border-icon);
+  border-radius: 50%;
+  font-size: var(--font-size-ui-sm);
+}
+
+/* The role select sits in an account row's compact toolbar, beside its
+   Disable and Delete (records.css sizes those with the same token): compact
+   height on a desktop, the full touch target on a phone or touch screen. */
+.stg-role.ui-control {
+  width: auto;
+  min-width: 150px;
+  block-size: var(--control-height-compact);
+  min-height: 0;
+  padding-block: 0;
+  font-size: var(--font-size-ui);
+}
+
+.stg-delete.ui-button--quiet {
+  color: var(--danger-text);
+}
+
+.stg-tag {
+  padding: 3px 8px;
+  color: var(--text-secondary);
+  background: var(--bg-row-active);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-ui-xs);
+  white-space: nowrap;
+}
+
+.stg-empty {
+  margin: 0;
+  padding: 14px 18px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.stg-subhead {
+  margin: 0;
+  padding: 14px 18px 6px;
+  color: var(--text-faint-label);
+  border-top: 1px solid var(--border-row);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Add an account */
+.stg-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stg-form__pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.stg-form__pair--tight {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Shared tracks - label, control, then one per message a field can show
+     (hint, error, disabled reason, counter) - so a label that wraps to two
+     lines moves both controls down together instead of only its own (polish
+     cause 6: "Delete backups older than (days)" put its input 16 px below its
+     neighbour's). An empty track is 0 high. The pair is always one row and the
+     field keeps its own gap, so the grid has no row gap. */
+  grid-template-rows: repeat(6, auto);
+  gap: 0 10px;
+}
+
+.stg-form__pair--tight > .ui-field {
+  grid-row: span 6;
+  grid-template-rows: subgrid;
+  row-gap: var(--space-2);
+}
+
+.stg-levels {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.stg-levels legend {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-level {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.stg-level--on {
+  background: var(--bg-control);
+  border-color: var(--border-default);
+}
+
+.stg-level input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.stg-level span {
+  display: flex;
+  flex-direction: column;
+}
+
+.stg-level strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 400;
+}
+
+.stg-level small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-form__end,
+.stg-actions--end {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.stg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* Two-factor */
+.stg-two-factor__body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.stg-two-factor__body > .ui-notice,
+.stg-two-factor__body > .ui-field {
+  align-self: stretch;
+}
+
+.stg-secret {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stg-secret code {
+  padding: 10px 12px;
+  color: var(--text-primary);
+  word-break: break-all;
+  background: var(--bg-control);
+  border: 1px solid var(--border-row);
+  border-radius: var(--radius-md);
+}
+
+.stg-code.ui-control {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xl);
+  letter-spacing: 0.18em;
+}
+
+/* Connections */
+.stg-transport .ui-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.stg-transport__facts dd {
+  font-size: var(--font-size-ui-xl);
+}
+
+.stg-fingerprint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stg-fingerprint > span:first-child {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stg-fingerprint code {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.stg-gateway {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 14px;
+  padding: 14px 18px;
+}
+
+.stg-usage {
+  display: grid;
+  gap: 10px;
+  padding: 0 18px 14px;
+}
+
+.stg-usage small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-usage dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--border-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.stg-usage dl > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--bg-kv);
+}
+
+.stg-usage dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-usage dd {
+  margin: 0;
+  font-size: var(--font-size-ui-sm);
+}
+
+/*
+ * "Connection name" and "Create one-time API key" (polish audit, form rows).
+ * Bottom-aligned in a flex row, the button's disabled reason sat under it in
+ * flow and lifted the button 26 px above the field it belongs to. Here the
+ * field's label, control and message are three shared tracks (subgrid), and
+ * the button's wrappers step aside (display: contents) so the button takes the
+ * control track and its reason the message track: the button lines up with
+ * the field and its reason with the field's own message line. It is a form
+ * row, so the button is the full control height.
+ */
+.stg-api__create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: repeat(3, auto);
+  align-items: start;
+  gap: var(--space-2) 10px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-row);
+}
+
+.stg-api__create > .ui-field {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  grid-template-rows: subgrid;
+}
+
+.stg-api__create > .record-card-button,
+.stg-api__create > .record-card-button > .ui-button-wrap {
+  display: contents;
+}
+
+.stg-api__create .record-card-button .ui-button {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: var(--control-height);
+}
+
+.stg-api__create .record-card-button .ui-button__disabled-reason {
+  grid-column: 2;
+  grid-row: 3;
+  max-inline-size: 32ch;
+}
+
+.stg-token {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 18px 14px;
+  padding: 12px 14px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-deep);
+  border-radius: 10px;
+}
+
+.stg-token > div {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stg-token code {
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.stg-token small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-token > span {
+  display: flex;
+  gap: 8px;
+}
+
+/* Recovery */
+.stg-move .ui-card__body,
+.stg-last-resort .ui-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Reset and Remove stretch to one height (polish cause 7): the confirmation
+   field and its button sit at the card's foot, on one line across the pair. */
+.stg-last-resort .ui-card__body > .ui-field {
+  margin-top: auto;
+}
+
+.stg-move__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+  align-items: start;
+}
+
+.stg-move__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The Recovery board: Export and Import side by side; a disabled reason wraps under its own button. */
+.stg-move__form .stg-actions {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.stg-move__form .stg-actions .ui-button-wrap {
+  min-width: 0;
+  align-items: flex-start;
+}
+
+.stg-move__form .stg-actions .ui-button-wrap:last-child {
+  flex: none;
+}
+
+.stg-move__form .stg-actions .ui-button {
+  white-space: nowrap;
+}
+
+.stg-move__note {
+  margin: 0;
+}
+
+.stg-list-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  line-height: 1.4;
+  list-style: none;
+}
+
+.stg-list--muted {
+  color: var(--text-secondary);
+}
+
+.stg-list--plus li,
+.stg-list--dot li {
+  position: relative;
+  padding-left: 16px;
+}
+
+.stg-list--plus li::before,
+.stg-list--dot li::before {
+  position: absolute;
+  left: 0;
+}
+
+.stg-list--plus li::before {
+  content: "+";
+  color: var(--success);
+}
+
+.stg-list--dot {
+  color: var(--text-secondary);
+}
+
+.stg-list--dot li::before {
+  content: "·";
+  color: var(--text-muted);
+}
+
+.stg-scope {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.stg-last-resort .ui-button__disabled-reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-last-resort .stg-actions--end .ui-button-wrap,
+.stg-move__form .ui-button-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stg-last-resort .stg-actions--end .ui-button-wrap {
+  align-items: flex-end;
+}
+
+/* Back up this Vaelor */
+.stg-backup__intro {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px 0;
+}
+
+.stg-backup__intro p {
+  max-width: 860px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.6;
+}
+
+.stg-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 14px;
+  /* Cards in one row share one height, so their footers and actions line up
+     (polish cause 7; LESSONS 6). The card is a flex column whose body grows. */
+  align-items: stretch;
+  padding: 18px;
+}
+
+.stg-step {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-row);
+  border-radius: var(--radius-lg);
+}
+
+.stg-step > .status-pill,
+.stg-step > span:last-child {
+  align-self: flex-start;
+}
+
+.stg-step__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.stg-step__head > span {
+  color: var(--accent-hover);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-step__head h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.stg-step__head p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.stg-step .ui-button__disabled-reason {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.stg-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  /* The whole row is the switch's hit area: 44px tall for a thumb. */
+  min-height: 44px;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  cursor: pointer;
+}
+
+.stg-switch input {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  flex: 0 0 auto;
+  margin: 0;
+  background: var(--border-default);
+  border-radius: var(--radius-pill);
+  appearance: none;
+  cursor: pointer;
+}
+
+.stg-switch input::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  content: "";
+  background: var(--text-secondary);
+  border-radius: 50%;
+  transition: left var(--motion-fast) ease;
+}
+
+.stg-switch input:checked {
+  background: var(--accent);
+}
+
+.stg-switch input:checked::after {
+  left: 19px;
+  background: var(--text-on-accent);
+}
+
+.stg-switch input:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-deep);
+  outline: 2px solid var(--focus);
+}
+
+.stg-backup__list {
+  border-top: 1px solid var(--border-row);
+}
+
+.stg-backup__list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 18px 6px;
+}
+
+.stg-backup__list-head h3 {
+  margin: 0;
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.stg-backup__pager {
+  padding: 10px 18px 14px;
+}
+
+.stg-restore-name.record-mono {
+  font-size: var(--font-size-ui-lg);
+  word-break: break-all;
+}
+
+@media (max-width: 1200px) {
+  .stg-move__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stg-move__form {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1024px) {
+  .stg-two-col {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .stg-row,
+  .stg-gateway,
+  .stg-api__create,
+  .stg-empty,
+  .stg-subhead,
+  .stg-backup__list-head,
+  .stg-backup__pager {
+    padding-inline: var(--space-4);
+  }
+
+  .stg-usage {
+    padding-inline: var(--space-4);
+  }
+
+  .stg-token {
+    margin-inline: var(--space-4);
+  }
+
+  .stg-steps {
+    padding: var(--space-4);
+  }
+
+  .stg-move__grid,
+  .stg-scope {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stg-move__form .stg-actions {
+    flex-wrap: wrap;
+  }
+
+  .stg-row__controls,
+  .stg-row__end {
+    width: 100%;
+    justify-content: flex-start;
+    align-items: flex-start;
+    margin-left: 0;
+  }
+
+  .stg-role.ui-control {
+    min-width: 0;
+  }
+
+  /* One column on a phone: the button and its reason follow the field. */
+  .stg-api__create {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+
+  .stg-api__create > .ui-field {
+    grid-row: auto;
+    grid-template-rows: none;
+  }
+
+  .stg-api__create .record-card-button .ui-button,
+  .stg-api__create .record-card-button .ui-button__disabled-reason {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+  }
+
+  .stg-row__controls .ui-button {
+    padding-inline: 12px;
+  }
+
+  .stg-switch input {
+    width: 44px;
+  }
+}

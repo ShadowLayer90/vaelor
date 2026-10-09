@@ -1,0 +1,568 @@
+/*
+ * Apps and AI, the Manage tab (VD-200: the Manage, ManageModelSwitch,
+ * ManageLogsConfig, ManageFiles, ManageConsoleRestore and ManageRemoval
+ * boards). Colours are tokens only (tokens-auth.css).
+ */
+
+/* ---- The two columns ---- */
+
+.manage-layout {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.manage-layout__lists {
+  min-width: 0;
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.manage-layout__detail {
+  min-width: 0;
+  flex: 2 1 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* The board's buttons: 36 px pills on a desktop, 44 px on a phone or touch screen. */
+:is(.manage-layout, .manage-tool, .manage-restore) .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+:is(.manage-layout, .manage-tool, .manage-restore) .ui-button--primary { font-weight: 600; }
+
+/* A danger action on a page is an outline; only a dialog's final approval is solid red. */
+:is(.manage-layout, .manage-tool, .manage-restore) .ui-button--danger:not(.manage-solid-danger) {
+  color: var(--danger-text);
+  background: transparent;
+  border-color: var(--danger-border);
+}
+
+:is(.manage-layout, .manage-tool, .manage-restore) .ui-button--danger:not(.manage-solid-danger):hover:not(:disabled) {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+:is(.manage-layout, .manage-tool, .manage-restore) a.ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
+}
+
+.manage-layout .ui-button__disabled-reason,
+.manage-tool .ui-button__disabled-reason,
+.manage-restore .ui-button__disabled-reason {
+  font-size: var(--font-size-ui-xs);
+}
+
+/* ---- The lists ---- */
+
+.manage-list .ui-card__header h2 { font-size: var(--font-size-ui-lg); }
+
+/* The list is its own size container: a service row stacks by the list's
+   width, not the window's (see the @container rule at the end). */
+.manage-list { container: manage-list / inline-size; }
+
+.manage-row {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  color: var(--text-primary);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.manage-list .pagination { padding: 10px 18px; border-top: 1px solid var(--border-list); }
+
+/* A service row is a Button drawn as a list row: full width, no pill. */
+.ui-button-wrap:has(> .manage-row--button) {
+  display: grid;
+  width: 100%;
+}
+
+.ui-button.manage-row.manage-row--button {
+  min-height: 64px;
+  justify-content: flex-start;
+  padding: 14px 18px;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 400;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-list);
+  border-radius: 0;
+  transition: background var(--motion-fast) ease;
+}
+
+.ui-button.manage-row--button:hover:not(:disabled) {
+  background: var(--bg-row-hover);
+  border-color: var(--border-list);
+}
+
+.ui-button.manage-row--button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+
+.manage-row.is-chosen,
+.ui-button.manage-row.manage-row--button.is-chosen {
+  background: var(--bg-row-active);
+  box-shadow: inset 0 0 0 1px var(--border-row-active);
+}
+
+.manage-row__text {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.manage-row__title {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+  overflow-wrap: break-word;
+}
+
+.manage-row__detail {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: break-word;
+}
+
+.manage-row .status-pill { flex: 0 0 auto; }
+
+.manage-row--model {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  row-gap: 10px;
+}
+
+.manage-row--model > .apps-ico { grid-row: span 2; }
+
+.manage-row__trail {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.manage-row__size {
+  color: var(--text-secondary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  white-space: nowrap;
+}
+
+.manage-row__below {
+  min-width: 0;
+  grid-column: 2 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.manage-row__note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.manage-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.manage-row__below:empty { display: none; }
+
+.manage-use-button.ui-button {
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.manage-list__message { padding: 14px 18px; }
+
+.manage-list__quiet {
+  margin: 0;
+  padding: 14px 18px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.manage-empty {
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.manage-empty strong { color: var(--text-primary); font-weight: 500; }
+
+.manage-feedback { border-radius: 10px; }
+
+/* ---- The right-hand panel: the app manager and Use model ---- */
+
+.manage-panel { min-width: 0; }
+
+.manage-panel__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.manage-panel__identity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.manage-panel__titles {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.manage-panel__titles h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+  line-height: 1.3;
+  overflow-wrap: break-word;
+}
+
+.manage-panel__titles p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.manage-panel__state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.manage-panel .manage-panel__close.ui-button {
+  color: var(--text-secondary);
+  border-color: transparent;
+}
+
+.manage-panel .ui-tab-set { gap: 0; }
+
+.manage-panel__tabs.ui-tab-set__list { padding: 0 18px; }
+
+.manage-panel__tabs .ui-tab {
+  padding: 12px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.manage-panel__body.ui-tab-set__panel,
+.manage-panel__body:not(.ui-tab-set__panel) {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 18px;
+  outline: none;
+}
+
+.manage-panel__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-top: 1px solid var(--border-row);
+}
+
+.manage-panel__shield {
+  min-width: 0;
+  flex: 1 1 240px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.manage-panel__shield svg { flex: 0 0 auto; margin-top: 1px; }
+
+.manage-panel__buttons {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.manage-panel__foot .ui-button-wrap { align-items: flex-end; text-align: right; }
+
+.manage-panel--empty { padding: 8px 0; }
+
+/* The Use model choices: three cards, the chosen one on the accent. */
+.manage-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  gap: 12px;
+}
+
+.ui-button-wrap:has(> .manage-mode) { display: grid; }
+
+.ui-button.manage-mode {
+  min-height: 72px;
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px 14px;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--bg-card);
+  border: 1px solid var(--border-row-active);
+  border-radius: 10px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.manage-mode strong { font-size: var(--font-size-ui-sm); font-weight: 500; }
+.manage-mode span { color: var(--text-muted); font-size: var(--font-size-ui-xs); line-height: 1.4; }
+
+.ui-button.manage-mode:hover:not(:disabled) { background: var(--bg-row-hover); border-color: var(--border-strong); }
+
+.ui-button.manage-mode.is-on,
+.ui-button.manage-mode.is-on:hover:not(:disabled) {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.manage-mode.is-on span { color: var(--accent-text); }
+
+.ui-button.manage-mode:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ---- The Overview ---- */
+
+.manage-overview {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.manage-overview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.manage-overview__config {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.manage-overview__config-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.manage-overview__config-head h3,
+.manage-restore__titles h3,
+.manage-remote-ready h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 400;
+}
+
+.manage-overview__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+}
+
+.manage-overview__tiles:empty { display: none; }
+
+.manage-tile {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.manage-tile strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 400;
+}
+
+.manage-tile > span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.manage-setup ol,
+.manage-setup dl { margin: 0; }
+
+.manage-setup ol {
+  display: grid;
+  gap: 6px;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.manage-setup dl { display: grid; gap: 6px; font-size: var(--font-size-ui-sm); }
+.manage-setup dl > div { display: grid; grid-template-columns: minmax(110px, max-content) minmax(0, 1fr); gap: 12px; }
+.manage-setup dt { color: var(--text-muted); }
+.manage-setup dd { margin: 0; color: var(--text-primary); overflow-wrap: break-word; }
+
+.manage-setup__secret-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.manage-setup__secret-value code {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.manage-operation {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-size-ui-sm);
+}
+
+/* ---- Banners ---- */
+
+.manage-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.manage-banner > span { min-width: 0; flex: 1 1 240px; }
+
+.manage-banner--warning {
+  color: var(--warning-text);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.manage-banner--danger {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+.manage-banner .ui-button {
+  color: var(--text-primary);
+  background: var(--bg-button);
+  border-color: var(--border-default);
+}
+
+/* The delete confirm and the removal: the final approval is solid red. */
+.manage-solid-danger.ui-button--danger:disabled,
+.manage-solid-danger.ui-button--danger[aria-disabled="true"] {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  :is(.manage-layout, .manage-tool, .manage-restore) .ui-button,
+  :is(.manage-layout, .manage-tool, .manage-restore) a.ui-button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 720px) {
+  .manage-row,
+  .manage-panel__head,
+  .manage-panel__foot,
+  .manage-list__message,
+  .manage-list__quiet { padding-inline: var(--space-4); }
+
+  .manage-panel__tabs.ui-tab-set__list { padding: 0 var(--space-4); }
+
+  .manage-panel__body.ui-tab-set__panel,
+  .manage-panel__body:not(.ui-tab-set__panel) { padding: var(--space-4); }
+
+  .manage-row__trail { grid-column: 2 / -1; }
+
+  .manage-overview .apps-kv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+}
+
+/* A list 366 px wide or less inside its border (a phone up to 400 px, and
+   the narrow list column beside the manager at about 1200 px): the state pill
+   drops under the name, so a name is never squeezed into a sliver and broken
+   mid-word (VD-200 apps NIT, 320). A container query, not a 400 px window
+   breakpoint, which the design check refuses (720, 1024, 1200, 1440 only). */
+@container manage-list (max-width: 366px) {
+  .ui-button.manage-row.manage-row--button {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 14px;
+    row-gap: 8px;
+  }
+
+  .manage-row--button > .apps-ico { grid-row: span 2; align-self: start; }
+
+  .manage-row--button > .status-pill { grid-column: 2; justify-self: start; }
+}

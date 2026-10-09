@@ -5,46 +5,6 @@ import { metricNumber, metricSeries, metricSum, metricSumSeries } from "../lib/m
 import type { MachineProfile } from "../lib/machine";
 import { cpuTemperatureProvenance } from "../lib/sensorSource";
 import type { IconName } from "./Icon";
-import { UnavailableValue } from "./ui";
-
-/**
- * A `used of total` pair, where an absent `used` is absent.
- *
- * This function exists because the first version of the GPU tile wrote
- * `formatQuantity(gttUsed ?? 0, "used")` — three lines under a comment calling
- * the shared aperture "the honest headline" — and so printed
- * **"Shared memory 0 B of 24.5 GB"** on a machine whose driver publishes
- * `mem_info_gtt_total` and no `mem_info_gtt_used`. The backend omits the key
- * exactly as it should (`accelerator_telemetry()` never emits an absent
- * sensor); the client then re-invented the zero the backend had refused to
- * emit, on the one pool that actually fills during inference. Mid-run, with
- * 19 GB resident, Home would have read `0 B` — indistinguishable from an idle
- * accelerator.
- *
- * `?? 0` on a measured value is the defect this entire change set exists to
- * remove. There is no correct use of it here.
- */
-function usedOfTotal({
-  noun,
-  used,
-  total,
-  missingUsed,
-}: {
-  noun: string;
-  used: number | null;
-  total: number;
-  missingUsed: string;
-}): ReactNode {
-  if (used === null) {
-    return (
-      <>
-        {noun} <UnavailableValue label={`${noun} use unavailable`} reason={missingUsed} />
-        {` of ${formatQuantity(total, "capacity")}`}
-      </>
-    );
-  }
-  return `${noun} ${formatQuantity(used, "used")} of ${formatQuantity(total, "capacity")}`;
-}
 
 export interface OverviewCard {
   icon: IconName;
@@ -86,12 +46,6 @@ export function overviewCards({
 }): OverviewCard[] {
   const cpuFrequency = metricNumber(metrics, "cpu_freq");
   const fanRpm = metricNumber(metrics, "pwm_fan_speed");
-  const vramUsed = metricNumber(metrics, "gpu_vram_used_bytes");
-  const vramTotal = metricNumber(metrics, "gpu_vram_total_bytes");
-  const gttUsed = metricNumber(metrics, "gpu_gtt_used_bytes");
-  const gttTotal = metricNumber(metrics, "gpu_gtt_total_bytes");
-  const gpuWatts = metricNumber(metrics, "gpu_power_watts");
-  const gpuClock = metricNumber(metrics, "gpu_clock_mhz");
   const memoryUsed = metricNumber(metrics, "memory_used");
   const memoryTotal = metricNumber(metrics, "memory_total");
   const networkKeys = ["network_download_speed", "network_upload_speed"];
@@ -146,63 +100,8 @@ export function overviewCards({
     },
   ];
 
-  if (machine.capabilities.gpu.available) {
-    cards.push(
-      {
-        icon: "gpu",
-        label: "GPU utilisation",
-        value: formatPercent(metrics.gpu_busy_percent),
-        /*
-         * The tile used to show the one number that does not move. On this
-         * hardware `mem_info_vram_used` sits at about 1% of the reserved
-         * carve-out throughout every inference run while the shared aperture
-         * carries 11–19 GB — so the bar a user watched during heavy work was
-         * the one that barely changed, and the pool actually filling was not
-         * on the page at all.
-         *
-         * The aperture is the honest headline where the driver reports one.
-         * Where it does not, the carve-out is named as a carve-out rather than
-         * being presented as "GPU memory", because a single number for both
-         * pools is a lie on any unified-memory part.
-         */
-        detail: gttTotal !== null
-          ? usedOfTotal({
-            noun: "Shared memory",
-            used: gttUsed,
-            total: gttTotal,
-            missingUsed: "This adapter publishes the size of its shared aperture but not how much of it is in use",
-          })
-          : vramTotal !== null
-            ? usedOfTotal({
-              noun: "Reserved video memory",
-              used: vramUsed,
-              total: vramTotal,
-              missingUsed: "This adapter publishes the size of its reserved video memory but not how much of it is in use",
-            })
-            : "Memory use not reported",
-        values: metricSeries(history, "gpu_busy_percent"),
-        tone: "amber",
-        unavailableReason: metricNumber(metrics, "gpu_busy_percent") === null
-          ? "This graphics processor does not report a utilisation figure"
-          : null,
-      },
-      {
-        icon: "gpu",
-        label: "GPU temperature",
-        value: formatTemperature(metrics.gpu_temperature_c),
-        detail: [
-          gpuWatts !== null ? `${gpuWatts.toFixed(0)} W` : null,
-          gpuClock !== null ? `${(gpuClock / 1000).toFixed(2)} GHz` : null,
-        ].filter(Boolean).join(" · ") || "Power and clock not reported",
-        values: metricSeries(history, "gpu_temperature_c"),
-        tone: "pink",
-        unavailableReason: metricNumber(metrics, "gpu_temperature_c") === null
-          ? "This graphics processor does not report a temperature"
-          : null,
-      },
-    );
-  }
-
+  // VD-200 (the SystemCompute board): the GPU's busy, temperature, power and
+  // clock are the Accelerators card's now, so Live readings is one row of four.
   cards.push(
     {
       icon: "memory",

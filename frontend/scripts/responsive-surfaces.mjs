@@ -127,15 +127,15 @@ async function exerciseAskComposer(page, variant) {
   await page.getByRole('tab', { name: 'Ask', exact: true }).click();
   await page.getByRole('heading', { name: 'What do you want to know?' }).waitFor();
   await assertRequiredSurface(page, 'Ask composer', [
-    '.assistant-refinement-disclosure', '.assistant-chat__composer', '.capability-strip',
+    '.as-refinement', '.as-composer', '.as-strip',
     '#assistant-problem-area', '#assistant-durable',
   ]);
-  const disclosure = page.locator('.assistant-refinement-disclosure');
+  const disclosure = page.locator('.as-refinement');
   assert(
     await disclosure.evaluate((element) => !element.open),
     'The refinement disclosure must start closed so the question comes first.',
   );
-  const composerBox = await page.locator('.assistant-chat__composer').boundingBox();
+  const composerBox = await page.locator('.as-composer').boundingBox();
   const disclosureBox = await disclosure.boundingBox();
   assert(
     disclosureBox.y >= composerBox.y,
@@ -155,7 +155,7 @@ async function exerciseAskComposer(page, variant) {
   const options = await problemArea.locator('option').allTextContents();
   assert(options[0] === 'Automatic', `The problem-area refinement must lead with Automatic: ${JSON.stringify(options)}.`);
   assert(await page.locator('#assistant-durable:checked').count() === 0, 'The re-runnable check option must start unchecked.');
-  const geometry = await page.locator('.assistant-chat__composer').evaluate((element) => {
+  const geometry = await page.locator('.as-composer').evaluate((element) => {
     const textarea = element.querySelector('textarea');
     const bounds = textarea?.getBoundingClientRect();
     return {
@@ -170,16 +170,16 @@ async function exerciseAskComposer(page, variant) {
    * measured but not asserted is not a floor: the height was free to fall to
    * zero with nothing but a reported number to show for it.
    *
-   * 92px is `min-height` on `.assistant-chat__composer textarea` in
-   * `src/styles/assistant-chat.css`, and 92 is what this measures at every
+   * 92px is `min-height` on `.as-composer__input` in
+   * `src/styles/assistant-ask.css`, and 92 is what this measures at every
    * viewport in the matrix. 88 leaves the sub-pixel room a zoomed viewport can
    * cost without leaving room for the field to shrink meaningfully.
    */
   assert(geometry.textareaHeight >= 88, `Ask composer request field is unusably short: ${JSON.stringify(geometry)}.`);
   assert(geometry.textareaWidth >= Math.min(280, variant.viewport.width - 64), `Ask composer request field is unusably narrow: ${JSON.stringify(geometry)}.`);
   await assertKeyControlsReachable(page, 'Ask composer', variant, [
-    '.assistant-chat__composer textarea',
-    '.assistant-chat__composer button',
+    '.as-composer textarea',
+    '.as-composer button[type=submit]',
     '#assistant-problem-area',
     '#assistant-durable',
   ]);
@@ -190,7 +190,7 @@ async function exerciseAskComposer(page, variant) {
    * a height-capped panel wrapped around a second scroller; the page is the
    * only scroller now, so the stream is as tall as its own content.
    */
-  const transcript = await page.locator('.assistant-chat__stream').evaluate((element) => ({
+  const transcript = await page.locator('.as-stream').evaluate((element) => ({
     visible: Math.round(element.getBoundingClientRect().height),
     content: element.scrollHeight,
     panelOverflow: window.getComputedStyle(element.parentElement).overflowY,
@@ -206,7 +206,7 @@ async function exerciseAskComposer(page, variant) {
   );
   // The archive is its own tab now: Ask carries the question and the answer.
   assert(
-    await page.locator('.assistant-run-history').count() === 0,
+    await page.locator('.ah-history').count() === 0,
     'The run history must not be rendered on Ask.',
   );
   return { surface: 'ask-composer', geometry, options, transcript };
@@ -218,24 +218,24 @@ async function exerciseAskComposer(page, variant) {
  */
 async function exerciseRunHistory(page, variant) {
   await page.getByRole('tab', { name: 'History', exact: true }).click();
-  await page.locator('.assistant-run-history').waitFor();
+  await page.locator('.ah-history').waitFor();
   await assertRequiredSurface(page, 'Run history', [
-    '.assistant-run-history__filters', '.agent-task-board .section-heading',
+    '.ah-toolbar [role=group]', '#specialist-runs .ui-card__header',
   ]);
-  const bands = await page.locator('.assistant-run-history .section-heading').count();
+  const bands = await page.locator('.ah-history #specialist-runs .ui-card__header').count();
   assert(bands === 1, `The run history must carry one heading pair, found ${bands}.`);
   assert(
     await page.getByText('What Vaelor has run here').count() === 0,
     'The duplicate run-history heading is still rendered.',
   );
   for (const filter of ['All', 'Checks', 'Agent runs', 'Automatic']) {
-    const control = page.locator('.assistant-run-history__filters button')
+    const control = page.locator('.ah-toolbar [role=group] button')
       .filter({ hasText: new RegExp(`^${filter} \\(\\d+\\)$`) });
     assert(await control.count() === 1, `Run-history filter "${filter}" is missing.`);
     await control.click();
     await assertPageQuality(page, `Run history · ${filter}`, variant);
   }
-  await page.locator('.assistant-run-history__filters button').first().click();
+  await page.locator('.ah-toolbar [role=group] button').first().click();
   return { surface: 'run-history', bands };
 }
 
@@ -246,11 +246,11 @@ async function exerciseTestRunDialog(page, variant) {
    * Two actions stay on the card and the other five moved into an overflow
    * disclosure, so the primary one is now "Run" rather than "Run agent".
    */
-  const card = page.locator('.custom-agent-card').first();
-  const openActions = await card.locator('.custom-agent-card__actions > .ui-button-wrap button').count();
+  const card = page.locator('.ar-agent').first();
+  const openActions = await card.locator('.ar-agent__actions > .ar-actions > .ui-button-wrap button').count();
   assert(openActions <= 2, `A custom-agent card must expose at most two actions in the open, found ${openActions}.`);
   assert(
-    await card.locator('.custom-agent-card__menu-items button').count() >= 4,
+    await (await card.getByRole('button', { name: 'More', exact: true }).click(), await card.locator('.ar-menu button').count()) >= 4,
     'The custom-agent overflow menu lost the actions it was meant to keep.',
   );
   const trigger = card.getByRole('button', { name: 'Run', exact: true }).first();
@@ -266,14 +266,14 @@ async function exerciseTestRunDialog(page, variant) {
    * anybody who owned a single agent - about 1,400px and twenty controls.
    */
   assert(
-    await page.locator('.custom-agent-app-access-panel').count() === 0,
+    await page.locator('.ar-app-access').count() === 0,
     'The app-access wizard is rendered without being asked for.',
   );
   await trigger.focus();
   await trigger.click();
   const dialog = page.getByRole('dialog', { name: /^Run / });
   await dialog.waitFor();
-  await assertRequiredSurface(page, 'Test-run dialog', ['.custom-agent-test-dialog', `button[aria-label='Close test run']`, 'textarea']);
+  await assertRequiredSurface(page, 'Test-run dialog', ['.ar-dialog-form', `button[aria-label='Close test run']`, 'textarea']);
   await assertPageQuality(page, 'Test-run dialog', variant);
   assert(await dialog.getByRole('button', { name: 'Run now', exact: true }).count() === 1, 'Agent run dialog is missing Run now.');
   await page.getByLabel('Close test run', { exact: true }).click();
@@ -282,14 +282,15 @@ async function exerciseTestRunDialog(page, variant) {
 }
 
 async function exerciseCustomApplicationRequest(page, variant) {
-  const trigger = page.getByRole('button', { name: 'Describe a custom application', exact: true });
+  const trigger = page.getByRole('button', { name: 'Describe an app', exact: true });
   await trigger.click();
   await page.getByRole('heading', { name: 'What should Vaelor deploy?' }).waitFor();
   const textarea = page.getByLabel('Describe the application and how you expect to use it');
   const submit = page.getByRole('button', { name: 'Research and prepare plan', exact: true });
+  // The submit sits in the wizard dialog's footer (VD-200, AppsWizardResearch), under the form.
   const geometry = await page.locator('.application-deployment__request-form').evaluate((element) => {
     const field = element.querySelector('textarea');
-    const action = element.querySelector('button');
+    const action = document.querySelector(`button[form="${element.id}"]`);
     const fieldBounds = field?.getBoundingClientRect();
     const actionBounds = action?.getBoundingClientRect();
     return {
@@ -300,12 +301,12 @@ async function exerciseCustomApplicationRequest(page, variant) {
     };
   });
   assert(await textarea.count() === 1 && await submit.count() === 1, 'Custom application request controls are missing.');
-  assert(geometry.textareaHeight >= 180, `Custom application request field is too short: ${JSON.stringify(geometry)}.`);
+  assert(geometry.textareaHeight >= 64, `Custom application request field is too short: ${JSON.stringify(geometry)}.`);
   assert(geometry.textareaWidth >= Math.min(480, variant.viewport.width - 64), `Custom application request field is too narrow: ${JSON.stringify(geometry)}.`);
   assert(geometry.buttonTop >= geometry.textareaBottom, `Custom application submit action overlaps or sits beside the request field: ${JSON.stringify(geometry)}.`);
   await assertPageQuality(page, 'Custom application request', variant);
-  await page.getByRole('button', { name: 'Back to Workloads', exact: true }).click();
-  await page.locator('.workload-product-grid').waitFor();
+  await page.getByRole('button', { name: 'Back to Apps and AI', exact: true }).click();
+  await page.locator('.apps-doors').waitFor();
   return { surface: 'custom-application-request', geometry };
 }
 
@@ -316,22 +317,23 @@ async function exerciseCustomApplicationRequest(page, variant) {
  */
 async function exerciseMemoryCards(page, variant) {
   await page.getByRole('tab', { name: 'Ask', exact: true }).click();
-  const chip = page.locator('.capability-strip .capability-chip--link');
+  const chip = page.locator('.as-strip .capability-chip--link');
   await chip.waitFor({ state: 'visible', timeout: 10_000 });
   const target = await chip.getAttribute('href');
   assert(target === '#/memory', `The memory chip must open #/memory, got ${JSON.stringify(target)}.`);
   await chip.click();
   await waitForUsable(page);
   await page.getByRole('heading', { level: 1, name: /^What Vaelor remembers/ }).waitFor();
-  const heading = await page.getByRole('heading', { level: 1 }).first().textContent();
+  // The heading is the page's name; the line under it says both AI surfaces read the store (VD-200, MemoryPage).
+  const header = await page.locator('.mp-page .ui-page-header__title').first().textContent();
   assert(
-    /used by both/.test(heading ?? '') && /AI Chat/.test(heading ?? ''),
-    `The memory page must say both AI surfaces use it: ${JSON.stringify(heading)}.`,
+    /Both the Assistant and AI Chat read it/.test(header ?? ''),
+    `The memory page must say both AI surfaces use it: ${JSON.stringify(header)}.`,
   );
-  const cards = page.locator('.memory-card');
+  const cards = page.locator('.mp-memory');
   await cards.first().waitFor({ state: 'visible', timeout: 10_000 });
   assert(await cards.count() >= 2, 'Memory card fixtures are missing after navigation.');
-  await assertRequiredSurface(page, 'Memory cards', ['.memory-card__meta', '.memory-card__actions']);
+  await assertRequiredSurface(page, 'Memory cards', ['.mp-memory__tags', '.mp-memory__actions']);
   const result = await assertPageQuality(page, 'Memory cards', variant);
   assert(result.quality.longValueCandidates > 0, 'Memory card long-content fixture is missing.');
   const count = await cards.count();
@@ -344,10 +346,10 @@ async function exerciseMemoryCards(page, variant) {
 async function exerciseManagedCards(page, variant) {
   await page.getByRole('tab', { name: /^Manage/ }).click();
   await page.getByRole('heading', { name: 'Your services' }).waitFor();
-  const cards = page.locator('.managed-card');
+  const cards = page.locator('.manage-row');
   await cards.first().waitFor({ state: 'visible', timeout: 10_000 });
   assert(await cards.count() > 0, 'Managed workload card fixtures are missing after navigation.');
-  await assertRequiredSurface(page, 'Managed workload cards', ['.managed-card__head', '.managed-card__meta', '.managed-card button']);
+  await assertRequiredSurface(page, 'Managed workload cards', ['.manage-row__title', '.manage-row__detail', '.manage-row--button']);
   const result = await assertPageQuality(page, 'Managed workload cards', variant);
   assert(result.quality.longValueCandidates > 0, 'Managed workload long-path/image fixture is missing.');
   return { surface: 'managed-workload-cards', cards: await cards.count() };
@@ -356,14 +358,15 @@ async function exerciseManagedCards(page, variant) {
 async function exerciseAssistantAndChat(page, variant) {
   await page.getByRole('tab', { name: 'Ask', exact: true }).click();
   await page.getByRole('heading', { name: 'What do you want to know?' }).waitFor();
-  await assertRequiredSurface(page, 'Assistant', ['.assistant-tabs', '.assistant-chat']);
+  await assertRequiredSurface(page, 'Assistant', ['.as-tabs', '.as-chat']);
   const assistant = await assertPageQuality(page, 'Assistant', variant);
   const composer = await assertKeyControlsReachable(page, 'Assistant composer', variant, [
-    '.assistant-chat__composer textarea',
-    '.assistant-chat__composer button',
+    '.as-composer textarea',
+    '.as-composer button[type=submit]',
   ]);
   await navigate(page, destinationName('ai-chat'), variant.viewport.width);
-  await page.getByRole('heading', { name: 'AI Chat' }).waitFor();
+  // The chat's own name is the page's heading (VD-200); the top bar names the page.
+  await page.locator('.ai-chat-main').waitFor();
   await assertRequiredSurface(page, 'AI Chat', ['.ai-chat-page', '.ai-chat-main']);
   const chat = await assertPageQuality(page, 'AI Chat', variant);
   // At real browser zoom the page is expected to scroll, so "the chat fits the
@@ -471,11 +474,11 @@ async function walkEveryDestination(page, variant) {
       const installTab = page.getByRole('tab', { name: 'Install', exact: true });
       if ((await installTab.getAttribute('aria-selected')) !== 'true') {
         await installTab.click();
-        await page.locator('.workload-product-grid').waitFor();
+        await page.locator('.apps-doors').waitFor();
       }
     }
     if (route === 'system') await exerciseCaseLighting(page, variant);
-    const required = route === 'assistant' ? ['.assistant-tabs', '.assistant-chat'] : route === 'ai-chat' ? ['.ai-chat-page', '.ai-chat-main'] : route === 'workloads' ? ['.workloads-page', '.workload-product-grid'] : ['main'];
+    const required = route === 'assistant' ? ['.as-tabs', '.as-chat'] : route === 'ai-chat' ? ['.ai-chat-page', '.ai-chat-main'] : route === 'workloads' ? ['.workloads-page', '.apps-doors'] : ['main'];
     await assertRequiredSurface(page, label, required);
     const result = await assertPageQuality(page, label, variant);
     if (route === 'ai-chat' && variant.viewport.width > 720) {

@@ -2,10 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { canonicalOperationState, jobCanCancel, jobIsReady, jobIsRetryable, jobIsTerminal, jobNeedsAttention, jobStateLabel } from "../lib/jobPresentation";
 import type { Session } from "../types";
+import "../styles/apps-setup.css";
 import { ActionReviewDialog } from "./ActionReviewDialog";
-import { Icon } from "./Icon";
-import { ModalShell } from "./ModalShell";
-import { Button, Notice } from "./ui";
+import { AppsDialog, AppsIconTile, AppsProgress } from "./appsKit";
+import { AppsBanner } from "./appsSetupParts";
+import { StatusPill } from "./StatusPill";
+import { Button } from "./ui";
+import { joinClassNames } from "./ui/field";
 
 type ResearchState = "ready" | "not_installed" | "degraded" | "blocked";
 
@@ -63,6 +66,7 @@ export function WebResearchSetup({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [reviewError, setReviewError] = useState(""); // VD-189: the review's refusal, shown in the review
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -117,7 +121,7 @@ export function WebResearchSetup({
   async function executePlan() {
     if (!plan) return;
     setBusy(true);
-    setError("");
+    setError(""); setReviewError("");
     try {
       const result = await apiRequest<{ plan: ResearchPlan; job: ResearchJob }>(
         "/applications/research-service/actions",
@@ -131,7 +135,7 @@ export function WebResearchSetup({
       setJob(result.job);
       window.localStorage.setItem(resumeKey, result.job.id);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The reviewed operation could not be queued.");
+      setReviewError(reason instanceof Error ? reason.message : "The reviewed operation could not be queued.");
     } finally {
       setBusy(false);
     }
@@ -160,88 +164,143 @@ export function WebResearchSetup({
   const canManage = session.user.role === "administrator";
   const operationInProgress = Boolean(job && jobCanCancel(job));
   const recoveredAfterTimeout = Boolean(job && canonicalOperationState(job) === "failed" && status?.ready);
+  const jobFailed = Boolean(job && jobNeedsAttention(job) && !recoveredAfterTimeout);
+  const jobSettled = Boolean(job && (jobFailed || recoveredAfterTimeout || jobIsReady(job)));
+  // The service's state in words: the server's own state name, sentence-cased.
+  const stateTitle = operationInProgress
+    ? "Setup in progress"
+    : status?.ready
+      ? "Ready for application research"
+      : (status?.state ?? "").replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
+  const blockReason = !canManage
+    ? "An administrator sets this up."
+    : !status
+      ? "Readiness is still being checked."
+      : undefined;
 
   return (
     <>
-          <p>{status?.ready ? "Guarded web research is ready on this node." : status?.reason ?? "Checking guarded web research readiness…"}</p>
-      <div className="panel-heading__actions">
-        {status?.ready ? (
-          <>
-            <Button onClick={onResearch} variant="primary">Research a public application</Button>
-            {canManage && <Button onClick={() => setOpen(true)} variant="quiet">Manage research</Button>}
-          </>
-        ) : (
-          <Button
-            disabled={!canManage || busy || !status || operationInProgress}
-            onClick={() => status?.state === "blocked" ? setOpen(true) : void prepare(primaryAction)}
-            variant="primary"
-          >
-            {operationInProgress ? "Setup in progress" : status?.state === "degraded" ? "Review repair" : status?.state === "blocked" ? "Port conflict needs attention" : "Set up web research"}
-          </Button>
-        )}
+      {/* The AppsWebResearch board: one row where research needs it - the
+          capability, its state in a sentence, and the one next step. */}
+      <div className="apps-research-row">
+        <AppsIconTile accent={Boolean(status?.ready)} name="search" />
+        <div className="apps-research-row__text">
+          <strong>Guarded web research</strong>
+          <span>{status?.ready ? "Guarded web research is ready on this node." : status?.reason ?? "Checking guarded web research readiness…"}</span>
+        </div>
+        <div className="apps-research-row__actions">
+          {status?.ready ? (
+            <>
+              <Button onClick={onResearch} variant="primary">Research a public application</Button>
+              {canManage && <Button onClick={() => setOpen(true)} variant="quiet">Manage research</Button>}
+            </>
+          ) : operationInProgress ? (
+            <Button onClick={() => setOpen(true)}>Setup in progress</Button>
+          ) : (
+            <Button
+              disabled={busy}
+              disabledReason={blockReason}
+              onClick={() => status?.state === "blocked" ? setOpen(true) : void prepare(primaryAction)}
+              variant="primary"
+            >
+              {status?.state === "degraded" ? "Review repair" : status?.state === "blocked" ? "Port conflict needs attention" : "Set up web research"}
+            </Button>
+          )}
+        </div>
       </div>
-      {error && !open && <p className="agent-plan__warning" role="alert">{error}</p>}
+      {error && !open && <AppsBanner tone="danger">{error}</AppsBanner>}
 
       {open && (
-        <ModalShell labelledBy="web-research-title" onClose={() => setOpen(false)}>
-          <section className="custom-compose" aria-labelledby="web-research-title">
-            <div className="panel-heading">
-              <div>
-                <span className="page-eyebrow">Private research capability</span>
-                <h2 id="web-research-title">Guarded web research</h2>
-                <p>Vaelor uses this private service to find public evidence. Models never receive direct network, shell, Docker, or credential access.</p>
+        <AppsDialog
+          eyebrow="Private research capability"
+          footer={<Button onClick={() => setOpen(false)}>Close</Button>}
+          onClose={() => setOpen(false)}
+          title="Guarded web research"
+          titleId="web-research-title"
+        >
+          <p>Vaelor uses this private service to find public evidence. Models never receive direct network, shell, Docker, or credential access.</p>
+          {status && (
+            <div className="apps-research-status">
+              <AppsIconTile name={status.ready ? "shield" : "activity"} />
+              <div className="apps-research-row__text">
+                <strong>{stateTitle}</strong>
+                <span>{operationInProgress ? "Vaelor is starting and verifying the private service. The status will update when verification finishes." : status.reason}</span>
               </div>
-              <Button onClick={() => setOpen(false)} variant="quiet">Close</Button>
             </div>
-            {status && (
-              <div className="tool-explainer">
-                <Icon name={status.ready ? "shield" : "activity"} />
-                <span>
-                  <strong>{operationInProgress ? "Setup in progress" : status.ready ? "Ready for application research" : status.state.replaceAll("_", " ")}</strong>
-                  <small>{operationInProgress ? "Vaelor is starting and verifying the private service. The status will update when verification finishes." : status.reason}</small>
-                </span>
-              </div>
-            )}
-            {job && (
-              <div className="agent-plan agent-plan--operation" aria-live="polite">
-                <div className="agent-plan__summary">
-                  <span><Icon name="activity" /></span>
-                  <div><small>Current research-service operation</small><strong>{recoveredAfterTimeout ? "Ready after delayed startup" : jobStateLabel(job)}</strong><p>{recoveredAfterTimeout ? "The service became ready after the original health check. No retry is needed." : job.message || "Vaelor is preparing the guarded research service."}</p></div>
-                  <span className={`event-state${jobNeedsAttention(job) && !recoveredAfterTimeout ? " event-state--failure" : jobIsReady(job) || recoveredAfterTimeout ? " event-state--success" : jobIsTerminal(job) ? "" : " event-state--progress"}`}>{recoveredAfterTimeout ? "READY" : `${job.progress}%`}</span>
+          )}
+          {job && (
+            <section
+              aria-live="polite"
+              className={joinClassNames("apps-research-job", jobFailed && "apps-research-job--failed")}
+            >
+              {jobSettled ? (
+                <div className="apps-research-job__head">
+                  <strong>{recoveredAfterTimeout ? "Ready after delayed startup" : jobStateLabel(job)}</strong>
+                  <StatusPill label={jobFailed ? "Failed" : "Ready"} tone={jobFailed ? "danger" : "success"} />
                 </div>
-                <div className="agent-plan__actions">
-                  {jobCanCancel(job) && <Button disabled={busy} onClick={() => void jobAction("cancel")}>Cancel</Button>}
-                  {jobIsRetryable(job) && !recoveredAfterTimeout && <Button disabled={busy} onClick={() => void jobAction("retry")} variant="primary">Retry safely</Button>}
-                  {jobIsTerminal(job) && <Button onClick={() => { setJob(null); window.localStorage.removeItem(resumeKey); void refreshStatus(); }} variant="primary">Done</Button>}
+              ) : (
+                <div className="apps-research-job__head">
+                  <div className="apps-research-job__title">
+                    <AppsIconTile name="activity" />
+                    <div className="apps-research-row__text">
+                      <small>Current research-service operation</small>
+                      <strong>{jobStateLabel(job)}</strong>
+                      <span>{job.message || "Vaelor is preparing the guarded research service."}</span>
+                    </div>
+                  </div>
+                  <span className="apps-research-job__percent">{job.progress}%</span>
                 </div>
+              )}
+              {jobSettled && (
+                <p className={jobFailed ? "apps-research-job__error" : "apps-fineprint"}>
+                  {recoveredAfterTimeout ? "The service became ready after the original health check. No retry is needed." : job.message || "Vaelor is preparing the guarded research service."}
+                </p>
+              )}
+              {!jobIsTerminal(job) && <AppsProgress fraction={job.progress / 100} label="Research-service operation progress" />}
+              <div className="apps-research-job__actions">
+                {jobCanCancel(job) && <Button disabled={busy} onClick={() => void jobAction("cancel")}>Cancel</Button>}
+                {jobIsRetryable(job) && !recoveredAfterTimeout && <Button disabled={busy} onClick={() => void jobAction("retry")} variant="primary">Retry safely</Button>}
+                {jobIsTerminal(job) && (
+                  <Button
+                    onClick={() => { setJob(null); window.localStorage.removeItem(resumeKey); void refreshStatus(); }}
+                    variant={jobIsRetryable(job) && !recoveredAfterTimeout ? "secondary" : "primary"}
+                  >
+                    Done
+                  </Button>
+                )}
               </div>
-            )}
-            {!job && status?.ready && canManage && (
-              <div className="agent-plan__actions">
-                <Button disabled={busy} onClick={() => void prepare("repair")}>Review repair</Button>
-                <Button disabled={busy} onClick={() => void prepare("remove")} variant="danger">Review removal</Button>
-              </div>
-            )}
-            {!job && !status?.ready && status?.state !== "blocked" && canManage && (
+            </section>
+          )}
+          {!job && status?.ready && canManage && (
+            <div className="apps-research-job__actions">
+              <Button disabled={busy} onClick={() => void prepare("repair")}>Review repair</Button>
+              <Button disabled={busy} onClick={() => void prepare("remove")} variant="danger">Review removal</Button>
+            </div>
+          )}
+          {!job && !status?.ready && status?.state !== "blocked" && canManage && (
+            <div className="apps-research-job__actions">
               <Button disabled={busy || !status} onClick={() => void prepare(primaryAction)} variant="primary">
                 {status?.state === "degraded" ? "Review repair" : "Review setup"}
               </Button>
-            )}
-            {status?.state === "blocked" && <Notice severity="warning"><Icon name="activity" />Port 8888 belongs to another process. Vaelor changed nothing. Stop or reconfigure that service, then refresh this check.</Notice>}
-            {error && <Notice severity="danger"><Icon name="activity" />{error}</Notice>}
-          </section>
-        </ModalShell>
+            </div>
+          )}
+          {status?.state === "blocked" && (
+            <AppsBanner tone="warning">Port 8888 belongs to another process. Vaelor changed nothing. Stop or reconfigure that service, then refresh this check.</AppsBanner>
+          )}
+          {error && <AppsBanner tone="danger">{error}</AppsBanner>}
+        </AppsDialog>
       )}
 
       <ActionReviewDialog
         busy={busy}
+        error={reviewError}
         evidence={plan ? [
-          { source: "pinned image", summary: plan.image },
-          { source: "private endpoint", summary: `${plan.endpoint} (${status?.network_scope ?? "loopback-only"})` },
+          { source: "web-research.image", summary: plan.image },
+          { source: "web-research.endpoint", summary: `${plan.endpoint} (${status?.network_scope ?? "loopback-only"})` },
         ] : []}
         job={plan ? { type: "host.web-research.manage", payload: { action: plan.action, endpoint: plan.endpoint } } : null}
         onApprove={() => void executePlan()}
-        onCancel={() => setPlan(null)}
+        onCancel={() => { setReviewError(""); setPlan(null); }}
         summary={plan ? `${plan.changes.join(" ")} Recovery: ${plan.recovery}` : ""}
         suggestedActions={["Keep progress in this window or close it and resume here later.", "Vaelor verifies the private endpoint before marking research ready."]}
       />

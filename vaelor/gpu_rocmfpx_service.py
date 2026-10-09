@@ -1,22 +1,64 @@
-"""Launch primitives for the ROCmFPX GPU model server (GPU AI-Chat).
+"""Launch primitives for the GPU model server (GPU AI-Chat), in a container.
 
-The GPU analogue of :mod:`vaelor.flm_service`, and deliberately the simpler of
-the two. The Z2's ROCmFP4 27B (``julianmb/Qwen-3.8-27B-ROCmFP4-FAST-GGUF``) was
-proven by hand at ~37 t/s on the Strix Halo / Radeon 8060S (gfx1151), served by
-the **ROCmFPX** llama.cpp fork - *not* stock llama.cpp, whose kernels cannot
-read FP4 tensors at all. This module encodes that proven recipe as a fixed
-argument vector.
+The GPU analogue of :mod:`vaelor.flm_service`. The Z2's GPU AI-Chat model is
+served by ``llama-server`` on the Strix Halo / Radeon 8060S (gfx1151), and this
+module builds and supervises that launch.
 
-Where the NPU's ``flm-real`` needs root to pin NPU pages (CAP_IPC_LOCK) and is
-therefore launched through the privileged hardware bridge, ``llama-server`` on
-the GPU is an **unprivileged host process**: a plain :class:`subprocess.Popen`
-with no bridge, no capability grant and no tag-allowlist grammar. So the whole
-of what crosses into the launch is a validated model path and a loopback port;
-everything else in the argv is a module constant read off the measured machine.
+**C0/C0-v2: the server is launched as a self-contained ROCm CONTAINER, not a bare
+host binary, and the IMAGE + run interface are chosen by the model's catalog
+``engine`` (:func:`vaelor.model_catalog.catalog_engine`), which the launch reads
+from the ``runtime`` block.** The bare ``llama-server`` fork broke on the
+re-imaged Strix Halo box (ROCm 7.2.3 vs the box's 7.14, a soname drift no
+``LD_LIBRARY_PATH`` can bridge), so nothing runs on the host libs any more; the
+container carries its own ROCm.
 
-Discovery/provisioning (whether the fork binary and the TheRock libraries are
-present) belongs to a later phase; this module names the *provisioned locations*
-as overridable constants and builds the launch, nothing more.
+Two recipes, one per ``engine`` (:func:`_engine_container` selects between them):
+
+* ``engine == ""`` (stock GGUF) -> the MAINLINE image
+  ``docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-10.0``, entrypoint overridden to
+  ``llama-server``, served with auto device selection (``-m``/``-ngl``, internal
+  port 8080, model dir at ``/models``). The fork-only flags (``-dev Vulkan0``,
+  ``-ctv turbo4``, ``--spec-*``) are DROPPED: mainline's device is ``ROCm0`` not
+  ``Vulkan0`` and it cannot even read the FP4 tensors.
+* ``engine == "rocmfpx"`` (fork-only FP4 27B) -> the FORK image
+  ``ghcr.io/julianmb/q38rocm:latest``, whose ``/app/run_server.sh`` entrypoint
+  OWNS the recipe: it auto-detects the device and applies the cache/MTP profile
+  itself, so the launch passes only the model (mounted at ``/app/models``),
+  ``--host``/``--port`` (internal 8000) and ``--profile speed`` - never
+  ``-dev``/``-ngl``/``-ctv``/``--spec-*``. It needs ``--ipc host`` and the
+  ``GGML_HIP_ENABLE_UNIFIED_MEMORY`` env.
+
+Both endpoints the supervisor health-checks are ``http://127.0.0.1:<published>/v1``;
+the internal port differs (8080 vs 8000) but the published host port does not.
+
+**The model container ALWAYS binds LOOPBACK, and never carries an api key.** The
+LAN exposure of the model (the "LLM Server" feature) is NOT done by binding the
+engine to the LAN with a key - it was proven live on the Z2 that the ROCmFP4
+fork's ``llama-server`` does not enforce ``--api-key``/``--api-key-file``/
+``LLAMA_API_KEY`` at all, so an engine-level key was an unauthenticated LAN
+endpoint. Instead, LAN exposure is a Vaelor-controlled auth PROXY
+(:mod:`vaelor.llm_server_proxy`) placed in front of this loopback endpoint. So the
+container here is unconditionally published on ``127.0.0.1:<port>`` and passed no
+key: there is no code path by which this model binds the network, whichever engine
+runs. AI Chat reaches the model on that loopback endpoint, keyless.
+
+The launch crosses the **root hardware bridge** (``gpu_start``/``gpu_stop``/
+``gpu_status``): the workload executor's sandbox hides ``/dev/dri`` + ``/dev/kfd``,
+so the privileged bridge account runs ``docker run`` with the accelerator devices
+passed through. The container binds ``0.0.0.0`` INSIDE its own network namespace
+(docker forwards the ``-p`` publish to the container's bridge IP, never its
+loopback) and the port is published onto the HOST's ``127.0.0.1`` only.
+
+**The host-binary provisioning (:data:`GPU_ENGINE_BINARY`, :func:`resolve_rocm_lib_dir`,
+the ``/opt/rocm`` runtime discovery) is SUPERSEDED by the image for serving.** The
+container needs none of it, so :mod:`vaelor.gpu_model_choice`'s capability gate no
+longer gates availability on the host fork or host ROCm libs - it gates on the GPU
+and a usable Docker (the container prerequisites) and reads these only as
+INFORMATIONAL fields. The symbols are retained because that gate still reports
+them. The installer no longer provisions the bare fork at all - it pre-pulls the
+two images below instead (``prepull_serving_images`` in
+``deploy/install-vaelor.sh``) - so on a box installed from this release the
+informational binary field simply reads absent while the model serves.
 """
 
 from __future__ import annotations
@@ -24,53 +66,48 @@ from __future__ import annotations
 import glob
 import os
 import re
+import shutil
 import subprocess
-import time
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from .flm_service import _validate_port
+#: The model-path rules the launch enforces live in `gpu_model_confinement`
+#: (ACC-063/064: one owner, read by the executor's download check too); they are
+#: re-exported here so the launch's callers and tests keep one import.
+from .gpu_model_confinement import (  # noqa: F401 - re-exported
+    HOST_FILESYSTEM, MODEL_CACHE_DIR, GpuModelPathError, ModelFilesystem,
+    _confined_model_path, _is_real_directory,
+    _validate_model_path, anchor_refusal, servable_cache_relative,
+)
+from .inference_context import GPU_RECOMMENDED_CONTEXT_TOKENS
 from .model_catalog import RUNTIME_Z2_GPU_ROCMFP4
-from .runtime_paths import LOG_ROOT
+from .platforms.accelerators import device_grants
+from .runtime_paths import data_path
 
 
-#: The ROCmFPX ``llama-server`` fork binary. A fixed path, not a ``PATH`` lookup:
-#: even though this launch is unprivileged, the executable must be the fork that
-#: can read FP4 tensors and nothing a mutable environment could redirect. This
-#: is where a later provisioning phase places the fork build; kept as a module
-#: constant (overridable for tests) rather than derived from a request.
+#: The ROCmFPX ``llama-server`` fork binary. **Superseded by the container image
+#: for serving** (see the module docstring): the launch no longer runs this path,
+#: and the installer no longer places it. Kept as a module constant because
+#: :mod:`vaelor.gpu_model_choice` still reads it as an INFORMATIONAL field (it no
+#: longer gates availability on it), so on a freshly installed box this path is
+#: simply absent and reported as such - and on a box installed by an earlier
+#: release the copy already there is left alone rather than deleted.
 GPU_ENGINE_BINARY = "/var/lib/vaelor/engines/rocmfpx/bin/llama-server"
 
-#: The legacy Lemonade-snap TheRock cache: where an *older* snap kept its gfx1151
-#: HIP/ROCm shared objects. Kept as a named constant (and still imported by
-#: :mod:`vaelor.gpu_model_choice`) and as the FIRST candidate in
-#: :data:`ROCM_RUNTIME_LIB_CANDIDATES`, but no longer hardcoded as the one launch
-#: path: the current snap (v11.7.0) ships no TheRock libs and this directory does
-#: not exist, so a stale hardcode silently dropped the fork onto the CPU. The
-#: runtime dir is now resolved at launch by :func:`resolve_rocm_lib_dir`.
+#: The legacy Lemonade-snap TheRock cache, the first candidate in
+#: :data:`ROCM_RUNTIME_LIB_CANDIDATES`. Retained for the capability gate only; the
+#: container carries its own ROCm and needs none of these host paths.
 THEROCK_LIB_DIR = (
     "/var/snap/lemonade-server/common/cache/lemonade/bin/therock/gfx1151-7.13.0/lib"
 )
 
-#: The soname the fork's HIP runtime pulls first; its presence in a directory is
-#: what makes that directory a real ROCm runtime lib dir rather than an empty or
-#: unrelated path. Probed by :func:`resolve_rocm_lib_dir`.
+#: The soname whose presence marks a directory as a real gfx1151 ROCm runtime dir.
+#: Probed by :func:`resolve_rocm_lib_dir` (capability gate only).
 ROCM_RUNTIME_PROBE_SONAME = "libamdhip64.so.7"
 
 #: Ordered candidate roots for the gfx1151 ROCm/HIP runtime lib dir, most specific
-#: first, and the reason for the order:
-#:
-#: 1. :data:`THEROCK_LIB_DIR` - the legacy Lemonade-snap TheRock cache. First so a
-#:    box still carrying the old snap keeps working unchanged; absent on current
-#:    snaps, where it simply falls through.
-#: 2. ``/opt/rocm/lib`` - AMD's official gfx1151 ROCm from the apt install, the
-#:    canonical location the companion installer provisions. ``ldd libggml-hip.so``
-#:    against this dir resolves every HIP/ROCm/BLAS dep on the Z2.
-#: 3. ``/opt/rocm/core-*/lib`` - the versioned core dir the same ROCm ships (e.g.
-#:    ``core-7.14``); globbed and, when several exist, the highest version wins.
-#:
-#: A shell ``glob`` pattern per entry: a literal path globs to itself when it
-#: exists, so all three are probed uniformly.
+#: first. Used by :mod:`vaelor.gpu_model_choice`'s capability gate; not by the
+#: container launch, which bundles its own ROCm.
 ROCM_RUNTIME_LIB_CANDIDATES: Sequence[str] = (
     THEROCK_LIB_DIR,
     "/opt/rocm/lib",
@@ -95,18 +132,10 @@ def resolve_rocm_lib_dir(
 ) -> Optional[str]:
     """The first candidate directory that exists AND holds the ROCm runtime.
 
-    Walks :data:`ROCM_RUNTIME_LIB_CANDIDATES` in order and returns the first
-    directory that actually contains ``probe_soname`` - so a candidate that is
-    absent, or present but empty of the runtime (the stale-snap failure this
-    resolver exists to fix), is skipped rather than trusted. Within a single
-    globbed candidate the highest version wins (:func:`_rocm_version_key`), but
-    candidate ORDER is preserved across entries, so the legacy snap dir still
-    beats ``/opt/rocm`` when both are real.
-
-    Returns ``None`` when nothing resolves; the caller turns that into an honest
-    failure rather than a CPU fallback that looks healthy. Pure and injectable:
-    pass a different ``candidates`` (e.g. a tmp dir with a fake soname) to test it
-    without a real GPU or ``/opt/rocm``.
+    Retained for :mod:`vaelor.gpu_model_choice`'s capability gate. Walks the
+    candidates in order and returns the first directory that actually contains
+    ``probe_soname``; within a globbed candidate the highest version wins. Returns
+    ``None`` when nothing resolves. Pure and injectable for tests.
     """
     for candidate in candidates:
         matches = sorted(glob.glob(candidate), key=_rocm_version_key, reverse=True)
@@ -116,106 +145,235 @@ def resolve_rocm_lib_dir(
     return None
 
 
-#: Loopback only. ``llama-server`` is bound here and nowhere else: AI-Chat is a
-#: process on the same machine and the endpoint is never offered to the LAN. A
-#: non-loopback host is refused by :func:`gpu_serve_command`.
+#: The host the model is published on: LOOPBACK, always. The model is never bound
+#: to the network; the LLM Server feature exposes it on the LAN through a separate
+#: auth proxy (:mod:`vaelor.llm_server_proxy`), not by moving this bind.
 GPU_HOST = "127.0.0.1"
 
-#: The measured Strix-Halo ROCmFP4 launch parameters, the single source the
-#: catalog entry also carries. Used as the fallback when a caller's ``runtime``
-#: dict omits a field, so the argv is always the proven recipe even from a bare
-#: ``{}``.
+#: The measured Strix-Halo launch parameters, the single source the catalog entry
+#: also carries. Used as the fallback when a caller's ``runtime`` dict omits a
+#: field, so the argv is always the proven recipe even from a bare ``{}``.
 GPU_MEASURED_DEFAULTS: Dict[str, Any] = dict(RUNTIME_Z2_GPU_ROCMFP4)
 
 
-class GpuModelPathError(ValueError):
-    """A model path was refused before it could reach the GPU launch.
+#: The engine key of the fork-only FP4 model, matched against ``runtime["engine"]``
+#: to select the FORK recipe. Mirrors the catalog entry's ``engine`` (kept in sync
+#: there, in one file). The empty string takes the MAINLINE recipe (stock
+#: llama.cpp reads stock GGUFs); any OTHER value is refused at the root boundary
+#: (ACC-060) - an engine the bridge does not know is a claim it cannot check, so
+#: it is never quietly served on the Strix Halo image.
+ROCMFPX_ENGINE = "rocmfpx"
+MAINLINE_ENGINE = ""
 
-    Unlike the flm tag there is no allowlist here - the artifact is whatever the
-    catalog resolved and downloaded - but the path is still the one caller-side
-    value that reaches the command line, so it is checked for the shape a real
-    ``.gguf`` on disk has and rejected here rather than discovered as a failed
-    launch.
+#: The MAINLINE self-contained ROCm image for ``engine == ""`` stock GGUFs (bundles
+#: ROCm 10.0 for gfx1151). Its entrypoint is ``/bin/bash``, so the launch overrides
+#: it with ``--entrypoint llama-server``. Captured live on the Z2.
+#:
+#: **Pinned by DIGEST, in the ``name:tag@sha256:`` form docker accepts for
+#: ``pull``/``run``/``image inspect`` alike.** A bare moving tag means the box the
+#: installer pre-pulls and the box that redeploys six months later can be running
+#: different engines under one name, and a serving regression would then be
+#: unattributable. The tag is kept beside the digest because it is what a reader
+#: recognises and what a re-pin starts from. **Measured 1.39 GB on the appliance,
+#: 2026-09-05. To re-pin:** ``docker pull <name:tag>`` on the appliance, then
+#: ``docker image inspect --format '{{index .RepoDigests 0}}' <name:tag>`` for the
+#: digest and ``docker image ls`` for the size - and update the figure in
+#: ``deploy/install-vaelor.sh``'s pre-pull disk preflight, which is sized from it.
+GPU_CONTAINER_IMAGE = (
+    "docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-10.0"
+    "@sha256:257986b5abdabc07cfb776143f3a690a5fb6dfe28e177f3096a37f1e227e1873"
+)
+
+#: The FORK image for ``engine == "rocmfpx"`` (the FP4 27B). Public; bundles ROCm
+#: 7.2.3 + the ROCmFPX engine + RADV. Its ENTRYPOINT ``/app/run_server.sh``
+#: auto-detects the device and applies the cache/MTP profile itself, so the launch
+#: does NOT override the entrypoint and passes only the model, host/port and
+#: ``--profile``. Verified serving the FP4 27B (22 GB GTT, Vulkan0) live on the Z2.
+#:
+#: Digest-pinned for the reason above, and more sharply: this one's tag is
+#: ``latest``, so without a digest the reference names whatever the publisher
+#: pushed most recently. **Measured 3.30 GB on the appliance, 2026-09-05**; re-pin
+#: exactly as for :data:`GPU_CONTAINER_IMAGE`.
+GPU_FORK_IMAGE = (
+    "ghcr.io/julianmb/q38rocm:latest"
+    "@sha256:62884d40be1f568142639f6f40734309c275f19acedb4873b2b8c8a420ab4a2c"
+)
+
+#: The serve profile the fork's ``run_server.sh`` applies (cache + MTP tuning);
+#: passed as ``--profile speed``. It is the fork's job, not the launch's, to turn
+#: this into the device/ngl/ctv/spec flags the FP4 model needs.
+GPU_FORK_PROFILE = "speed"
+
+#: The fixed name of the single GPU AI-Chat serving container. One server serves
+#: the tier at a time and the bridge serializes ``gpu_start`` under its lock
+#: (VD-001), so a fixed name lets ``stop``/``status`` address it without tracking
+#: a container id across the bridge boundary.
+GPU_CONTAINER_NAME = "vaelor-gpu-rocmfpx"
+
+#: The port the MAINLINE image's ``llama-server`` binds INSIDE the container. Fixed
+#: at 8080 (that image's convention); the host-side port is chosen by the supervisor
+#: and published onto this one, so two deploys never collide on a host port.
+GPU_CONTAINER_PORT = 8080
+
+#: The port the FORK image's ``run_server.sh`` binds INSIDE the container (8000, the
+#: fork's convention). The published host port is the same either way; only the
+#: container-internal target differs, which the ``-p`` mapping absorbs.
+GPU_FORK_PORT = 8000
+
+#: The host ``llama-server`` binds INSIDE the container: all interfaces, always.
+#: Docker's port publish forwards to the container's bridge IP, NOT its loopback,
+#: so a container-internal ``127.0.0.1`` bind would be unreachable through ``-p``.
+#: Loopback safety comes from the ``-p`` PUBLISH address being ``127.0.0.1``
+#: (:func:`gpu_container_command`), never from this internal bind.
+GPU_CONTAINER_BIND = "0.0.0.0"
+
+#: The in-container mount point for the model cache directory under the MAINLINE
+#: image, and the host cache root mounted there. ``-m`` names a path under it. The
+#: fork image mounts the same host dir at :data:`GPU_FORK_MODELS_MOUNT` instead.
+MODELS_MOUNT = "/models"
+
+
+def configured_model_cache_dir() -> str:
+    """The model cache this host is configured with, as the executor reads it.
+
+    ``data_path("models")`` - ``VAELOR_DATA_ROOT`` + ``models`` - is where the
+    workload executor downloads and resolves every GGUF it deploys, so the root
+    bridge confines launches to the same directory rather than to a second
+    spelling of it. :data:`MODEL_CACHE_DIR` stays the parameter default.
+    """
+    return data_path("models")
+
+#: The FORK image's model mount point: ``run_server.sh`` expects the model under
+#: ``/app/models`` and is given ``/app/models/<file>`` as its positional argument.
+GPU_FORK_MODELS_MOUNT = "/app/models"
+
+#: The env every image needs to target the 8060S's ISA, passed with ``-e``. The
+#: container carries its own ROCm, so the bare fork's ``LD_LIBRARY_PATH`` juggling
+#: is gone.
+HSA_OVERRIDE_ENV = "HSA_OVERRIDE_GFX_VERSION=11.5.1"
+
+#: The unified-memory env the FORK image needs so the FP4 model resides in the
+#: shared GTT aperture (measured 22 GB GTT-resident on the Z2). Passed with ``-e``
+#: for ``engine == "rocmfpx"`` only; the mainline image does not set it.
+GGML_UNIFIED_MEMORY_ENV = "GGML_HIP_ENABLE_UNIFIED_MEMORY=1"
+
+#: Turn on llama-server's Prometheus ``/metrics`` endpoint (Phase E′ serving
+#: metrics). llama.cpp reads the ``--metrics`` flag from this env var
+#: (``LLAMA_ARG_ENDPOINT_METRICS``), so metrics are enabled without depending on
+#: the fork ``run_server.sh``'s own argument parsing — set on both engine images.
+#: The endpoint binds the same loopback the model does (no LAN exposure), and the
+#: controller scrapes it locally into InfluxDB for the Performance tab. Harmless
+#: when nothing scrapes it: an idle endpoint costs nothing.
+LLAMA_METRICS_ENDPOINT_ENV = "LLAMA_ARG_ENDPOINT_METRICS=1"
+
+#: How long to let ``docker stop`` drain the container before it is killed. Freeing
+#: a large model off the GPU is not instant; past this docker sends SIGKILL.
+STOP_GRACE_SECONDS = 10
+
+#: Bounds on the docker calls. ``docker run -d`` returns as soon as the container
+#: is created (the model load is health-gated by the supervisor, not awaited here);
+#: a ``docker pull`` of a multi-GB image is generous.
+DOCKER_RUN_TIMEOUT = 120
+DOCKER_PULL_TIMEOUT = 3600
+DOCKER_QUERY_TIMEOUT = 30
+
+
+class GpuImageMissingError(FileNotFoundError):
+    """The GPU serving image is not present and could not be pulled.
+
+    Raised by :meth:`GpuServerProcess.ensure_image` when ``docker image inspect``
+    misses and ``docker pull`` fails, so an offline box with no cached image fails
+    with a sentence naming the image rather than a raw ``docker run`` error. A
+    subclass of ``FileNotFoundError`` (hence ``OSError``) so the GPU deploy's
+    fall-back set catches it exactly as it caught the old engine-missing error.
     """
 
 
-class GpuEngineMissingError(FileNotFoundError):
-    """The ROCmFPX fork binary is not present (or not executable) to launch.
+class GpuGroupResolutionError(ValueError):
+    """The render/video groups could not be resolved to numeric GIDs on this host.
 
-    Raised at spawn time, before the log file is opened, so an unprovisioned box
-    fails with a sentence naming what to do rather than a raw ``FileNotFoundError``
-    from :class:`subprocess.Popen` - and with no log file descriptor left open
-    behind the failed launch. A subclass of ``FileNotFoundError`` so a caller
-    already catching that keeps working; the message is what changes.
+    A container image has no host group database, so ``--group-add render`` fails;
+    numeric GIDs are required and they differ per host. When a needed group has no
+    GID the launch is refused here rather than producing a container that cannot
+    open the GPU devices.
     """
 
 
-class GpuRuntimeLibsMissingError(FileNotFoundError):
-    """No gfx1151 ROCm runtime lib dir could be resolved to launch against.
+#: The largest ``-ngl`` (layers offloaded to the GPU) the launch accepts. The
+#: recipes emit 0..99; 999 is llama.cpp's conventional "every layer" spelling.
+NGL_MAX = 999
 
-    The counterpart of :class:`GpuEngineMissingError` for the runtime the fork
-    links against: raised at launch, before the log file is opened, when
-    :func:`resolve_rocm_lib_dir` finds none of its candidates. This is the honest
-    failure the stale hardcode used to hide - without a real ROCm lib dir on
-    ``LD_LIBRARY_PATH`` ``libggml-hip.so`` cannot load and ``llama-server``
-    silently falls back to the CPU while looking healthy - so the launch stops
-    with a sentence naming what to install rather than serving on the CPU. A
-    subclass of ``FileNotFoundError`` for the same reason ``GpuEngineMissingError``
-    is: a caller already catching that keeps working; the message is what changes.
+
+def _validate_ngl(value: Any) -> int:
+    """A whole-number GPU layer count in ``0..NGL_MAX``, or refuse it.
+
+    Checked at the root boundary because the value arrives in the caller's
+    ``runtime`` over the bridge: a JSON ``Infinity`` made ``int()`` raise an
+    ``OverflowError`` the bridge did not answer, and a float or bool is not a
+    layer count either.
     """
-
-
-def _validate_model_path(model_path: Any) -> str:
-    """Return an absolute ``.gguf`` path, or raise :class:`GpuModelPathError`.
-
-    A list argv with no shell means nothing here can be split or expanded, so
-    this is not an anti-injection gate the way the flm tag grammar is; it is a
-    correctness gate. An empty path, a relative one, or a non-``.gguf`` is a
-    misconfiguration that would only surface as ``llama-server`` failing to
-    open its model, and it is cheaper to refuse it at planning time.
-    """
-    text = str(model_path or "").strip()
-    if not text:
-        raise GpuModelPathError("A model path is required to launch the GPU server.")
-    # No newline or NUL: defence in depth even behind a list argv, so a path
-    # can never carry a second argument or truncate the vector.
-    if any(character in text for character in "\n\r\x00"):
-        raise GpuModelPathError(
-            "The model path carries a control character and is refused."
+    if isinstance(value, bool) or not isinstance(value, int) or not (
+        0 <= value <= NGL_MAX
+    ):
+        raise ValueError(
+            "The GPU layer count (ngl) must be a whole number from 0 to {}; {!r} "
+            "is refused.".format(NGL_MAX, value)
         )
-    if not text.endswith(".gguf"):
-        raise GpuModelPathError(
-            "The GPU server serves a .gguf artifact; '{}' is not one.".format(text)
-        )
-    # A POSIX absolute path (a leading ``/``), checked directly rather than with
-    # ``os.path.isabs`` - the appliance is Linux and its model paths are always
-    # ``/var/lib/vaelor/models/...``, so a leading slash is the right test and it
-    # does not depend on the OS the control plane happens to be tested on.
-    if not text.startswith("/"):
-        raise GpuModelPathError(
-            "The model path must be absolute so the launch does not depend on a "
-            "working directory; '{}' is relative.".format(text)
-        )
-    return text
+    return value
 
 
-#: Port validation is :func:`vaelor.flm_service._validate_port`, imported rather
-#: than re-implemented. The rule is identical - integer, 1024-65535, and the
-#: reserved control-plane pair refused at the boundary (F2) - and the three
-#: refusal sentences it raises are the ones ``test_duplicate_literals`` insists
-#: live in one home. An unprivileged GPU launch has the same reason a root NPU
-#: launch does not to bind a control-plane port, so it reuses the same gate.
+def _runtime_mapping(runtime: Any) -> Dict[str, Any]:
+    """The caller's ``runtime`` as a fresh dict; anything but a mapping is refused."""
+    if runtime is None:
+        return {}
+    if not isinstance(runtime, Mapping):
+        raise ValueError("The GPU launch runtime must be a JSON object.")
+    return dict(runtime)
 
 
 def _flag(runtime: Mapping[str, Any], key: str) -> Any:
     """A runtime value, falling back to the measured default for its key.
 
-    So a caller passing ``{}`` still gets the proven recipe and a caller
-    overriding one field changes only that field. ``None`` is treated as absent
-    for the same reason - an explicit null must not blank out a measured flag.
+    So a caller passing ``{}`` still gets the proven recipe and a caller overriding
+    one field changes only that field. ``None`` is treated as absent so an explicit
+    null cannot blank out a measured flag.
     """
     value = runtime.get(key)
     return GPU_MEASURED_DEFAULTS.get(key) if value is None else value
+
+
+def _serve_tuning_args(model_path: str, runtime: Mapping[str, Any]) -> List[str]:
+    """The model + measured tuning flags of the ``llama-server`` argv.
+
+    Everything the proven recipe carries between the executable and the
+    ``--host``/``--port`` tail: the model, device, layer count, flash-attention,
+    context, KV quantisations and speculative-decode flags. Read from ``runtime``
+    with :func:`_flag` backfilling the measured defaults. Used by
+    :func:`gpu_serve_command` (the pure host-binary form).
+    """
+    # ``-fa`` takes ``on``/``off``, not a bool; the measured recipe is ``on``.
+    flash = "on" if bool(_flag(runtime, "flash_attn")) else "off"
+    args = [
+        "-m", model_path,
+        "-dev", str(_flag(runtime, "device")),
+        "-ngl", str(int(_flag(runtime, "ngl"))),
+        "-fa", flash,
+        "-c", str(int(_flag(runtime, "context"))),
+        "-ctk", str(_flag(runtime, "kv_k")),
+        "-ctv", str(_flag(runtime, "kv_v")),
+    ]
+    # Speculative decode is the MEASURED FP4 recipe's, not a universal default:
+    # emitted only when ``spec_type`` resolves to a NON-EMPTY value. A bare ``{}``
+    # backfills the measured ``draft-mtp``; a GENERIC runtime sets ``spec_type`` to
+    # ``""`` EXPLICITLY, which :func:`_flag` returns verbatim (present, not absent)
+    # and this gate reads as "off".
+    if str(_flag(runtime, "spec_type") or ""):
+        args += [
+            "--spec-type", str(_flag(runtime, "spec_type")),
+            "--spec-draft-n-max", str(int(_flag(runtime, "spec_draft_n_max"))),
+            "--spec-draft-p-min", str(float(_flag(runtime, "spec_draft_p_min"))),
+        ]
+    return args
 
 
 def gpu_serve_command(
@@ -223,275 +381,476 @@ def gpu_serve_command(
     port: int,
     runtime: Optional[Mapping[str, Any]] = None,
     *,
-    host: str = GPU_HOST,
     binary: str = GPU_ENGINE_BINARY,
 ) -> List[str]:
-    """The fixed ``llama-server`` argv for the proven ROCmFP4 recipe.
+    """The bare ``llama-server`` argv for the proven recipe (host-binary form).
 
-    A list, never a string: :class:`subprocess.Popen` is given ``argv`` and no
-    shell, so no element can be split, expanded or chained. The device, layer
-    count, KV quantisations and speculative-decode parameters are read from
-    ``runtime`` (the catalog entry's measured block) and fall back to
-    :data:`GPU_MEASURED_DEFAULTS`; the model path is validated and the port is
-    range-checked. The binary and the flag names are constants.
-
-    Encodes exactly the invocation proven by hand on the Z2::
-
-        llama-server -m <gguf> -dev Vulkan0 -ngl 99 -fa on -c 131072
-            -ctk q8_0 -ctv turbo4 --spec-type draft-mtp
-            --spec-draft-n-max 4 --spec-draft-p-min 0.0
-            --host 127.0.0.1 --port <port>
+    Superseded for serving by :func:`gpu_container_command`, but retained: it is
+    the pure, GPU-free expression of the recipe and what
+    :mod:`vaelor.gpu_model_choice`'s generic-runtime tests exercise. A list, never a
+    string: no element can be split or chained by a shell. The tuning is read from
+    ``runtime`` (:func:`_serve_tuning_args`); the model path is validated and the
+    port range-checked. **The bind is ALWAYS loopback and no api key is ever
+    emitted** - the model is never LAN-exposed by the engine (see the module
+    docstring); LAN exposure is the separate auth proxy.
     """
     resolved = dict(runtime or {})
     safe_model = _validate_model_path(model_path)
     safe_port = _validate_port(port)
-    if str(host) not in {"127.0.0.1", "::1", "localhost"}:
-        raise ValueError(
-            "The GPU server is bound to loopback only; '{}' is not a loopback "
-            "host.".format(host)
-        )
-    # ``-fa`` takes ``on``/``off``, not a bool; the measured recipe is ``on``.
-    flash = "on" if bool(_flag(resolved, "flash_attn")) else "off"
-    command = [
-        binary,
-        "-m", safe_model,
-        "-dev", str(_flag(resolved, "device")),
-        "-ngl", str(int(_flag(resolved, "ngl"))),
-        "-fa", flash,
-        "-c", str(int(_flag(resolved, "context"))),
-        "-ctk", str(_flag(resolved, "kv_k")),
-        "-ctv", str(_flag(resolved, "kv_v")),
-    ]
-    # Speculative decode is the MEASURED FP4 recipe's, not a universal default:
-    # ``--spec-*`` is emitted only when ``spec_type`` resolves to a NON-EMPTY
-    # value. A bare ``{}`` still backfills the measured ``draft-mtp`` (so the
-    # convenience recipe is unchanged) and the FP4 runtime carries it, so both
-    # emit the flags; a GENERIC runtime sets ``spec_type`` to ``""`` EXPLICITLY,
-    # which :func:`_flag` returns verbatim (an empty string is present, not
-    # absent, so the default is not backfilled) and this gate reads as "off". Its
-    # ``turbo4`` V cache likewise cannot leak: a generic runtime sets ``kv_v``
-    # explicitly, so no measured default fills it.
-    if str(_flag(resolved, "spec_type") or ""):
-        command += [
-            "--spec-type", str(_flag(resolved, "spec_type")),
-            "--spec-draft-n-max", str(int(_flag(resolved, "spec_draft_n_max"))),
-            # A float flag: ``0.0`` is the measured "no probability floor".
-            # Rendered from the runtime value so an override reaches it.
-            "--spec-draft-p-min", str(float(_flag(resolved, "spec_draft_p_min"))),
-        ]
-    command += ["--host", str(host), "--port", str(safe_port)]
+    command = [binary]
+    command += _serve_tuning_args(safe_model, resolved)
+    command += ["--host", GPU_HOST, "--port", str(safe_port)]
     return command
 
 
-def gpu_serve_env(
-    *,
-    engine_lib_dir: str = os.path.dirname(GPU_ENGINE_BINARY),
-    rocm_lib_dir: Optional[str] = None,
-    resolver: Callable[[], Optional[str]] = resolve_rocm_lib_dir,
-    base_env: Optional[Mapping[str, str]] = None,
-) -> Dict[str, str]:
-    """The launch environment: the service's own, with the GPU variables set.
+def _container_model_mount(
+    model_path: str,
+    model_cache_dir: str = MODEL_CACHE_DIR,
+    models_mount: str = MODELS_MOUNT,
+    filesystem: ModelFilesystem = HOST_FILESYSTEM,
+) -> "tuple[str, str]":
+    """The ``(host_mount_source, in_container_model_path)`` for a GGUF.
 
-    Four variables the fork needs on the Z2, none caller-controlled:
-
-    * ``LD_LIBRARY_PATH`` gets TWO directories **prepended** to any inherited
-      value: the fork binary's OWN directory and the gfx1151 ROCm runtime lib dir.
-      The binary's directory holds its co-located shared objects
-      (``libllama-common``, ``libggml-*``); the prebuilt is not linked with an
-      ``$ORIGIN`` RUNPATH, so without its own dir on the path it dies at
-      "libllama-common.so.0: cannot open shared object file" before it ever
-      reaches the GPU. The runtime dir supplies the HIP/ROCm libs the fork links
-      against (``libamdhip64.so.7``, ``libhipblas.so.3``, ``librocblas.so.5`` etc.)
-      and is **resolved at launch** by :func:`resolve_rocm_lib_dir` rather than
-      hardcoded: pass ``rocm_lib_dir`` to pin it (tests do), else the ``resolver``
-      is called. Both are prepended - the engine's own dir first so its build wins
-      a name clash - and any inherited value is kept behind them.
-    * ``SKIP_ROCM_CHECK=1`` - the fork's start-up ROCm sanity check refuses the
-      unusual gfx1151 build; skipping it is what let the server start by hand.
-    * ``HSA_OVERRIDE_GFX_VERSION=11.5.1`` pins the ISA the runtime targets to the
-      8060S's, so it does not misdetect the adapter.
-    * ``GGML_HIP_ENABLE_UNIFIED_MEMORY=1`` lets the model spill across the Strix
-      Halo unified memory aperture rather than a fixed VRAM carve-out.
-
-    When no runtime dir resolves (``rocm_lib_dir`` unset and the resolver finds
-    none of its candidates) this raises :class:`GpuRuntimeLibsMissingError` rather
-    than building an environment that would drop ``llama-server`` onto the CPU -
-    the honest failure the stale hardcode used to hide. It is raised here, before
-    :meth:`GpuServerProcess.start` reaches the spawn or touches a running server,
-    the same "validate before launch" order as the model-path and port gates.
-
-    Everything else is inherited from the service's environment rather than
-    stripped, the same reasoning as ``flm_serve_env``: a minimal hand-built
-    environment is exactly the kind of plausible mechanism that is refuted the
-    moment the real binary is run on the box. The security boundary is the
-    validated argv, not this dict.
+    The RESOLVED model cache root is always the mount source, mounted at
+    ``models_mount``, and the model keeps its path relative to it (so
+    ``.../repo/file.gguf`` becomes ``<mount>/repo/file.gguf``). There is no
+    other source: a model outside the cache is refused by
+    :func:`_confined_model_path`, never served by mounting its own directory.
+    The mount point differs by engine - ``/models`` for the mainline image,
+    ``/app/models`` for the fork - so it is a parameter, not the constant.
     """
-    resolved = rocm_lib_dir if rocm_lib_dir is not None else resolver()
-    if not resolved:
-        raise GpuRuntimeLibsMissingError(
-            "No gfx1151 ROCm runtime found (no {} under any of: {}); install "
-            "AMD's gfx1151 ROCm (e.g. /opt/rocm) before deploying the GPU "
-            "model.".format(
-                ROCM_RUNTIME_PROBE_SONAME, ", ".join(ROCM_RUNTIME_LIB_CANDIDATES)
-            )
+    host, cache = _confined_model_path(model_path, model_cache_dir, filesystem)
+    mount = models_mount.rstrip("/")
+    return cache, "{}/{}".format(mount, host[len(cache) + 1:])
+
+
+class _EngineContainer(NamedTuple):
+    """The per-engine facts that shape a launch: which image, and how to drive it.
+
+    One record per ``engine`` value, returned by :func:`_engine_container`, so
+    :func:`gpu_container_command` has ONE code path with the image, mount point,
+    internal port, entrypoint and extra env all read from here rather than branched
+    inline. ``entrypoint`` ``None`` means "use the image's own" (the fork's
+    ``run_server.sh``).
+    """
+
+    image: str
+    models_mount: str
+    internal_port: int
+    entrypoint: Optional[str]
+    extra_envs: Tuple[str, ...]
+    ipc_host: bool
+
+
+def _engine_container(engine: Any) -> _EngineContainer:
+    """The container recipe for an engine: the FORK for ``rocmfpx``, MAINLINE for ``""``.
+
+    ``rocmfpx`` (the FP4 27B) needs the fork image, its ``run_server.sh``
+    entrypoint (so no ``--entrypoint`` override, and no ``-dev``/``-ngl``/``-ctv``/
+    ``--spec-*`` - it applies the profile itself), ``--ipc host`` and the
+    unified-memory env. ``""`` (a stock GGUF, and an omitted engine) is the
+    MAINLINE image with ``--entrypoint llama-server``. **Anything else is
+    refused** (ACC-060): the value arrives in a caller's ``runtime`` over the
+    bridge, and an engine name the root side does not know used to fall through
+    to the Strix Halo image - a launch nobody asked for, on a claim nobody
+    checked.
+    """
+    if engine is None:
+        engine = MAINLINE_ENGINE
+    if not isinstance(engine, str) or engine not in (MAINLINE_ENGINE, ROCMFPX_ENGINE):
+        raise ValueError(
+            "The GPU server does not know the engine {!r}, so nothing was "
+            "launched; it serves only the standard llama.cpp engine and the "
+            "ROCmFP4 fork.".format(engine)
         )
-    inherited = dict(os.environ if base_env is None else base_env)
-    previous = inherited.get("LD_LIBRARY_PATH", "")
-    ld_dirs = [engine_lib_dir, resolved]
-    if previous:
-        ld_dirs.append(previous)
-    inherited["LD_LIBRARY_PATH"] = os.pathsep.join(d for d in ld_dirs if d)
-    inherited["SKIP_ROCM_CHECK"] = "1"
-    inherited["HSA_OVERRIDE_GFX_VERSION"] = "11.5.1"
-    inherited["GGML_HIP_ENABLE_UNIFIED_MEMORY"] = "1"
-    return inherited
+    if engine == ROCMFPX_ENGINE:
+        return _EngineContainer(
+            image=GPU_FORK_IMAGE, models_mount=GPU_FORK_MODELS_MOUNT,
+            internal_port=GPU_FORK_PORT, entrypoint=None,
+            extra_envs=(GGML_UNIFIED_MEMORY_ENV, LLAMA_METRICS_ENDPOINT_ENV),
+            ipc_host=True,
+        )
+    return _EngineContainer(
+        image=GPU_CONTAINER_IMAGE, models_mount=MODELS_MOUNT,
+        internal_port=GPU_CONTAINER_PORT, entrypoint="llama-server",
+        extra_envs=(LLAMA_METRICS_ENDPOINT_ENV,), ipc_host=False,
+    )
 
 
-#: Where the GPU server's own stdout and stderr are kept. **Not DEVNULL**
-#: (LESSONS pattern 8): a ``llama-server`` that fails to start - the fork
-#: rejecting a tensor, the Vulkan adapter absent, TheRock libs unresolved - says
-#: so on stderr, and discarding it makes "the GPU server could not start" and
-#: "the GPU server is fine" arrive looking identical. The supervisor detects the
-#: failure by the health timeout; this is where the *reason* survives.
-#:
-#: In ``LOG_ROOT`` beside ``flm-real.log``, because the GPU server is launched by
-#: the **root hardware bridge** (which has GPU device access and no
-#: ``PrivateDevices``/``MemoryDenyWriteExecute`` sandbox), not the locked-down
-#: workload executor - so the process that opens this file is root and
-#: ``/var/log/vaelor`` is on the bridge unit's ``ReadWritePaths``. The executor
-#: could not write here (its unit makes ``/var/log/vaelor`` read-only), which is
-#: one of the reasons the launch goes through the bridge rather than a direct
-#: executor child.
-GPU_LOG_FILE = str(Path(LOG_ROOT) / "gpu-rocmfpx.log")
+#: The largest context window (``-c``) the MAINLINE launch accepts - 2**20
+#: tokens, far above any GGUF this tier serves. A bound on the integer that
+#: crosses the bridge, not a sizing: the fit decides the window.
+GPU_CONTEXT_MAX = 1 << 20
 
-#: How long to wait for a SIGTERM'd server to exit before SIGKILL. Freeing a
-#: large FP4 model off the GPU is not instant; past this it is not stopping on
-#: its own and is killed.
-STOP_GRACE_SECONDS = 10.0
+#: The slot count the MAINLINE launch states (``--parallel``). The fit sizes the
+#: KV cache for ONE slot holding the whole window (``gpu_offload_plan``,
+#: ``parallel=1``), and llama.cpp left to itself starts several - the #109
+#: multiplication. A literal, never a caller value. NOT yet measured live:
+#: whether one slot costs concurrent AI Chat and LLM Server requests (they now
+#: queue on the one slot) is to be measured on the Z2 before it is tuned.
+GPU_MAINLINE_PARALLEL = 1
+
+
+def _mainline_context(runtime: Mapping[str, Any]) -> int:
+    """The context window the MAINLINE launch passes as ``-c`` (ACC-059).
+
+    The memory plan reserves room for the runtime's ``context`` (the generic GPU
+    window, 8,192), so the engine must run with exactly that window, not the
+    model's own trained one - left unset, llama.cpp builds the trained context
+    (32K-128K on the models this tier serves), and the KV cache the plan never
+    counted is what runs out of memory. Read straight off ``runtime`` rather than
+    through :func:`_flag`, because the measured default belongs to the FP4 FORK
+    (131,072, which the fork's own recipe applies); a runtime naming no window
+    gets the generic GPU window the fit sizes by default. Validated at the root
+    boundary like ``ngl``: a whole number from 1 to :data:`GPU_CONTEXT_MAX`.
+    """
+    value = runtime.get("context")
+    if value is None:
+        return GPU_RECOMMENDED_CONTEXT_TOKENS
+    if isinstance(value, bool) or not isinstance(value, int) or not (
+        1 <= value <= GPU_CONTEXT_MAX
+    ):
+        raise ValueError(
+            "The GPU context window (context) must be a whole number from 1 to "
+            "{}; {!r} is refused.".format(GPU_CONTEXT_MAX, value)
+        )
+    return value
+
+
+def _mainline_serve_args(
+    container_model: str, ngl: int, *,
+    context: int, bind: str, internal_port: int,
+) -> List[str]:
+    """The ``llama-server`` args for the MAINLINE image (``engine == ""``).
+
+    Auto device selection: the model, the context window the memory plan was
+    sized for (``-c``, ACC-059) with the one slot it was sized for
+    (``--parallel``), the layer count, then the internal bind/port. The
+    fork-only ``-dev Vulkan0``, ``-ctv turbo4`` and ``--spec-*`` are NOT
+    emitted - live on the Z2 mainline's device is ``ROCm0`` not ``Vulkan0``,
+    ``turbo4`` is unsupported, and the FP4 tensors do not load here at all; a
+    stock GGUF needs none of them. No key: the model is loopback-only.
+    """
+    args = [
+        "-m", container_model, "-c", str(context),
+        "--parallel", str(GPU_MAINLINE_PARALLEL), "-ngl", str(ngl),
+    ]
+    args += ["--host", bind, "--port", str(internal_port)]
+    return args
+
+
+def _fork_serve_args(
+    container_model: str, *, bind: str, internal_port: int,
+) -> List[str]:
+    """The ``run_server.sh`` args for the FORK image (``engine == "rocmfpx"``).
+
+    The fork's entrypoint OWNS the recipe: it auto-detects the device and applies
+    the cache/MTP profile, so the launch passes ONLY the model (positional, under
+    ``/app/models``), the internal bind/port and ``--profile speed``. No
+    ``-dev``/``-ngl``/``-ctv``/``--spec-*``, and no key (the model is loopback-only).
+    """
+    return [
+        container_model, "--host", bind, "--port", str(internal_port),
+        "--profile", GPU_FORK_PROFILE,
+    ]
+
+
+def gpu_container_command(
+    model_path: str,
+    port: int,
+    runtime: Optional[Mapping[str, Any]] = None,
+    *,
+    engine: str = "",
+    group_ids: Sequence[int],
+    docker: str = "docker",
+    image: Optional[str] = None,
+    container_name: str = GPU_CONTAINER_NAME,
+    model_cache_dir: str = MODEL_CACHE_DIR,
+    filesystem: ModelFilesystem = HOST_FILESYSTEM,
+) -> List[str]:
+    """The ``docker run -d`` argv that serves the model on LOOPBACK, per the engine.
+
+    The image + interface are chosen by ``engine`` (the explicit argument, else
+    ``runtime["engine"]``; :func:`_engine_container`). Two shapes, captured live on
+    the Z2 - MAINLINE for a stock GGUF (``engine == ""``)::
+
+        docker run -d --name <name> --device /dev/kfd --device /dev/dri
+            --group-add <r> --group-add <v> --security-opt seccomp=unconfined
+            -e HSA_OVERRIDE_GFX_VERSION=11.5.1 -v <model-cache>:/models:ro
+            -p 127.0.0.1:<port>:8080 --entrypoint llama-server <mainline-image>
+            -m /models/<file>.gguf -c <context> --parallel 1 -ngl <N>
+            --host 0.0.0.0 --port 8080
+
+    and the FORK for the FP4 27B (``engine == "rocmfpx"``), whose entrypoint owns
+    the recipe::
+
+        docker run -d --name <name> --device /dev/kfd --device /dev/dri
+            --group-add <r> --group-add <v> --security-opt seccomp=unconfined
+            --ipc host -e HSA_OVERRIDE_GFX_VERSION=11.5.1
+            -e GGML_HIP_ENABLE_UNIFIED_MEMORY=1 -v <model-cache>:/app/models:ro
+            -p 127.0.0.1:<port>:8000 <fork-image>
+            /app/models/<file>.gguf --host 0.0.0.0 --port 8000 --profile speed
+
+    **The model is ALWAYS published on ``127.0.0.1`` and carries NO api key**, for
+    BOTH engines: it is never LAN-exposed by the engine. The container binds
+    ``0.0.0.0`` internally (docker forwards the publish to the container's bridge
+    IP, never its loopback); loopback safety comes from publishing onto
+    ``127.0.0.1``. LAN exposure is the separate auth proxy
+    (:mod:`vaelor.llm_server_proxy`), which is the only trustworthy, engine-agnostic
+    gate. GIDs must be NUMERIC (a container has no host group db); the caller
+    resolves and passes them.
+
+    **The model mount is the resolved model cache, READ-ONLY, for both
+    engines.** This argv is built by root for a container with the GPU devices
+    and no seccomp profile, on a path any group-``vaelor`` service may send, so
+    the path is confined to the cache (:func:`_confined_model_path`) and the
+    container can read the weights but never write the host.
+    """
+    resolved = _runtime_mapping(runtime)
+    profile = _engine_container(engine or resolved.get("engine"))
+    used_image = image or profile.image
+    mount_source, container_model = _container_model_mount(
+        model_path, model_cache_dir, profile.models_mount, filesystem
+    )
+    safe_port = _validate_port(port)
+    # Validated for both engines (the fork ignores it), so a malformed runtime
+    # is refused whichever image it names.
+    ngl = _validate_ngl(_flag(resolved, "ngl"))
+    # The fork applies its own measured window (run_server.sh); only the
+    # mainline image is told one, and it is validated only where it is used.
+    context = _mainline_context(resolved) if profile.entrypoint else 0
+    command = [
+        docker, "run", "-d", "--name", container_name,
+        "--device", "/dev/kfd", "--device", "/dev/dri",
+    ]
+    for gid in group_ids:
+        command += ["--group-add", str(int(gid))]
+    command += ["--security-opt", "seccomp=unconfined"]
+    if profile.ipc_host:
+        command += ["--ipc", "host"]
+    command += ["-e", HSA_OVERRIDE_ENV]
+    for env in profile.extra_envs:
+        command += ["-e", env]
+    # Read-only, always: a serving engine only ever reads its weights.
+    command += ["-v", "{}:{}:ro".format(mount_source, profile.models_mount)]
+    # Loopback publish, always: the model is never bound to the network here.
+    command += ["-p", "{}:{}:{}".format(GPU_HOST, safe_port, profile.internal_port)]
+    if profile.entrypoint:
+        command += ["--entrypoint", profile.entrypoint]
+    command += [used_image]
+    # The serve-arg shape follows the entrypoint: the fork drives its own
+    # ``run_server.sh`` (``entrypoint is None``) with a positional model + profile;
+    # the mainline drives ``llama-server`` with ``-m``/``-ngl``.
+    if profile.entrypoint is None:
+        command += _fork_serve_args(
+            container_model, bind=GPU_CONTAINER_BIND,
+            internal_port=profile.internal_port,
+        )
+    else:
+        command += _mainline_serve_args(
+            container_model, ngl, context=context, bind=GPU_CONTAINER_BIND,
+            internal_port=profile.internal_port,
+        )
+    return command
+
+
+def _numeric_group_ids(grants: Mapping[str, Any]) -> List[int]:
+    """The numeric render/video GIDs a container needs, or raise.
+
+    ``device_grants(["gpu"])`` resolves the group names for ``/dev/kfd`` +
+    ``/dev/dri`` to numeric GIDs on THIS host. A container image has no host group
+    database, so a name would fail; an unresolved group means the container could
+    not open the device, so the launch is refused (:class:`GpuGroupResolutionError`)
+    rather than started blind.
+    """
+    group_ids = grants.get("group_ids") or {}
+    unresolved = [name for name, gid in group_ids.items() if gid is None]
+    if unresolved or not group_ids:
+        raise GpuGroupResolutionError(
+            "Could not resolve the {} group(s) to numeric GIDs on this host, so "
+            "the GPU serving container cannot be granted the accelerator "
+            "devices.".format(", ".join(unresolved) or "render/video")
+        )
+    return [int(gid) for gid in group_ids.values()]
+
+
+def _default_run(command: Sequence[str], *, timeout: Optional[int] = None):
+    """Run a docker command, capturing output, never raising on non-zero.
+
+    stdout/stderr are captured (not DEVNULL): a ``docker run`` that fails explains
+    itself on stderr, which the caller surfaces in the raised error rather than
+    discarding (LESSONS pattern 8).
+    """
+    return subprocess.run(
+        list(command),
+        capture_output=True, text=True, check=False, timeout=timeout,
+    )
 
 
 class GpuServerProcess:
-    """A supervised ROCmFPX ``llama-server`` process, launched and stopped.
+    """A supervised GPU ``llama-server`` CONTAINER, launched and stopped.
 
-    The spawn is injectable so the launch argv/env can be verified - and the
-    whole lifecycle exercised - without a real GPU. Production passes no
-    ``spawn`` and gets :class:`subprocess.Popen` with a **fixed argv and env**,
-    no shell, ``stdin`` closed and file descriptors closed. Unlike
-    :class:`vaelor.flm_service.FlmProcess` there is no root boundary here: this
-    is an ordinary host process.
+    The C0 successor to the ``subprocess.Popen`` supervisor: it manages a
+    ``docker run -d`` container rather than a host process, but keeps the same
+    ``start``/``stop``/``status``/``alive`` surface so the hardware bridge and the
+    :class:`vaelor.gpu_rocm_supervisor.GpuRocmSupervisor` above it are unchanged.
+    The docker calls go through an injected ``run`` seam so the launch argv - and
+    the whole lifecycle - are verifiable without a real GPU or docker.
     """
 
     def __init__(
         self,
         *,
-        spawn: Optional[Callable[..., Any]] = None,
-        binary: str = GPU_ENGINE_BINARY,
-        rocm_lib_dir: Optional[str] = None,
-        resolver: Callable[[], Optional[str]] = resolve_rocm_lib_dir,
+        run: Optional[Callable[..., Any]] = None,
+        docker: Optional[str] = None,
+        image: Optional[str] = None,
+        container_name: str = GPU_CONTAINER_NAME,
+        model_cache_dir: str = MODEL_CACHE_DIR,
+        group_resolver: Optional[Callable[[], Mapping[str, Any]]] = None,
+        filesystem: ModelFilesystem = HOST_FILESYSTEM,
     ):
-        self._spawn = spawn or self._default_spawn
-        self._binary = binary
-        # ``rocm_lib_dir`` pins the runtime lib dir (tests do); left ``None``,
-        # ``start`` resolves it at launch through ``resolver`` and raises
-        # ``GpuRuntimeLibsMissingError`` if none is found - never a CPU fallback.
-        self._rocm_lib_dir = rocm_lib_dir
-        self._resolver = resolver
-        self._process: Any = None
-        self._log: Any = None
+        self._run = run or _default_run
+        self._docker = docker
+        # ``None`` (the default) means "let the engine choose the image at start":
+        # the mainline image for a stock GGUF, the fork image for the FP4 27B. A
+        # test may pin a fixed image to force one. :meth:`start` resolves it.
+        self._image = image
+        self._name = container_name
+        self._model_cache_dir = model_cache_dir
+        # How the model path is resolved and checked at launch. Production is the
+        # real filesystem; a test injects a fake one (see :class:`ModelFilesystem`).
+        self._filesystem = filesystem
+        # Resolves render/video to numeric GIDs on this host; injectable for tests.
+        self._group_resolver = group_resolver or (lambda: device_grants(["gpu"]))
         self.model_path = ""
         self.port = 0
 
-    def _default_spawn(self, command, env):
-        # Refuse an absent or non-executable engine BEFORE opening the log or
-        # spawning: `subprocess.Popen` on a missing binary raises a bare
-        # `FileNotFoundError` (naming nothing to do about it) and, worse, would do
-        # so with the log file descriptor just opened below still dangling. The
-        # binary is `command[0]`, the fixed fork path.
-        binary = command[0]
-        if not (os.path.isfile(binary) and os.access(binary, os.X_OK)):
-            raise GpuEngineMissingError(
-                "The ROCmFPX GPU engine is not installed at {}; provision it "
-                "before deploying the GPU model.".format(binary)
+    def _docker_binary(self) -> str:
+        docker = self._docker or shutil.which("docker") or "/usr/bin/docker"
+        return docker
+
+    def ensure_image(
+        self, docker: Optional[str] = None, *, image: Optional[str] = None
+    ) -> None:
+        """Make sure the ENGINE'S serving image is present, pulling it once if not.
+
+        The image is the one the launch will use - the fork image for the FP4 27B,
+        the mainline image for a stock GGUF - passed in by :meth:`start` (or pinned
+        on the instance). ``docker image inspect`` is the cheap presence probe, and
+        only a miss triggers a ``docker pull``. On the Z2 both images are already
+        pulled, so this is a fast no-op; on a fresh box it fetches once, and a
+        failed fetch raises :class:`GpuImageMissingError` naming the image rather
+        than letting ``docker run`` fail obscurely.
+        """
+        docker = docker or self._docker_binary()
+        image = image or self._image or GPU_CONTAINER_IMAGE
+        inspected = self._run(
+            [docker, "image", "inspect", image], timeout=DOCKER_QUERY_TIMEOUT
+        )
+        if getattr(inspected, "returncode", 1) == 0:
+            return
+        pulled = self._run(
+            [docker, "pull", image], timeout=DOCKER_PULL_TIMEOUT
+        )
+        if getattr(pulled, "returncode", 1) != 0:
+            raise GpuImageMissingError(
+                "The GPU serving image {} is not present and could not be "
+                "pulled: {}".format(
+                    image, (getattr(pulled, "stderr", "") or "").strip()
+                )
             )
-        # stdout and stderr go to a log file, never DEVNULL: a launch that fails
-        # explains itself there (LESSONS pattern 8). The handle is kept on the
-        # instance so it lives as long as the process writing to it.
-        log_path = Path(GPU_LOG_FILE)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        self._log = open(log_path, "a", encoding="utf-8")
-        try:
-            return subprocess.Popen(
-                command,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=self._log,
-                stderr=subprocess.STDOUT,
-                close_fds=True,
-            )
-        except Exception:
-            # Any spawn failure (a race removing the binary, a resource limit)
-            # must not leak the log descriptor opened a line above.
-            try:
-                self._log.close()
-            finally:
-                self._log = None
-            raise
 
     def start(
         self, model_path: str, *, port: int,
         runtime: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Validate, then launch. A running process is stopped first.
+        """Validate, then launch the container. A running one is replaced first.
 
-        Validation happens before the spawn and before the previous process is
-        touched, so a bad model path or port cannot take down a healthy server.
+        Validation happens inside :func:`gpu_container_command`, before the previous
+        container is touched, so a bad model path or port - including one outside
+        the model cache - cannot take down a healthy server. The engine (read from
+        ``runtime["engine"]``) chooses the image + interface. The model is always
+        published on loopback and carries no key.
+
+        **The confinement is checked twice**: once to build the argv, and again
+        immediately before ``docker run`` - after the image pull and the stop of
+        the previous server - so the window between the check and dockerd
+        resolving ``-v`` is one call, not an image download. A model that stops
+        qualifying in between is refused with the old server already stopped.
         """
-        command = gpu_serve_command(
-            model_path, port, runtime, binary=self._binary
+        resolved = _runtime_mapping(runtime)
+        engine = resolved.get("engine")
+        profile = _engine_container(engine)
+        image = self._image or profile.image
+        docker = self._docker_binary()
+        group_ids = _numeric_group_ids(self._group_resolver())
+        command = gpu_container_command(
+            model_path, port, resolved, engine=engine or MAINLINE_ENGINE,
+            group_ids=group_ids, docker=docker, image=image,
+            container_name=self._name, model_cache_dir=self._model_cache_dir,
+            filesystem=self._filesystem,
         )
-        env = gpu_serve_env(
-            engine_lib_dir=os.path.dirname(self._binary),
-            rocm_lib_dir=self._rocm_lib_dir,
-            resolver=self._resolver,
-        )
+        self.ensure_image(docker, image=image)
         if self.alive():
             self.stop()
-        self._process = self._spawn(command, env)
-        self.model_path = _validate_model_path(model_path)
+        else:
+            # Clear any stopped-but-not-removed container of our name so the fixed
+            # ``--name`` is free for ``docker run`` (a prior crash can leave one).
+            self._run([docker, "rm", "-f", self._name], timeout=DOCKER_QUERY_TIMEOUT)
+        try:
+            model, _cache = _confined_model_path(
+                model_path, self._model_cache_dir, self._filesystem
+            )
+        except GpuModelPathError as error:
+            # The previous container is already gone by this point, so say so:
+            # a refusal here leaves nothing serving on the GPU.
+            raise GpuModelPathError(
+                "{} The previous GPU server had already been stopped, so no "
+                "model is serving on the GPU until a valid one is launched.".format(error)
+            ) from error
+        result = self._run(command, timeout=DOCKER_RUN_TIMEOUT)
+        if getattr(result, "returncode", 1) != 0:
+            raise RuntimeError(
+                "The GPU serving container could not be started: {}".format(
+                    (getattr(result, "stderr", "") or "").strip()
+                )
+            )
+        self.model_path = model
         self.port = _validate_port(port)
         return self.status()
 
     def alive(self) -> bool:
-        if self._process is None:
+        """Whether our container exists and is running, per ``docker inspect``."""
+        docker = self._docker_binary()
+        try:
+            result = self._run(
+                [docker, "inspect", "-f", "{{.State.Running}}", self._name],
+                timeout=DOCKER_QUERY_TIMEOUT,
+            )
+        except (OSError, subprocess.SubprocessError):
             return False
-        return self._process.poll() is None
+        return (
+            getattr(result, "returncode", 1) == 0
+            and (getattr(result, "stdout", "") or "").strip() == "true"
+        )
 
-    def stop(self, *, grace_seconds: float = STOP_GRACE_SECONDS) -> Dict[str, Any]:
-        """SIGTERM, wait, then SIGKILL. A process that is already gone is fine."""
-        process = self._process
-        if process is None:
-            return {"stopped": True, "was_running": False}
-        was_running = process.poll() is None
-        if was_running:
-            try:
-                process.terminate()
-            except (OSError, ProcessLookupError):
-                pass
-            deadline = time.monotonic() + max(0.0, float(grace_seconds))
-            while time.monotonic() < deadline and process.poll() is None:
-                time.sleep(0.1)
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except (OSError, ProcessLookupError):
-                    pass
-        self._process = None
-        if self._log is not None:
-            try:
-                self._log.close()
-            except OSError:
-                pass
-            self._log = None
+    def stop(self, *, grace_seconds: int = STOP_GRACE_SECONDS) -> Dict[str, Any]:
+        """``docker stop`` (with a grace period), then ``docker rm``.
+
+        A container that is already gone is fine; both calls are best-effort so a
+        stop never raises. The fixed name is freed either way so the next launch
+        can reuse it.
+        """
+        docker = self._docker_binary()
+        was_running = self.alive()
+        try:
+            self._run(
+                [docker, "stop", "--time", str(int(grace_seconds)), self._name],
+                timeout=DOCKER_RUN_TIMEOUT,
+            )
+            self._run([docker, "rm", "-f", self._name], timeout=DOCKER_QUERY_TIMEOUT)
+        except (OSError, subprocess.SubprocessError):
+            pass
         return {"stopped": True, "was_running": was_running}
 
     def status(self) -> Dict[str, Any]:
@@ -499,5 +858,5 @@ class GpuServerProcess:
             "running": self.alive(),
             "model_path": self.model_path,
             "port": self.port,
-            "pid": getattr(self._process, "pid", None) if self._process else None,
+            "container": self._name,
         }

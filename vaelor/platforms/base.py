@@ -319,6 +319,30 @@ def cpu_topology(
     return result
 
 
+def names_raspberry_pi(text_value: Any) -> bool:
+    """Whether a device-tree model or a cpuinfo hardware line names a Raspberry Pi."""
+    return "raspberry pi" in str(text_value or "").lower()
+
+
+#: What firmware writes into an SMBIOS field it was never given a value for.
+DMI_PLACEHOLDERS = frozenset({
+    "", "to be filled by o.e.m.", "system manufacturer", "default string",
+    "system product name", "none", "not specified", "not applicable",
+})
+
+
+def identity_from_dmi(vendor: Any, product: Any) -> bool:
+    """Whether SMBIOS vendor/product strings identify a machine at all.
+
+    The rule `dmi_identity` applies to the files it reads, for strings read
+    some other way (a worker's, over SSH): a placeholder is not an identity.
+    """
+    return any(
+        str(value or "").strip().lower() not in DMI_PLACEHOLDERS
+        for value in (vendor, product)
+    )
+
+
 def dmi_identity(dmi_root: str = "/sys/class/dmi/id") -> Dict[str, Any]:
     """Read SMBIOS identity, which is how an x86 host says what it is.
 
@@ -330,10 +354,7 @@ def dmi_identity(dmi_root: str = "/sys/class/dmi/id") -> Dict[str, Any]:
     product = text(root / "product_name")
     board = text(root / "board_name")
     chassis_code = text(root / "chassis_type")
-    placeholders = {
-        "", "to be filled by o.e.m.", "system manufacturer", "default string",
-        "system product name", "none", "not specified", "not applicable",
-    }
+    placeholders = DMI_PLACEHOLDERS
     if vendor.lower() in placeholders:
         vendor = ""
     if product.lower() in placeholders:
@@ -387,10 +408,7 @@ def board_info(
             fields.setdefault(key.strip().lower(), value.strip())
     cpu_model = fields.get("model name") or platform.processor() or "unknown"
     revision = fields.get("revision", "")
-    is_pi = (
-        "raspberry pi" in model.lower()
-        or "raspberry pi" in fields.get("hardware", "").lower()
-    )
+    is_pi = names_raspberry_pi(model) or names_raspberry_pi(fields.get("hardware", ""))
     dmi = dmi_identity(dmi_root)
     resolved = model or dmi_model_name(dmi) or platform.node() or "Unknown computer"
     topology = cpu_topology(cpuinfo_path, sys_root)

@@ -1,0 +1,621 @@
+/*
+ * Remote console (VD-200: the Console, ConsoleRemoteLogin, ConsoleKvm and
+ * ConsoleSession boards). The cards are the shared primitives and the System
+ * stream's (system.css); this file adds the console's own parts.
+ * Components: RemoteConsole.tsx, ConsoleRemoteDesktop.tsx, PhysicalKvmStage.tsx,
+ * ConsoleReadinessPanel.tsx, ConsoleLadder.tsx, ConsoleSessionDialog.tsx.
+ */
+
+.console-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.console-heading {
+  margin-bottom: 0;
+}
+
+.console-heading h1:focus,
+.console-crumb :is(h1, h2):focus {
+  outline: none;
+}
+
+/* The way back from a view: "Remote console / Physical KVM". */
+.console-crumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.console-crumb .ui-button {
+  min-height: 36px;
+  padding: 0 12px;
+  color: var(--accent);
+  font-size: var(--font-size-ui-sm);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  border-color: transparent;
+}
+
+.console-crumb :is(h1, h2) {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.console-notice .ui-notice__content > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.console-notice .ui-button,
+.console-session__retry .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+/* This machine's Remote Desktop. */
+.console-desktop__split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.console-desktop__split > .console-credentials {
+  border-left: 1px solid var(--border-row);
+}
+
+.console-access {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.console-address {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.console-address strong {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xl);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.console-address > span:last-child {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.console-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.console-fingerprint {
+  display: grid;
+  gap: 4px;
+}
+
+.console-fingerprint code,
+.console-fingerprint strong {
+  color: var(--text-secondary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+/* The dedicated credentials, beside the address on the Remote Login view. */
+.console-credentials {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+}
+
+.console-credentials:focus {
+  outline: none;
+}
+
+.console-credentials__titles {
+  display: grid;
+  gap: 4px;
+}
+
+.console-credentials__titles h3 {
+  margin: 0;
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.console-credentials__titles p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cns-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cns-password {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.cns-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.cns-form__actions > .ui-button-wrap:has(.ui-button--danger) {
+  margin-left: auto;
+}
+
+.cns-form__state {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cns-form__state--saved {
+  color: var(--success-text);
+}
+
+/* The browser desktop's details: the explanation beside where it stands. */
+.console-browser__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.console-browser__body > p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.6;
+}
+
+.console-browser__state {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  background: var(--bg-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.console-browser__state p {
+  margin: 0;
+}
+
+.console-app__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Physical KVM: the dashed screen, the three halves, the control session. */
+.kvm-screen {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 220px;
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+}
+
+.kvm-screen p {
+  max-width: 52ch;
+  margin: 0;
+  font-size: var(--font-size-ui-sm);
+}
+
+.kvm-rows {
+  display: grid;
+}
+
+.kvm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  font-size: var(--font-size-ui);
+}
+
+.cns-stage__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.cns-stage__screen {
+  padding: 18px;
+}
+
+.cns-stage__screen .kvm-screen {
+  height: 100%;
+  min-height: 300px;
+}
+
+.cns-stage__controls {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-row);
+}
+
+.cns-health {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-list);
+}
+
+.cns-health > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cns-health small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cns-health strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.cns-owner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+}
+
+.cns-owner strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.cns-owner > span:not(.sys-eyebrow) {
+  color: var(--info-text);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cns-owner > .cns-owner__reason {
+  color: var(--text-secondary);
+}
+
+.cns-owner .ui-button {
+  min-height: 36px;
+  margin-top: 6px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 600;
+}
+
+/* The setup checklist, a numbered row per requirement. */
+.kvm-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kvm-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.kvm-step:first-child {
+  border-top: 0;
+}
+
+.kvm-step > div {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kvm-step strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.kvm-step small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.kvm-step__mark {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+  font-size: var(--font-size-ui-xs);
+  border: 1px solid var(--border-icon);
+  border-radius: 50%;
+}
+
+.kvm-step--done .kvm-step__mark {
+  color: var(--success-text);
+  border-color: var(--success-border);
+}
+
+.kvm-step__tag {
+  padding: 2px 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+}
+
+.kvm-step__tag--done {
+  color: var(--success-text);
+  border: 0;
+}
+
+.kvm-protected {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 18px 18px;
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.kvm-protected p {
+  margin: 0;
+}
+
+.kvm-protected strong {
+  color: var(--text-primary);
+}
+
+/* The ladder's rows: the state in words, then its detail. */
+.ladder-row__state {
+  color: var(--text-secondary);
+}
+
+.sys-refusal--last {
+  border-top: 1px solid var(--border-row);
+  border-bottom: 0;
+}
+
+/* The one-use session: the window over the dimmed page. */
+.console-session {
+  position: fixed;
+  z-index: var(--layer-modal);
+  inset: 0;
+  display: grid;
+  padding: 24px;
+  background: var(--overlay);
+  backdrop-filter: blur(6px);
+}
+
+.console-session__card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge), var(--shadow-modal);
+}
+
+.console-session__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.console-session__header h2 {
+  margin: 0;
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.console-session__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.console-session__actions .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.console-session__notices {
+  display: grid;
+  gap: 10px;
+  padding: 14px 18px 0;
+}
+
+.console-session__retry .ui-notice__content > span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.console-session iframe {
+  flex: 1;
+  width: 100%;
+  min-height: 320px;
+  background: var(--bg-canvas);
+  border: 0;
+}
+
+.console-session__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 12px 18px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  border-top: 1px solid var(--border-row);
+}
+
+@media (max-width: 1200px) {
+  .console-desktop__split,
+  .cns-stage__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .console-desktop__split > .console-credentials {
+    border-top: 1px solid var(--border-row);
+    border-left: 0;
+  }
+
+  .cns-stage__controls {
+    border-top: 1px solid var(--border-row);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .console-browser__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .console-credentials,
+  .cns-owner {
+    padding: 16px;
+  }
+
+  .cns-health,
+  .kvm-step {
+    padding-inline: 16px;
+  }
+
+  .console-actions > .ui-button-wrap,
+  .cns-form__actions > .ui-button-wrap {
+    flex: 1 1 140px;
+  }
+
+  .console-actions .ui-button,
+  .cns-form__actions .ui-button {
+    width: 100%;
+  }
+
+  .cns-form__actions > .ui-button-wrap:has(.ui-button--danger) {
+    margin-left: 0;
+  }
+
+  .cns-password {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .console-session {
+    padding: 0;
+  }
+
+  .console-session__card {
+    border-radius: 0;
+  }
+
+  .kvm-screen {
+    min-height: 160px;
+  }
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .console-crumb .ui-button,
+  .console-notice .ui-button,
+  .console-session__retry .ui-button,
+  .console-session__actions .ui-button,
+  .cns-owner .ui-button {
+    min-height: 44px;
+  }
+}
+
+/* The credentials' buttons are the board's 36 px pills; Disable RDP is the
+   outline danger button (DESIGN_TOKENS: .v-btn.danger). */
+.console-credentials .ui-button,
+.console-access .ui-button,
+.console-browser .ui-button,
+.console-app__actions .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.console-credentials .ui-button--primary,
+.console-access .ui-button--primary {
+  font-weight: 600;
+}
+
+.cns-form .ui-button--danger {
+  color: var(--danger-text);
+  background: transparent;
+  border-color: var(--danger-border);
+}
+
+.cns-form .ui-button--danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .console-credentials .ui-button,
+  .console-access .ui-button,
+  .console-browser .ui-button,
+  .console-app__actions .ui-button {
+    min-height: 44px;
+  }
+}

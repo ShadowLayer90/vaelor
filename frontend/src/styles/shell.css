@@ -7,305 +7,54 @@
   min-height: 100vh;
 }
 
+/* "This page is older than the installed version" (ACC-167), above every
+   screen. The content fills the notice so the button can sit at the end of
+   the row on a wide screen; on a phone it goes under the sentence. */
+.app-reload-notice {
+  margin-block-end: var(--space-4);
+}
+
+.app-reload-notice .ui-notice__content {
+  flex: 1 1 auto;
+}
+
+.app-reload-notice__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+@media (max-width: 720px) {
+  .app-reload-notice__row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/*
+ * The backdrop is the canvas and nothing else (VD-200: the redesign drops the
+ * drifting grid, radar sweep, thermal glows and signal traces). The component
+ * still renders its layers, so they are kept out of layout and out of sight.
+ */
 .ambient-background {
   position: fixed;
   inset: 0;
   z-index: -1;
   /*
-   * `clip`, not `hidden`. The decorative layers deliberately overhang the
-   * window - the perspective grid alone is 116% wide and offset right - so
-   * this box measures a 1763px `scrollWidth` inside a 1440px viewport. Under
-   * `hidden` that made it a real scroll container: nothing offers to scroll
-   * it, but script or a focus restore can, and the whole backdrop then slides
-   * out from under the page. `clip` paints identically and cannot scroll at
-   * all. It does not change the reported `scrollWidth`, and it never was the
-   * source of a page-level horizontal scrollbar: the document's own
-   * `scrollWidth` measures exactly the viewport width on every route.
+   * `clip`, not `hidden`: a box that can hide overflow can be scrolled by
+   * script or a focus restore, and the backdrop then slides out from under the
+   * page. `clip` cannot scroll at all.
    */
   overflow: clip;
   pointer-events: none;
-  background:
-    linear-gradient(180deg, transparent 0 42%, rgb(0 0 0 / 34%) 100%),
-    var(--bg-canvas);
+  background: var(--bg-canvas);
 }
 
-/*
- * The layers are fixed, not absolute, so the overhang is painted rather than
- * laid out.
- *
- * `clip` stopped the box being scrollable but left it *reporting* the
- * overhang: measured 1254px of content inside a 1024px box (469/375, 940/768,
- * 1567/1280, 1763/1440), which is the number that keeps being reported as a
- * stray horizontal scrollbar. A fixed-position box contributes nothing to any
- * ancestor's scrollable overflow, and because `.ambient-background` is itself
- * `position: fixed; inset: 0` and establishes no containing block for fixed
- * descendants, every percentage below still resolves against exactly the same
- * rectangle: measured layer geometry is unchanged to the pixel, and the box
- * now reports 1024/1024 and 768/768.
- */
+/* Fixed, so a layer can never add to any ancestor's scrollable overflow. */
 .ambient-background > span {
   position: fixed;
-}
-
-.ambient-background__thermal {
-  position: absolute;
-  width: min(52vw, 760px);
-  aspect-ratio: 1;
-  border-radius: 50%;
-  filter: blur(90px);
-  will-change: transform;
-}
-
-.ambient-background__thermal--orange {
-  top: -20%;
-  right: -2%;
-  background: radial-gradient(circle, var(--ambient-orange), transparent 68%);
-  animation: thermal-drift-orange 18s ease-in-out infinite alternate;
-}
-
-.ambient-background__thermal--green {
-  bottom: -38%;
-  left: 10%;
-  background: radial-gradient(circle, var(--ambient-green), transparent 68%);
-  animation: thermal-drift-green 22s ease-in-out infinite alternate;
-}
-
-.ambient-background__grid {
-  position: absolute;
-  right: -12%;
-  bottom: -14%;
-  width: 116%;
-  height: 92%;
-  background-image:
-    linear-gradient(var(--border-subtle) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border-subtle) 1px, transparent 1px);
-  background-size: 54px 54px;
-  opacity: 0.42;
-  mask-image:
-    linear-gradient(to top, black 12%, transparent 92%),
-    linear-gradient(90deg, transparent 6%, black 35%, black 88%, transparent);
-  transform: perspective(700px) rotateX(62deg) scale(1.18);
-  transform-origin: bottom;
-  animation: grid-drift 16s linear infinite;
-}
-
-.ambient-background__nodes {
-  position: absolute;
-  inset: 0;
-  background-image: radial-gradient(circle, var(--border-strong) 1px, transparent 1.5px);
-  background-size: 72px 72px;
-  opacity: 0.34;
-  mask-image: radial-gradient(circle at 66% 42%, black, transparent 62%);
-  animation: node-breathe 7s ease-in-out infinite;
-}
-
-.ambient-background__radar {
-  position: absolute;
-  top: 3%;
-  right: -8%;
-  width: min(58vw, 820px);
-  aspect-ratio: 1;
-  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
-  border-radius: 50%;
-  background:
-    repeating-radial-gradient(
-      circle,
-      transparent 0 10%,
-      color-mix(in srgb, var(--accent) 12%, transparent) 10.2% 10.5%,
-      transparent 10.7% 20%
-    ),
-    linear-gradient(90deg, transparent 49.8%, color-mix(in srgb, var(--accent) 13%, transparent) 50%, transparent 50.2%),
-    linear-gradient(transparent 49.8%, color-mix(in srgb, var(--accent) 13%, transparent) 50%, transparent 50.2%);
-  box-shadow:
-    inset 0 0 80px color-mix(in srgb, var(--accent) 4%, transparent),
-    0 0 90px color-mix(in srgb, var(--accent) 8%, transparent);
-  opacity: 0.72;
-}
-
-.ambient-background__radar::before {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: conic-gradient(
-    from 0deg,
-    transparent 0 304deg,
-    color-mix(in srgb, var(--accent) 4%, transparent) 314deg,
-    color-mix(in srgb, var(--accent) 24%, transparent) 350deg,
-    transparent 360deg
-  );
-  content: "";
-  animation: radar-sweep 13s linear infinite;
-}
-
-.ambient-background__radar::after {
-  position: absolute;
-  inset: 50% auto auto 50%;
-  width: 9px;
-  height: 9px;
-  background: var(--accent);
-  border-radius: 50%;
-  box-shadow:
-    0 0 18px var(--accent),
-    0 0 48px var(--accent-glow);
-  content: "";
-  transform: translate(-50%, -50%);
-}
-
-.ambient-background__scan-band {
-  position: absolute;
-  inset: 0 auto 0 -18%;
-  width: 18%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--accent) 3%, transparent) 34%,
-    color-mix(in srgb, var(--accent) 10%, transparent) 50%,
-    color-mix(in srgb, var(--accent) 3%, transparent) 66%,
-    transparent
-  );
-  opacity: 0.8;
-  transform: skewX(-10deg);
-  animation: background-scan 11s ease-in-out infinite;
-}
-
-.ambient-background__trace {
-  position: absolute;
-  width: clamp(220px, 28vw, 520px);
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--ambient-trace), transparent);
-  transform-origin: left;
-}
-
-.ambient-background__trace::before,
-.ambient-background__trace::after {
-  position: absolute;
-  content: "";
-}
-
-.ambient-background__trace::before {
-  top: -2px;
-  left: 0;
-  width: 5px;
-  height: 5px;
-  background: var(--accent);
-  border-radius: 50%;
-  box-shadow:
-    0 0 8px var(--accent),
-    0 0 18px var(--accent),
-    0 0 34px var(--accent-glow);
-  animation: signal-travel 6.8s ease-in-out infinite;
-}
-
-.ambient-background__trace::after {
-  top: -3px;
-  right: 0;
-  width: 7px;
-  height: 7px;
-  border: 1px solid var(--ambient-trace);
-  border-radius: 2px;
-  transform: rotate(45deg);
-}
-
-.ambient-background__trace--one {
-  top: 24%;
-  left: 52%;
-  transform: rotate(-11deg);
-}
-
-.ambient-background__trace--two {
-  top: 58%;
-  left: 68%;
-  opacity: 0.72;
-  transform: rotate(17deg);
-}
-
-.ambient-background__trace--two::before {
-  animation-delay: -3.1s;
-}
-
-.ambient-background__trace--three {
-  bottom: 12%;
-  left: 31%;
-  opacity: 0.5;
-  transform: rotate(-6deg);
-}
-
-.ambient-background__trace--three::before {
-  animation-delay: -5.2s;
-}
-
-@keyframes thermal-drift-orange {
-  to {
-    opacity: 0.72;
-    transform: translate(-9vw, 10vh) scale(1.12);
-  }
-}
-
-@keyframes thermal-drift-green {
-  to {
-    opacity: 0.8;
-    transform: translate(12vw, -8vh) scale(0.9);
-  }
-}
-
-@keyframes grid-drift {
-  to {
-    background-position: 54px 54px;
-  }
-}
-
-@keyframes node-breathe {
-  0%,
-  100% {
-    opacity: 0.12;
-  }
-  50% {
-    opacity: 0.46;
-  }
-}
-
-@keyframes radar-sweep {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes background-scan {
-  0%,
-  16% {
-    left: -18%;
-    opacity: 0;
-  }
-  24% {
-    opacity: 0.8;
-  }
-  76% {
-    opacity: 0.8;
-  }
-  86%,
-  100% {
-    left: 108%;
-    opacity: 0;
-  }
-}
-
-@keyframes signal-travel {
-  0%,
-  12% {
-    left: 0;
-    opacity: 0;
-  }
-  20% {
-    opacity: 1;
-  }
-  78% {
-    opacity: 1;
-  }
-  88%,
-  100% {
-    left: calc(100% - 5px);
-    opacity: 0;
-  }
+  display: none;
 }
 
 .sidebar {
@@ -329,45 +78,31 @@
    */
   overflow-x: hidden;
   overscroll-behavior: contain;
-  background:
-    linear-gradient(180deg, var(--bg-surface-warm), var(--bg-sidebar) 180px),
-    var(--bg-sidebar);
-  border-right: 1px solid var(--border-subtle);
-  box-shadow: 18px 0 64px rgb(0 0 0 / 26%);
-}
-
-.sidebar::before {
-  position: absolute;
-  top: var(--topbar-height);
-  right: -1px;
-  width: 1px;
-  height: 148px;
-  background: linear-gradient(transparent, var(--accent), transparent);
-  box-shadow: 0 0 14px var(--accent-glow);
-  content: "";
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-sidebar);
 }
 
 .sidebar__brand {
-  min-height: var(--topbar-height);
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: 0 var(--space-4);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: 10px;
+  padding: 4px 8px;
 }
 
 .brand-glyph,
 .topbar__mark {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   flex: 0 0 auto;
+  border-radius: 7px;
   font-size: var(--font-size-body-sm);
 }
 
+/* ProductMark's small drawing is on an 18-unit grid: at 18 px its strokes stay 1.5 px. */
 .brand-glyph svg,
 .topbar__mark svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 .brand-copy {
@@ -376,37 +111,59 @@
 }
 
 .brand-copy strong {
-  font-size: var(--font-size-body-sm);
+  font-size: var(--font-size-ui-lg);
+  font-weight: var(--weight-medium);
+  line-height: 1.3;
 }
 
 .brand-copy span {
   color: var(--text-muted);
-  font-size: var(--font-size-body-sm);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--font-size-ui-xs);
 }
 
 .sidebar__nav {
   display: grid;
   gap: var(--space-1);
-  padding: var(--space-4) var(--space-3);
+}
+
+.sidebar__nav--desktop {
+  /* On the 4 px scale (polish audit cause 15; it was 22). */
+  gap: 24px;
+}
+
+/* The rail's Overview / AI / Manage groups: a quiet eyebrow over each. */
+.nav-group {
+  display: grid;
+  gap: 2px;
+}
+
+.nav-group__label,
+.hardware-signals__heading > span:first-child {
+  padding: 0 10px 6px;
+  color: var(--text-faint-label);
+  font-size: var(--font-size-ui-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .sidebar__nav--mobile {
   display: none;
 }
 
+/* A rail row (the redesign board): 18 px icon, a 10 px gap, the name at
+   14 px, 9 px by 10 px of padding - a 42 px row. */
 .nav-item {
   position: relative;
   display: grid;
-  grid-template-columns: 30px 1fr auto;
+  grid-template-columns: 18px 1fr auto;
   align-items: center;
-  min-height: 44px;
-  padding: 0 var(--space-3);
+  gap: 10px;
+  min-height: 42px;
+  padding: 9px 10px;
   color: var(--text-secondary);
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: 8px;
   text-align: left;
   transition:
     color var(--motion-fast) ease,
@@ -416,7 +173,7 @@
 
 .nav-item:hover:not(:disabled) {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-surface-raised);
 }
 
 /* Rail destinations are links now (#150), styled identically to the buttons
@@ -425,24 +182,32 @@ a.nav-item {
   text-decoration: none;
 }
 
-/* A grouping wrapper that exists to carry role="tabpanel" (#150) without
-   changing the layout of the sections inside it. */
-.settings-tabpanel {
-  display: contents;
+/* The current page: a raised row with a white word and the accent on its
+   icon - the rail's one use of the accent. */
+.nav-item--active {
+  color: var(--text-primary);
+  background: var(--bg-row-active);
+  box-shadow: inset 0 0 0 1px var(--border-row-active);
 }
 
-.nav-item--active {
+.nav-item--active .nav-item__icon {
   color: var(--accent);
-  background: linear-gradient(90deg, var(--accent-soft), rgb(30 12 0 / 45%));
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
-  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* The phone bar keeps today's look: the current destination's word is orange
+   as well as its icon. */
+.sidebar__nav--mobile .nav-item--active {
+  color: var(--accent);
+  background: transparent;
+  box-shadow: none;
 }
 
 .nav-item__icon {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
+  color: var(--icon-muted);
 }
 
 .nav-item__label {
@@ -450,8 +215,7 @@ a.nav-item {
      abbreviations they replaced ("Remote console" for "KVM"). They wrap inside
      their own column instead of widening the rail or the mobile tab bar. */
   min-width: 0;
-  font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
+  font-size: var(--font-size-ui);
   overflow-wrap: anywhere;
 }
 
@@ -473,6 +237,68 @@ a.nav-item {
   opacity: 1;
 }
 
+/* VD-200 S-H7: a destination closed to this role says why on the row itself,
+   not only in a tooltip a touch or keyboard reader never sees. */
+.nav-item__reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+/* The 92 px rail stacks icon, name and reason; the reason may wrap between words. */
+@media (max-width: 1024px) {
+  .nav-item__reason {
+    width: 100%;
+    text-align: center;
+    white-space: normal;
+  }
+}
+
+.nav-item__reason-icon {
+  display: none;
+}
+
+/*
+ * The 92 px rail (721-1024 px): "Needs operator" wrapped to two lines under
+ * every closed row and took each to 88 px, against 42 for an open one (polish
+ * audit, the viewer's rail). It draws as a lock and the role word on one line;
+ * "Needs" leaves the picture but not the text, so the row's description is
+ * unchanged. Held by styles/topbarPolish.test.ts.
+ */
+@media (min-width: 721px) and (max-width: 1024px) {
+  .sidebar__nav--desktop .nav-item__reason {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    text-transform: capitalize;
+    white-space: nowrap;
+  }
+
+  .sidebar__nav--desktop .nav-item__reason-icon {
+    display: block;
+    flex: none;
+  }
+
+  .sidebar__nav--desktop .nav-item__reason-verb {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+
+/* The phone's More sheet: the reason sits under the name, in the name's column. */
+@media (max-width: 720px) {
+  .mobile-nav-more__menu .nav-item__reason {
+    grid-column: 2;
+    text-align: start;
+  }
+}
+
 /*
  * Cascade fix (#12). Planned/restricted rows render through the <Button>
  * primitive, so `.ui-button` / `.ui-button:disabled` chrome (raised bg, border,
@@ -484,46 +310,32 @@ a.nav-item {
  */
 .sidebar__nav .nav-item:disabled,
 .sidebar__nav .nav-item[aria-disabled="true"] {
-  padding: 0 var(--space-3);
+  min-height: 42px;
+  padding: 9px 10px;
   color: var(--text-muted);
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: 8px;
   opacity: 1;
 }
 
+/* Machine health sits at the foot of the rail as a section, not a box: a
+   hairline above it, its readings as plain rows (the redesign board). */
 .sidebar__hardware {
-  display: grid;
-  gap: var(--space-3);
-  margin: 0 var(--space-3) var(--space-3);
-  padding: var(--space-3);
-  background:
-    linear-gradient(135deg, var(--panel-highlight), transparent 42%),
-    var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  box-shadow: inset 0 1px 0 var(--panel-highlight);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-hairline);
 }
 
+/* The desktop rail's own padding and the 22 px between its brand, its three
+   groups and Machine health. The tablet rail and the phone bar keep theirs. */
 @media (min-width: 1025px) {
-  .sidebar__hardware {
-    gap: var(--space-2);
-    margin: 0 var(--space-2) var(--space-2);
-    padding: var(--space-2);
-  }
-
-  .hardware-signal {
-    padding-block: var(--space-1);
-  }
-
-  .hardware-signal strong {
-    font-size: var(--font-size-data-sm);
-    line-height: 1.3;
-  }
-
-  .hardware-signal small {
-    font-size: var(--font-size-data-sm);
-    line-height: 1.3;
+  .sidebar {
+    gap: 22px;
+    padding: 18px 12px;
   }
 }
 
@@ -539,23 +351,24 @@ a.nav-item {
  * gap where one used to be.
  */
 
+/* The board's heading row: the name left, the state pill right, on one line.
+   No right inset, so "Healthy" fits beside "MACHINE HEALTH" in the 232 px
+   rail; a longer word ("Not updating") still drops below rather than
+   breaking the heading. */
 .hardware-signals__heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  gap: 4px 6px;
+  padding: 0 0 6px 10px;
 }
 
-.hardware-signals__heading {
-  border-top: 0;
-  border-bottom: 1px solid var(--border-subtle);
+/* The heading stays on one line; a long state word ("Not updating") moves
+   its pill to the next line instead of breaking the heading beside it. */
+.hardware-signals__heading > span:first-child {
+  padding: 0;
+  white-space: nowrap;
 }
 
 /*
@@ -569,15 +382,28 @@ a.nav-item {
  * colour is split on `.live-dot`. An unclassed label inherits the heading's
  * muted grey rather than a false reassurance.
  */
+/* The state word is a pill; its outline follows the same state modifier as
+   its colour (below), so the outline, the word and the light are one value. */
 .hardware-signals__heading strong {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-row-active);
+  border-radius: var(--radius-pill);
+  flex: 0 0 auto;
   font-size: var(--font-size-body-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  /* The heading's name wraps before the state word does: a pill broken over
+     two lines no longer reads as one value. */
+  white-space: nowrap;
 }
 
 .hardware-state--live {
-  color: var(--success);
+  color: var(--success-text);
+  border-color: var(--success-border);
 }
 
 /* Paused and unknown are true, deliberate states: neutral, not reassuring and
@@ -588,7 +414,8 @@ a.nav-item {
 }
 
 .hardware-state--error {
-  color: var(--danger);
+  color: var(--danger-text);
+  border-color: var(--danger-border);
 }
 
 .hardware-signal {
@@ -596,19 +423,18 @@ a.nav-item {
   /* `minmax(0, 1fr)`, not `1fr`: a grid column's automatic minimum is its
      content, so a long label widened the rail rather than truncating. */
   grid-template-columns: 18px minmax(0, 1fr) 14px;
-  align-items: center;
-  gap: var(--space-2);
+  align-items: start;
+  gap: 10px;
   width: 100%;
-  padding: var(--space-2) 0;
+  padding: 8px 10px;
   color: var(--text-secondary);
   background: transparent;
   border: 0;
   text-align: left;
 }
 
-.hardware-signal:hover,
-.hardware-signal:focus-visible {
-  color: var(--accent);
+.hardware-signal > svg:first-child {
+  color: var(--icon-muted);
 }
 
 .hardware-signal > svg:last-child {
@@ -618,14 +444,14 @@ a.nav-item {
 .hardware-signal > span:nth-child(2) {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: 4px;
 }
 
 .hardware-signal strong {
   overflow-wrap: anywhere;
   color: var(--text-primary);
-  font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
   line-height: 1.3;
   white-space: normal;
 }
@@ -633,10 +459,26 @@ a.nav-item {
 .hardware-signal small {
   overflow-wrap: anywhere;
   color: var(--text-muted);
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  line-height: 1.45;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.4;
   white-space: normal;
+}
+
+/* A drive's used share, as a 4 px bar under its name (the board's rows). */
+.hardware-signal__bar {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  background: var(--border-subtle);
+  border-radius: var(--radius-pill);
+}
+
+.hardware-signal__bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
 }
 
 .hardware-led {
@@ -646,14 +488,9 @@ a.nav-item {
   border-radius: 50%;
 }
 
-.hardware-led--ssd {
-  background: var(--accent);
-  box-shadow: 0 0 8px var(--accent);
-}
-
 .hardware-led--live {
   background: var(--success);
-  box-shadow: 0 0 8px var(--success);
+  box-shadow: 0 0 0 3px var(--success-halo);
 }
 
 .hardware-led--paused {
@@ -661,14 +498,15 @@ a.nav-item {
   box-shadow: none;
 }
 
+/* Not read yet: a hollow dashed ring, the states sheet's "not read" mark. */
 .hardware-led--unknown {
   background: transparent;
-  border: 1px solid var(--border-strong);
+  border: 1.5px dashed var(--text-unread);
 }
 
 .hardware-led--error {
   background: var(--danger);
-  box-shadow: 0 0 8px var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-halo);
 }
 
 /*
@@ -678,57 +516,58 @@ a.nav-item {
  */
 .hardware-led--attention {
   background: var(--warning);
-  box-shadow: 0 0 8px var(--warning);
+  box-shadow: 0 0 0 3px var(--warning-halo);
 }
 
 .hardware-state--attention {
-  color: var(--warning);
+  color: var(--warning-text);
+  border-color: var(--warning-border);
 }
 
 .hardware-alert {
   display: grid;
   grid-template-columns: 16px 1fr;
   align-items: start;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  color: var(--warning);
+  gap: 8px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  color: var(--warning-text);
   background: var(--warning-soft);
   border: 1px solid var(--warning-border);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-body-sm);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-ui-xs);
   line-height: 1.4;
   text-align: left;
 }
 
 .hardware-storage-more {
-  padding-left: 26px;
+  padding-left: calc(18px + 20px);
   color: var(--text-muted);
-  font: var(--font-size-body-sm) var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
 }
 
 /*
  * Cascade fix (#12). The signal rows and the alert row render through the
- * <Button> primitive, so `.ui-button` chrome (raised bg, border, radius, bold)
- * overrides their intended-flat look because shared-primitives.css imports LAST
- * at equal specificity. Re-assert the flat treatment one level deeper
- * (`.sidebar__hardware …`, specificity 0,2,0 > `.ui-button` 0,1,0) so it wins
- * without changing the Button primitive. Keyboard focus rings are left to the
- * primitive's :focus-visible.
+ * <Button> primitive, so `.ui-button` chrome (raised bg, border, pill radius,
+ * bold) would land on them: shared-primitives.css imports last at equal
+ * specificity. Re-assert the flat rail row one level deeper (0,2,0) without
+ * changing the Button primitive. Focus rings stay the primitive's.
  */
 .sidebar__hardware .hardware-signal {
   min-width: 0;
-  padding: var(--space-2) 0;
+  min-height: 0;
+  padding: 8px 10px;
   background: transparent;
   border: 0;
-  border-radius: 0;
+  border-radius: 8px;
   box-shadow: none;
-  font-weight: var(--weight-medium);
+  font-weight: 400;
 }
 
 .sidebar__hardware .hardware-signal:hover:not(:disabled),
 .sidebar__hardware .hardware-signal:focus-visible {
-  color: var(--accent);
-  background: transparent;
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
   border-color: transparent;
 }
 
@@ -738,34 +577,51 @@ a.nav-item {
 
 .sidebar__hardware .hardware-alert {
   min-width: 0;
-  padding: var(--space-2);
-  color: var(--warning);
+  min-height: 0;
+  padding: 10px 12px;
+  color: var(--warning-text);
   background: var(--warning-soft);
   border: 1px solid var(--warning-border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: none;
-  font-weight: var(--weight-medium);
+  font-weight: 400;
 }
 
 .sidebar__hardware .hardware-alert:hover:not(:disabled),
 .sidebar__hardware .hardware-alert:focus-visible {
   background: var(--warning-soft);
-  border-color: var(--warning-border);
+  border-color: var(--warning-text);
 }
 
-.avatar,
-.operator-chip > span {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 auto;
-  color: var(--bg-canvas);
-  background: var(--accent);
-  border-radius: 50%;
-  font-family: var(--font-family-data);
-  font-size: var(--font-size-body-sm);
-  font-weight: 800;
+/* An old worker reading is grey and dashed, never a live warning (the States board). */
+.sidebar__hardware .hardware-alert--stale,
+.sidebar__hardware .hardware-alert--stale:hover,
+.sidebar__hardware .hardware-alert--stale:focus-visible {
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px dashed var(--text-unread);
+}
+
+/* A worker's software card is a link to that machine on Cluster. */
+.sidebar__hardware a.hardware-alert {
+  text-decoration: none;
+}
+
+.sidebar__hardware a.hardware-alert:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.sidebar__hardware .hardware-alert--danger {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+.sidebar__hardware .hardware-alert--danger:hover,
+.sidebar__hardware .hardware-alert--danger:focus-visible {
+  background: var(--danger-soft);
+  border-color: var(--danger-text);
 }
 
 .workspace {
@@ -775,17 +631,24 @@ a.nav-item {
   margin-left: var(--sidebar-width);
 }
 
+/* The top bar (the redesign board): the breadcrumb left, then the connection
+   pill, Search, who is signed in and Sign out. */
 .topbar {
   position: sticky;
   top: 0;
   z-index: 20;
   min-height: var(--topbar-height);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--space-5);
+  gap: 12px;
+  /* 14 px, not the board's 18: the bar is 64 px tall (--topbar-height), the
+     height every sticky offset and the Performance fold clause are measured
+     against. 72 px pushed the dashboard's first row past the fold. */
+  padding: 14px 32px;
   background: rgb(5 5 5 / 90%);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-hairline);
   backdrop-filter: blur(14px);
 }
 
@@ -796,26 +659,79 @@ a.nav-item {
 }
 
 .topbar__identity strong {
-  font-size: var(--font-size-body-sm);
+  font-size: var(--font-size-ui-xl);
+  font-weight: 500;
 }
 
-.topbar__actions,
-.operator-chip {
+.topbar__crumb {
+  min-width: 0;
   display: flex;
   align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+}
+
+.topbar__crumb strong,
+.topbar__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-xl);
+  font-weight: 500;
 }
 
 .topbar__actions {
-  gap: var(--space-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
   margin-left: auto;
 }
 
+/* Search, who is signed in and Sign out are the board's 36 px outline
+   pills on a desktop; a phone keeps the 44 px touch target. */
+.topbar .topbar__search {
+  min-height: 36px;
+  height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.topbar__search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar__search kbd {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* The connection sentence is a pill, and the word, the outline and the dot
+   are one value: all three come from the one `data-connection` state the
+   shell paints from (#52). Paused and unknown stay grey. */
 .connection-state {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
+  padding: 3px 9px;
   color: var(--text-secondary);
-  font-size: var(--font-size-body-sm);
+  border: 1px solid var(--border-row-active);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-xs);
+}
+
+.connection-state[data-connection="live"] {
+  color: var(--success-text);
+  border-color: var(--success-border);
+}
+
+.connection-state[data-connection="error"] {
+  color: var(--danger-text);
+  border-color: var(--danger-border);
 }
 
 /*
@@ -834,57 +750,26 @@ a.nav-item {
 
 .live-dot--live {
   background: var(--success);
-  box-shadow: 0 0 0 4px var(--success-soft);
-  animation: status-pulse 2.4s ease-out infinite;
+  box-shadow: 0 0 0 3px var(--success-halo);
 }
 
 /* Paused is a true, deliberate state - neutral, not a warning and not an
  * error. It is drawn still, because nothing is moving. */
 .live-dot--paused {
-  background: var(--text-muted);
-  box-shadow: 0 0 0 4px var(--bg-hover);
+  background: var(--dot-off);
+  box-shadow: none;
 }
 
-/* Never connected: hollow, because there is nothing to report yet. */
+/* Never connected: hollow and dashed, because there is nothing to report. */
 .live-dot--unknown {
   background: transparent;
-  border: 1px solid var(--border-strong);
+  border: 1.5px dashed var(--text-unread);
   box-shadow: none;
 }
 
 .live-dot--error {
   background: var(--danger);
-  box-shadow: 0 0 0 4px var(--danger-soft);
-}
-
-.topbar__divider {
-  width: 1px;
-  height: 24px;
-  background: var(--border-default);
-}
-
-.operator-chip {
-  gap: var(--space-2);
-}
-
-.operator-chip > span {
-  width: 32px;
-  height: 32px;
-}
-
-.operator-chip > div {
-  display: grid;
-  gap: 1px;
-}
-
-.operator-chip strong {
-  font-size: var(--font-size-body-sm);
-}
-
-.operator-chip small {
-  color: var(--text-muted);
-  font-size: var(--font-size-body-sm);
-  text-transform: capitalize;
+  box-shadow: 0 0 0 3px var(--danger-halo);
 }
 
 .workspace-error {
@@ -893,9 +778,10 @@ a.nav-item {
   max-width: 720px;
   margin: clamp(var(--space-8), 9vh, 112px) auto;
   padding: clamp(var(--space-5), 5vw, var(--space-8));
-  border: 1px solid var(--border-default);
-  border-left: 3px solid var(--warning);
-  background: var(--bg-surface-raised);
+  background: var(--surface-card);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge);
 }
 
 .workspace-error h1,
@@ -907,12 +793,6 @@ a.nav-item {
   max-width: 62ch;
   color: var(--text-secondary);
   line-height: 1.65;
-}
-
-.workspace-error__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
 }
 
 .workspace-error details {
@@ -935,24 +815,70 @@ a.nav-item {
   color: var(--text-secondary);
 }
 
+/* The rail's group eyebrows have no room in the 92 px tablet rail, where
+   each item already stacks its label under its icon. */
+@media (max-width: 1024px) {
+  .nav-group__label {
+    display: none;
+  }
+
+  .sidebar__nav--desktop {
+    gap: var(--space-1);
+  }
+}
+
 /*
- * Honour prefers-reduced-motion. The AmbientBackground layers and the topbar
- * live-dot otherwise animate infinitely with no way to stop them, which is
- * exactly the class of motion this media query exists to suppress. Each
- * animated layer is pinned to a static state (the same gate shared-primitives
- * and professional-polish already apply to their own motion).
+ * A window 760 px tall or less (a laptop screen, less its browser bars) has
+ * no room for the eyebrows: with them the rail ran 55 px past a 1280 x 720
+ * window and Machine health fell below the fold (review M1). The groups stay, spaced apart; only their
+ * names go.
  */
-@media (prefers-reduced-motion: reduce) {
-  .ambient-background__thermal--orange,
-  .ambient-background__thermal--green,
-  .ambient-background__grid,
-  .ambient-background__nodes,
-  .ambient-background__radar::before,
-  .ambient-background__scan-band,
-  .ambient-background__trace::before,
-  .ambient-background__trace--two::before,
-  .ambient-background__trace--three::before,
-  .live-dot--live {
-    animation: none;
+@media (max-height: 760px) {
+  .nav-group__label {
+    display: none;
+  }
+}
+
+/* The same short window: the rail's rows and spacing tighten so Machine
+   health stays on screen (review M1: zero overflow at 1280 x 720). */
+@media (max-height: 760px) and (min-width: 1025px) {
+  .sidebar {
+    gap: 10px;
+    padding-block: 10px;
+  }
+
+  .sidebar__nav--desktop {
+    gap: 10px;
+  }
+
+  .sidebar__nav--desktop .nav-item,
+  .sidebar__nav .nav-item:disabled {
+    min-height: 34px;
+    padding-block: 5px;
+  }
+
+  .sidebar__hardware {
+    padding-top: 8px;
+  }
+
+  .sidebar__hardware .hardware-signal {
+    padding-block: 4px;
+  }
+}
+
+/*
+ * The phone's top bar (the PhoneHome board): the mark, the page name and the
+ * connection pill. The rail group, Search and the signed-in chip have no room;
+ * the bottom bar and its More sheet are the phone's way around.
+ */
+@media (max-width: 720px) {
+  .workspace .topbar {
+    flex-wrap: nowrap;
+    padding: 14px 16px;
+  }
+
+  .topbar__identity strong,
+  .topbar .topbar__search {
+    display: none;
   }
 }

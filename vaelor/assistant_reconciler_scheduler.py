@@ -44,24 +44,58 @@ from .assistant_memory_reconciler import (
 DEFAULT_INTERVAL_SECONDS = 900.0
 
 
-def any_tier_loaded(inference_status: Any) -> bool:
-    """True when any inference engine is holding a model (the loaded-tier signal).
+#: The hosted provider. A connection to it holds no model on this machine, so it
+#: is the one configured engine that cannot compete with the sweep.
+_HOSTED_PROVIDER = "openai"
 
-    Reuses `inference_status`'s own per-engine truth rather than inventing a
-    second definition of "loaded" (LESSONS 6): an engine counts as loaded when
-    it reports a non-empty ``loaded_models`` list, or a known resident size.
-    ``loaded_models is None`` means "not checked", which is not "loaded".
+
+def _engine_may_hold_model(engine: Any) -> bool:
+    """Whether one ``inference.status`` engine entry could be holding a model."""
+    if not isinstance(engine, Mapping):
+        return True  # a shape we cannot read is not evidence of idle
+    loaded = engine.get("loaded_models")
+    if isinstance(loaded, list) and loaded:
+        return True
+    if engine.get("resident_known") is True:
+        return True
+    configured = engine.get("configured")
+    if configured is True:
+        # The tool reports what each engine is configured with, not whether
+        # the model is resident right now. A local engine may be holding it,
+        # so it counts; only the hosted provider is positively elsewhere.
+        return engine.get("provider_type") != _HOSTED_PROVIDER
+    if configured is False:
+        # `configured: False` with a reason is the tool's "status could not be
+        # read" entry, which is unknown, not idle.
+        return bool(engine.get("reason"))
+    return True
+
+
+def any_tier_loaded(inference_status: Any) -> bool:
+    """True unless the ``inference.status`` reading shows no local tier in use.
+
+    The sweep must never compete with a loaded tier (VD-052). This used to look
+    only for ``loaded_models`` / ``resident_known``, fields the ``inference.status``
+    read tool (``assistant_machine_tools.inference_status``) never carries, so
+    it answered "idle" every 15 minutes with models loaded (ACC-109). It now
+    reads what that tool does carry - each engine's ``configured`` and
+    ``provider_type``, and whether the model AI Chat is assigned to runs here
+    (``chat.assigned_local``) - and treats anything it cannot read as in use:
+    unknown is not idle (LESSONS 8).
     """
-    engines = inference_status.get("engines") if isinstance(inference_status, Mapping) else None
-    for engine in engines or []:
-        if not isinstance(engine, Mapping):
-            continue
-        loaded = engine.get("loaded_models")
-        if isinstance(loaded, list) and loaded:
-            return True
-        if engine.get("resident_known") is True:
-            return True
-    return False
+    if not isinstance(inference_status, Mapping):
+        return True
+    engines = inference_status.get("engines")
+    if not isinstance(engines, list):
+        return True
+    if any(_engine_may_hold_model(engine) for engine in engines):
+        return True
+    chat = inference_status.get("chat")
+    if not isinstance(chat, Mapping):
+        return True
+    # False only when the list was read and no locally served connection is
+    # assigned to AI Chat; None (unreadable) or True both defer.
+    return chat.get("assigned_local") is not False
 
 
 def _navigate(result: Any, selector: str) -> ProbeResult:

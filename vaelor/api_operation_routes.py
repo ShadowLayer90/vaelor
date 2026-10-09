@@ -28,7 +28,8 @@ def register_operation_routes(context: ApiContext) -> None:
 
     def projection() -> OperationProjection:
         return OperationProjection(
-            callbacks.get("job_store"), callbacks.get("agent_tasks")
+            callbacks.get("job_store"), callbacks.get("agent_tasks"),
+            automations=callbacks.get("automations"),
         )
 
     def actor_scope() -> str | None:
@@ -84,19 +85,30 @@ def register_operation_routes(context: ApiContext) -> None:
                 },
                 status=400,
             )
+        # ACC-125: `?bucket=` narrows the window to one Activity tile; absent
+        # or `all` means every operation. `summary` always partitions all of
+        # them, so the tiles never count only the window below them.
+        bucket = str(request.args.get("bucket", "")).strip() or None
+        if bucket == "all":
+            bucket = None
         try:
             limit = max(1, min(int(raw_limit), MAX_LIMIT))
-            operations = projection().list(actor_scope(), ledger=ledger, limit=limit)
+            page = projection().page(
+                actor_scope(), ledger=ledger, limit=limit, bucket=bucket)
         except (TypeError, ValueError) as error:
             return payload(
                 error={"code": "operation_query_invalid", "message": str(error)[:500]},
                 status=400,
             )
+        operations = page["operations"]
         return payload({
             "schema": OPERATION_SCHEMA,
             "operations": operations,
             "items": operations,
             "count": len(operations),
+            "summary": page["summary"],
+            "matched": page["matched"],
+            "bucket": page["bucket"] or "all",
         })
 
     @blueprint.get("/operations/<path:operation_id>")
@@ -118,10 +130,17 @@ def register_operation_routes(context: ApiContext) -> None:
         visible_targets = {
             operation["operation_id"], operation["operation_key"], operation["source_id"],
         }
+        # W5-D5: a route that queues a job audits the change under its own
+        # target and names the job in details.job_id; that id is this
+        # operation's source id. Matched by id, never by time window.
         events = [
             item for item in security.list_audit(200)
             if item.get("target") in visible_targets
             or item.get("details", {}).get("operation_id") == operation["operation_id"]
+            or (
+                operation.get("ledger") == "jobs"
+                and item.get("details", {}).get("job_id") == operation["source_id"]
+            )
         ]
         if g.auth_session.role != "administrator":
             events = [
@@ -148,6 +167,22 @@ def register_operation_routes(context: ApiContext) -> None:
             return operation_error(error, operation_id)
         audit("operation.cancel", "success", result["operation_id"], ledger=result["ledger"])
         return payload({"operation": result, "action": "cancel"})
+
+    @blueprint.post("/operations/<path:operation_id>/dismiss")
+    @require_auth("operator", csrf=True)
+    def operation_dismiss(operation_id: str):
+        """The owner's "I've dealt with this" for an attention item (VD-139)."""
+        try:
+            result = projection().dismiss(
+                operation_id,
+                g.auth_session.username,
+                allow_all=g.auth_session.role == "administrator",
+            )
+        except Exception as error:
+            audit("operation.dismiss", "failure", operation_id, error_code=type(error).__name__)
+            return operation_error(error, operation_id)
+        audit("operation.dismiss", "success", result["operation_id"], ledger=result["ledger"])
+        return payload({"operation": result, "action": "dismiss"})
 
     @blueprint.post("/operations/<path:operation_id>/retry")
     @require_auth("operator", csrf=True)

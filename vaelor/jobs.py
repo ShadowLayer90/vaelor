@@ -25,9 +25,16 @@ from .job_vocabulary import (
     ACTIVE_JOB_STATES,
     ALLOWED_JOB_TYPES,
     JOB_STATES,
+    interrupted_message,
+    retry_refusal,
     TERMINAL_JOB_STATES,
 )
-from .operation_projection import ACTIVE_OPERATION_STATES
+from .operation_projection import (
+    ACTIVE_OPERATION_STATES,
+    dismissal_in_force,
+    needs_attention,
+    retry_resolved_ids,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -98,6 +105,10 @@ class JobStore:
             "updated_at": row["updated_at"],
             "attempt": row["attempt"],
             "retry_of": row["retry_of"],
+            "dismissed_at": row["dismissed_at"],
+            "dismissed_by": row["dismissed_by"],
+            "dismissed_state": row["dismissed_state"],
+            "dismissed_updated_at": row["dismissed_updated_at"],
         }
         record.update(job_projection(record))
         return record
@@ -203,11 +214,40 @@ class JobStore:
             self._attach_revisions(connection, records)
         return records
 
+    def list_of_type(self, job_type: str, limit: int = 200) -> list[Dict[str, Any]]:
+        """The newest jobs of one type, newest first - not crowded out by other types."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM jobs WHERE type=? ORDER BY created_at DESC LIMIT ?",
+                (str(job_type), max(1, min(int(limit), 500))),
+            ).fetchall()
+            return [self._record(row) for row in rows]
+
+    def unfinished_of_type(self, job_type: str) -> list[Dict[str, Any]]:
+        """Every job of ``job_type`` not yet in a terminal state, however old.
+
+        Unlike :meth:`list`, not capped to the newest rows: a caller asking
+        "is one of these still pending" must see an old queued job too.
+        """
+        terminal = sorted(TERMINAL_JOB_STATES)
+        marks = ",".join("?" for _ in terminal)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM jobs WHERE type=? AND state NOT IN ({})".format(marks),
+                (str(job_type), *terminal),
+            ).fetchall()
+            return [self._record(row) for row in rows]
+
     @staticmethod
     def _retry_lineage(records: list[Dict[str, Any]]) -> set[str]:
-        """Attach complete retry ancestry and return uniquely resolved failures."""
+        """Attach complete retry ancestry and return uniquely resolved failures.
+
+        Resolution is `operation_projection.retry_resolved_ids`, and each
+        record's ``needs_attention`` is `operation_projection.needs_attention`
+        over it and the owner's dismissal - the one rule (VD-139).
+        """
         by_id = {record["id"]: record for record in records}
-        resolved_failures: set[str] = set()
+        resolved_failures = retry_resolved_ids(records, lambda item: item["operation_state"])
         for record in records:
             ancestry: list[str] = []
             ancestor = record.get("retry_of")
@@ -218,22 +258,26 @@ class JobStore:
                 if prior is None:
                     break
                 ancestry.append(prior["id"])
-                if (
-                    record["operation_state"] in {"completed", "healthy"}
-                    and prior["operation_state"] in {"failed", "cancelled"}
-                ):
-                    resolved_failures.add(prior["id"])
                 ancestor = prior.get("retry_of")
             record["retry_ancestry"] = ancestry
             record["retry_depth"] = len(ancestry)
             record["retry_root_id"] = ancestry[-1] if ancestry else record["id"]
         for record in records:
             record["resolved_by_retry"] = record["id"] in resolved_failures
+            record["needs_attention"] = needs_attention(
+                record["operation_state"],
+                resolved_by_retry=record["resolved_by_retry"],
+                dismissed=dismissal_in_force(record),
+            )
         return resolved_failures
 
-    def ledger(self, limit: int = 50, actor: Optional[str] = None) -> Dict[str, Any]:
-        """Read rows and counters from one consistent job-ledger snapshot."""
-        safe_limit = max(1, min(int(limit), 200))
+    def records(self, actor: Optional[str] = None) -> list[Dict[str, Any]]:
+        """Every job row visible to ``actor``, newest first, lineage attached.
+
+        ACC-125: the Activity summary partitions *every* operation rather than
+        a ``limit``-capped window, so it reads this; ``ledger`` below counts
+        from the same read, so the two can never see different rows.
+        """
         with closing(self._connect()) as connection:
             if actor is None:
                 rows = connection.execute(
@@ -246,7 +290,16 @@ class JobStore:
                 ).fetchall()
             records = [self._record(row) for row in rows]
             self._attach_revisions(connection, records)
-        resolved_failures = self._retry_lineage(records)
+        self._retry_lineage(records)
+        return records
+
+    def ledger(self, limit: int = 50, actor: Optional[str] = None) -> Dict[str, Any]:
+        """Read rows and counters from one consistent job-ledger snapshot."""
+        safe_limit = max(1, min(int(limit), 200))
+        records = self.records(actor)
+        resolved_failures = {
+            record["id"] for record in records if record["resolved_by_retry"]
+        }
         # #201. This used to be a hand-written five, against the console's six
         # in `frontend/src/lib/operationOwner.ts`. Both were right for the
         # ledger each reads - `ready` and `draft` are unreachable for a job row
@@ -259,10 +312,7 @@ class JobStore:
             record for record in records
             if record["operation_state"] in ACTIVE_OPERATION_STATES
         ]
-        attention = [
-            record for record in records
-            if record["attention"] and not record["resolved_by_retry"]
-        ]
+        attention = [record for record in records if record["needs_attention"]]
         retryable = [
             record for record in records
             if record["retryable"] and not record["resolved_by_retry"]
@@ -280,6 +330,25 @@ class JobStore:
             "attention_ids": [record["id"] for record in attention],
             "retryable_ids": [record["id"] for record in retryable],
         }
+
+    def dismiss(self, job_id: str, by: str, *, scope: Optional[str] = None) -> None:
+        """Record the owner's dismissal of an attention item (VD-139).
+
+        ``scope`` limits it to that actor's own jobs (None: any job). The row's
+        state, history and ``updated_at`` are left alone, so it keeps its place
+        in the ledger; only who dismissed it, when, and the episode it covers
+        (the state and ``updated_at`` it was dismissed in) are written.
+        """
+        with closing(self._connect()) as connection:
+            changed = connection.execute(
+                "UPDATE jobs SET dismissed_at=?, dismissed_by=?, dismissed_state=state, "
+                "dismissed_updated_at=updated_at "
+                "WHERE id=? AND (? IS NULL OR actor=?)",
+                (int(time.time()), str(by), job_id, scope, scope),
+            ).rowcount
+            connection.commit()
+        if not changed:
+            raise KeyError(job_id)
 
     def get(self, job_id: str, actor: Optional[str] = None) -> Optional[Dict[str, Any]]:
         with closing(self._connect()) as connection:
@@ -341,9 +410,11 @@ class JobStore:
                 research = row["type"] == "application.research"
                 cancelling = row["state"] == "cancelling"
                 state = "cancelled" if cancelling else "failed"
+                replan = interrupted_message(row["type"])
                 message = (
                     "Cancellation completed while the workload service restarted."
                     if cancelling else
+                    replan if replan else
                     "Interrupted when the workload service restarted. "
                     "Review current appliance state before retrying."
                 )
@@ -357,6 +428,7 @@ class JobStore:
                     "recovery": (
                         "No further work was started."
                         if cancelling else
+                        replan if replan else
                         "Inspect the workload or cluster state before starting a retry."
                     ),
                 }
@@ -715,6 +787,10 @@ class JobStore:
             if original["state"] not in {"failed", "cancelled"}:
                 connection.rollback()
                 raise ValueError("Only failed or cancelled jobs can be retried.")
+            refusal = retry_refusal(original["type"])
+            if refusal:
+                connection.rollback()
+                raise ValueError(refusal)
             active_retry = connection.execute(
                 """
                 SELECT * FROM jobs

@@ -1,9 +1,14 @@
-import { type FormEvent, type KeyboardEvent, useRef } from "react";
+import { type FormEvent, type KeyboardEvent, useId, useRef } from "react";
 import type { AiChatCollection } from "./aiChatTypes";
 import { DOCUMENT_ACCEPT } from "../lib/aiChatDocument";
 import { Icon } from "./Icon";
-import { Button, Textarea } from "./ui";
+import { Button } from "./ui";
 
+/**
+ * The message box under the transcript (the Chat boards): the question, then
+ * one row with Attach, Knowledge, what the answer will draw on, the keyboard
+ * hint and Send. A temporary chat draws the box with a dashed edge.
+ */
 export function AiChatComposer({
   value,
   busy,
@@ -13,7 +18,6 @@ export function AiChatComposer({
   selectedCollections,
   onChange,
   onSubmit,
-  onToggleCollection,
   onOpenDetails,
   onFile,
 }: {
@@ -25,23 +29,19 @@ export function AiChatComposer({
   selectedCollections: string[];
   onChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
-  onToggleCollection: (id: string) => void;
   onOpenDetails: () => void;
   onFile: (file: File) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const ids = useId().replaceAll(":", "");
   /*
-   * One box, one name, now shown as a visible label rather than carried only by
-   * the placeholder — the same visible-label treatment the Assistant composer
-   * uses, so the two boxes read consistently. "Vaelor AI" is what every answer
-   * in the transcript is signed with, so that is the name that stays; the
-   * placeholder is an example prompt, not a competing name for the field.
+   * One box, one name. "Vaelor AI" is what every answer in the transcript is
+   * signed with, so that is the name the field carries; the placeholder is an
+   * example prompt, not a competing name for the field.
    */
   const composerName = "Message Vaelor AI";
   // Per-screen limit: AI Chat accepts longer prompts (8,000) than the Assistant
-  // composer (4,000) because they post to different backends. The limit differs
-  // on purpose; the way it is presented — a maxLength plus a field-level alert —
-  // matches the Assistant composer.
+  // composer (4,000) because they post to different backends.
   const messageProblem = value.trim().length > 8000
     ? "Keep AI Chat messages to 8,000 characters or fewer."
     : "";
@@ -59,91 +59,80 @@ export function AiChatComposer({
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
   };
+  /*
+   * What the next answer will draw on, named. A selected collection narrows
+   * the answer to it, so the line says which; Details is where it is switched
+   * off (the Knowledge button opens it).
+   */
+  const chosen = collections.filter((item) => selectedCollections.includes(item.id));
+  const sources = temporary
+    ? "Temporary"
+    : selectedCollections.length
+      ? `${selectedCollections.length} source set`
+      : "Model knowledge only";
+  const hintId = `ai-chat-composer-hint-${ids}`;
   return (
-    <form className="ai-chat-composer" onSubmit={onSubmit}>
-      {selectedCollections.length > 0 && (
-        <div className="ai-chat-composer__sources">
-          {/*
-            * Attaching a collection narrows the answer to it, and nothing said
-            * so: the same model that wrote an essay with the chip off replied
-            * "I don't have any reliable information on that" with it on, and a
-            * chip that is selected by default made the assistant look broken
-            * rather than constrained. The sentence names the constraint and
-            * names the way out of it, beside the control that removes it.
-            */}
-          <small className="ai-chat-composer__sources-note">
-            Answers are grounded in these documents. Remove one to let Vaelor answer
-            from what it already knows as well.
-          </small>
-          {collections.filter((item) => selectedCollections.includes(item.id)).map((item) => (
+    <form className={temporary ? "ai-chat-composer is-temporary" : "ai-chat-composer"} onSubmit={onSubmit}>
+      <div className="ai-chat-composer__box">
+        <label className="sr-only" htmlFor={`ai-chat-message-${ids}`}>{composerName}</label>
+        <textarea
+          aria-describedby={[hintId, messageProblem ? "ai-chat-message-error" : ""].filter(Boolean).join(" ")}
+          aria-invalid={messageProblem ? true : undefined}
+          className="ai-chat-composer__input"
+          id={`ai-chat-message-${ids}`}
+          maxLength={8000}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={submitOnShortcut}
+          placeholder="Ask anything, or attach a document to ground the answer in it."
+          rows={2}
+          value={value}
+        />
+        {messageProblem && <p className="field-error" id="ai-chat-message-error" role="alert">{messageProblem}</p>}
+        <div className="ai-chat-composer__bar">
+          <div className="ai-chat-composer__tools">
+            <input
+              accept={DOCUMENT_ACCEPT}
+              className="ui-control ui-control--file-picker"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) onFile(file);
+                event.target.value = "";
+              }}
+              ref={fileRef}
+              type="file"
+            />
+            {/*
+              * Always opens the file picker. It used to divert to the knowledge
+              * panel whenever no collection existed yet - which is every new
+              * appliance - and that panel had no visible way to make one, so the
+              * button appeared to do nothing. A collection is created on demand
+              * when the first file lands.
+              */}
             <Button
-              aria-label={`Stop grounding answers in ${item.name}`}
-              key={item.id}
-              onClick={() => onToggleCollection(item.id)}
-              title={`Stop grounding answers in ${item.name}`}
+              aria-label="Attach a file for Vaelor to read"
+              className="ai-chat-composer__attach"
+              onClick={() => fileRef.current?.click()}
+              title="Attach a file for Vaelor to read"
               type="button"
-              variant="quiet"
             >
-              <Icon name="database" size={13} /> {item.name} <span aria-hidden="true">×</span>
+              <Icon name="add" size={16} />
             </Button>
-          ))}
+            <Button onClick={onOpenDetails} type="button">Knowledge</Button>
+            <small title={chosen.map((item) => item.name).join(", ") || undefined}>{sources}</small>
+          </div>
+          <div className="ai-chat-composer__send-row">
+            <small id={hintId}>Press Enter to send, Shift+Enter for a new line.</small>
+            <Button
+              className="ai-chat-composer__send"
+              disabled={!canSend}
+              type="submit"
+              variant="primary"
+            >
+              {busy ? "Thinking…" : "Send"}
+            </Button>
+          </div>
         </div>
-      )}
-      <Textarea
-        aria-describedby={messageProblem ? "ai-chat-message-error" : undefined}
-        hint="Press Enter to send, Shift+Enter for a new line."
-        label={composerName}
-        maxLength={8000}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={submitOnShortcut}
-        placeholder="Ask anything, or attach a document to ground the answer in it."
-        rows={3}
-        value={value}
-      />
-      {messageProblem && <p className="field-error" id="ai-chat-message-error" role="alert">{messageProblem}</p>}
-      <div className="ai-chat-composer__bar">
-        <div>
-          <input
-            accept={DOCUMENT_ACCEPT}
-            className="ui-control ui-control--file-picker"
-            hidden
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) onFile(file);
-              event.target.value = "";
-            }}
-            ref={fileRef}
-            type="file"
-          />
-          {/*
-            * Always opens the file picker. It used to divert to the knowledge
-            * panel whenever no collection existed yet - which is every new
-            * appliance - and that panel had no visible way to make one, so the
-            * button appeared to do nothing. A collection is created on demand
-            * when the first file lands.
-            */}
-          <Button
-            aria-label="Attach a file for Vaelor to read"
-            onClick={() => fileRef.current?.click()}
-            title="Attach a file for Vaelor to read"
-            type="button"
-            variant="quiet"
-          >
-            <span aria-hidden="true">+</span>
-          </Button>
-          <Button onClick={onOpenDetails} type="button" variant="quiet">
-            <Icon name="settings" size={15} /> Knowledge
-          </Button>
-        </div>
-        <small>{temporary ? "Temporary" : selectedCollections.length ? `${selectedCollections.length} source set` : "Model knowledge only"}</small>
-        <Button
-          className="ai-chat-composer__send"
-          disabled={busy || !value.trim() || Boolean(messageProblem) || !model}
-          type="submit"
-          variant="primary"
-        >
-          {busy ? "Thinking…" : "Send"}
-        </Button>
       </div>
     </form>
   );

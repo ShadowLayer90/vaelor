@@ -1,0 +1,444 @@
+/*
+ * The top bar's controls (VD-200, the board's top bar), after the shared
+ * button primitives so they win: the signed-in pill and its menu, and the
+ * phone's single row.
+ */
+
+/* Who is signed in: a 36 px outline pill (44 px on a phone or touch screen). */
+.topbar .operator-chip.ui-button {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 36px;
+  height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+/* A name too long for the bar ends in an ellipsis; the pill's title and its
+   accessible name keep it whole. */
+.operator-chip__name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu {
+  position: relative;
+}
+
+.user-menu__list {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: var(--layer-raised);
+  min-width: 220px;
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge), var(--shadow-modal);
+}
+
+.user-menu__who {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  border-bottom: 1px solid var(--border-row);
+}
+
+.user-menu__who strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.user-menu__item.ui-button {
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 10px;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 400;
+  border-color: transparent;
+  border-radius: var(--radius-md);
+}
+
+.user-menu__item.ui-button:hover:not(:disabled),
+.user-menu__item.ui-button:focus-visible {
+  background: var(--bg-row-active);
+  border-color: var(--border-row-active);
+}
+
+/*
+ * The open page's pill and its one or two actions (VD-200: every board draws
+ * them in the top bar, before the connection pill). The slot itself is
+ * `display: contents`, so they are items of the actions row; its buttons are
+ * the bar's 36 px outline pills, 44 px on a phone or touch screen.
+ */
+.topbar__page .ui-button {
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 14px;
+  /* An icon and its word (Settings' Reload) sit on one centre line with the
+     bar's usual spacing: `.ui-button` alone is not a flex box. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+/* The gap spaces an icon in the bar; an area's own icon margin (the
+   Assistant's `.ar-btn-icon`) would double it. */
+.topbar__page .ui-button > svg {
+  margin: 0;
+}
+
+.topbar__page .ui-button--primary {
+  font-weight: 600;
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .topbar__page .ui-button {
+    min-height: 44px;
+  }
+}
+
+/* The connection pill's sentence truncates rather than wrapping the bar. */
+.connection-state {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.connection-state__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.connection-state__short {
+  display: none;
+}
+
+.connection-state > [class*="live-dot"] {
+  flex: 0 0 auto;
+}
+
+/*
+ * The phone (the PhoneHome board): one row - the mark, the page name and the
+ * connection pill - and nothing wraps above the title. Who is signed in and
+ * Sign out move to the More sheet; Power stays on System as its icon, still
+ * named "Power" for a screen reader, at the 44 px touch target.
+ */
+@media (max-width: 720px) {
+  /* The page name keeps its word; the place after it (the boards at 390:
+     "Assistant / Ask about this machine") shortens with an ellipsis. */
+  .topbar__crumb {
+    flex: 1 1 0;
+    flex-wrap: nowrap;
+  }
+
+  .topbar__crumb strong,
+  .topbar__title {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .topbar__crumb > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Home's place is the page itself (the PhoneHome board draws "Home" alone). */
+  .topbar__crumb:has(.topbar__title) > span {
+    display: none;
+  }
+
+  .topbar__actions {
+    min-width: 0;
+    flex: 0 0 auto;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  /*
+   * A page with its own pill and actions (VD-200 S-H1): row one is the mark,
+   * the breadcrumb and the connection pill, as on Home; row two is the page's
+   * pill, its actions and Power. The actions box dissolves so its children can
+   * sit on either row, and an empty break item ends row one. Without this the
+   * pill wrapped onto a third row (390: 111 px; 320: 163 px).
+   */
+  .workspace .topbar:has(.topbar__page:not(:empty)) {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 4px 8px;
+  }
+
+  .topbar:has(.topbar__page:not(:empty)) .topbar__actions {
+    display: contents;
+  }
+
+  .topbar:has(.topbar__page:not(:empty)) .topbar__crumb {
+    order: 1;
+  }
+
+  .topbar:has(.topbar__page:not(:empty)) .connection-state {
+    order: 2;
+  }
+
+  .topbar:has(.topbar__page:not(:empty))::after {
+    order: 3;
+    flex: 0 0 100%;
+    height: 0;
+    content: "";
+  }
+
+  .topbar:has(.topbar__page:not(:empty)) .topbar__page > *,
+  .topbar:has(.topbar__page:not(:empty)) .connection-state__refresh,
+  .topbar:has(.topbar__page:not(:empty)) .power-menu {
+    order: 4;
+  }
+
+  /*
+   * The page's pill gives way before its actions do: it asks for no width of
+   * its own when row two is laid out, then grows back to its full words where
+   * there is room, and shortens behind an ellipsis where there is not. At 320
+   * a long pill ("3 physical fans detected", "Qwen3.5 4B · NPU") pushed Reload
+   * or Change intelligence onto a third row (Pi Cooling: 155 px). A screen
+   * reader still hears the whole pill.
+   */
+  .topbar:has(.topbar__page:not(:empty)) .topbar__page > .status-pill {
+    display: block;
+    flex: 1 1 0;
+    max-width: max-content;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .topbar:has(.topbar__page:not(:empty)) .topbar__page > .status-pill > .status-pill__dot {
+    margin-right: var(--space-2);
+    vertical-align: middle;
+  }
+
+  .topbar .user-menu {
+    display: none;
+  }
+
+  /* An older rule hid the pill on a phone; the board keeps it, as its one state word. */
+  .topbar .connection-state {
+    display: flex;
+    flex: 0 0 auto;
+  }
+
+  /* Out of sight, not out of the accessibility tree: the sentence carries the age. */
+  .topbar .connection-state__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .topbar .connection-state__short {
+    display: inline;
+  }
+
+  .topbar .power-menu__trigger.ui-button {
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
+  }
+
+  .power-menu__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+
+/* Sign out lives in the phone's More sheet, after the pages, drawn as one of
+   them: a nav item, not the bordered pill the Button primitive gives it
+   (polish follow-up). Its own row across the sheet keeps it apart from the
+   pages without a rule line. */
+.mobile-nav-more__menu .ui-button.mobile-nav-more__sign-out {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  justify-content: stretch;
+  justify-items: start;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: var(--control-height);
+  margin-top: var(--space-2);
+  padding: 9px var(--space-2);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font-weight: inherit;
+  text-align: left;
+}
+
+.mobile-nav-more__menu .ui-button.mobile-nav-more__sign-out:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-surface-raised);
+}
+
+@media (min-width: 721px) {
+  .mobile-nav-more__sign-out {
+    display: none;
+  }
+
+  /* The crumb keeps the page name whole; the place has no width of its own
+     and takes only what the actions leave, behind an ellipsis. This holds on
+     a desktop too: at 1280 Memory's place wrapped the bar to two rows. */
+  .topbar__crumb {
+    flex: 1 1 auto;
+    min-width: min-content;
+  }
+
+  .topbar__crumb strong {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .topbar__crumb > span:last-child {
+    flex: 1 1 auto;
+    width: 0;
+    /* A few letters and the ellipsis, never a bare "/". */
+    min-width: 4em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/*
+ * The place after the page name is one box, so it shortens behind one
+ * ellipsis however many parts it has. With each part its own flex item only
+ * the last gave way, and "Assistant / Ask about this machine / Skills" pushed
+ * the bar 61 px sideways at 768 (VD-200 assist verify S2).
+ */
+.topbar__place {
+  min-width: 0;
+}
+
+.topbar__sep {
+  margin-right: 10px;
+}
+
+.topbar__sep:not(:first-child) {
+  margin-left: 10px;
+}
+
+/*
+ * A tablet (721-1024 px, beside the narrow rail): Search and Power show their
+ * icons alone, still named for a screen reader, and the breadcrumb's place
+ * gives way with an ellipsis, so the bar stays one row (VD-200 S-H1: every
+ * slotted page wrapped to 98 px at 768, Hardware to 144 px).
+ */
+@media (min-width: 721px) and (max-width: 1024px) {
+  .workspace .topbar {
+    flex-wrap: nowrap;
+  }
+
+  /* The crumb and its place shorten as on a desktop (the rules above, from
+     721 px); then the connection sentence gives way (it ellipsises); nothing else wraps. */
+  .topbar__actions {
+    flex: 0 1 auto;
+    flex-wrap: nowrap;
+    min-width: 0;
+  }
+
+  .topbar__actions > *,
+  .topbar__page > * {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .topbar__actions > .connection-state {
+    flex: 0 1 auto;
+  }
+
+  /* Beside a page's own pill and actions the row's six items fit 721 px only
+     if something gives: the signed-in name does, behind an ellipsis, down to a
+     44 px pill, and the gaps are the 8 px step. The connection word does not
+     shrink - shrunk, its "Live" ran on under Power (polish review R9: the row
+     was 463 px in 435 at 721). */
+  .topbar:has(.topbar__page:not(:empty)) .topbar__actions {
+    gap: var(--space-2);
+  }
+
+  .topbar:has(.topbar__page:not(:empty)) .topbar__actions > .connection-state {
+    flex: 0 0 auto;
+  }
+
+  .topbar:has(.topbar__page:not(:empty)) .topbar__actions > .user-menu {
+    flex: 0 1 auto;
+    min-width: 44px;
+  }
+
+  /* Beside a page's own pill and actions the connection says its one word, as
+     on a phone; a screen reader still hears the sentence and its age. */
+  .topbar:has(.topbar__page:not(:empty)) .connection-state__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .topbar:has(.topbar__page:not(:empty)) .connection-state__short {
+    display: inline;
+  }
+
+  .topbar .power-menu__trigger.ui-button {
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .topbar .topbar__search.ui-button {
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .topbar .power-menu__label,
+  .topbar .topbar__search > span,
+  .topbar .topbar__search > kbd {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1024px) and (pointer: coarse) {
+  .topbar .power-menu__trigger.ui-button,
+  .topbar .topbar__search.ui-button {
+    width: 44px;
+    min-width: 44px;
+  }
+}

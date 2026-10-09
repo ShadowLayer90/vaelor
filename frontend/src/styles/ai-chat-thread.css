@@ -1,0 +1,451 @@
+/*
+ * AI Chat, continued from ai-chat.css: the transcript, the empty thread, the agent proposal and the composer.
+ * The same scope and pixel rules apply.
+ */
+
+/* ---- Transcript -------------------------------------------------------------- */
+
+.ai-chat-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ai-chat-column {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 28px 32px;
+}
+
+.ai-chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* A question sits on the right with its own controls beside it, so the
+   column keeps the boards' rhythm: question, then answer. */
+.ai-chat-turn--user {
+  flex-direction: row-reverse;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ai-chat-turn--user .ai-chat-turn__edit {
+  flex-basis: 100%;
+}
+
+.ai-chat-turn__byline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.ai-chat-turn__byline strong {
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+}
+
+.ai-chat-turn__byline > span:last-child {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.ai-chat-turn__mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--bg-canvas);
+  background: var(--accent);
+  border-radius: 6px;
+  font-size: var(--font-size-ui-xs);
+  font-weight: 700;
+}
+
+.ai-chat-turn__bubble {
+  box-sizing: border-box;
+  max-width: min(680px, 100%);
+  padding: 14px 16px;
+  border: 1px solid var(--border-kv);
+  border-radius: 12px;
+  font-size: var(--font-size-ui);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.ai-chat-turn--user .ai-chat-turn__bubble {
+  background: var(--bg-hover);
+  border-color: var(--border-row-active);
+}
+
+.ai-chat-turn.is-failed .ai-chat-turn__bubble {
+  color: var(--danger-text);
+  border-color: var(--danger-border);
+}
+
+.ai-chat-turn__bubble p {
+  white-space: pre-wrap;
+}
+
+/* VD-209: "Thought for N s" above an answer, collapsed; it opens to the
+   provider's thinking summary as plain, wrapped text in the muted voice, so
+   it never reads as part of the answer. */
+.ai-chat-thought {
+  max-width: min(680px, 100%);
+  min-width: 0;
+}
+
+.ai-chat-thought summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+  padding: 0 var(--space-2) 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+  cursor: pointer;
+}
+
+.ai-chat-thought summary:hover {
+  color: var(--text-secondary);
+}
+
+.ai-chat-thought summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.ai-chat-thought__text,
+.ai-chat-thought__note {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  border-left: 2px solid var(--border-icon);
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-chat-thought__note {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ai-chat-turn__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+/* A question's own controls appear while it is pointed at or focused, as the
+   boards draw a question with none; Retry answer always shows. */
+@media (hover: hover) {
+  .ai-chat-turn--user .ai-chat-turn__actions:not(.has-retry) {
+    opacity: 0;
+    transition: opacity var(--motion-fast) ease;
+  }
+
+  .ai-chat-turn--user:hover .ai-chat-turn__actions,
+  .ai-chat-turn--user:focus-within .ai-chat-turn__actions {
+    opacity: 1;
+  }
+}
+
+.ai-chat-turn__edit {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.ai-chat-turn__edit > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ai-chat-citations {
+  min-width: 0;
+}
+
+.ai-chat-citations summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-min);
+  padding: 3px 8px;
+  color: var(--text-secondary);
+  background: var(--bg-row-active);
+  border: 1px solid var(--border-icon);
+  border-radius: 6px;
+  font-size: var(--font-size-ui-xs);
+  list-style: none;
+  cursor: pointer;
+}
+
+.ai-chat-citations summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-chat-citations[open] {
+  flex-basis: 100%;
+}
+
+.ai-chat-citations blockquote {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent-deep);
+  font-size: var(--font-size-ui-sm);
+}
+
+.ai-chat-citations blockquote span,
+.ai-chat-citations blockquote p {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ai-chat-thinking {
+  color: var(--text-secondary);
+}
+
+.ai-chat-messages__resume {
+  padding-block: 8px;
+  pointer-events: none;
+}
+
+.ai-chat-messages__resume .ui-button {
+  pointer-events: auto;
+  background: var(--bg-button);
+}
+
+/* The empty thread (the ChatTemporary board). */
+.ai-chat-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-top: 20px;
+}
+
+.ai-chat-empty__intro {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.ai-chat-empty__glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-deep);
+  border-radius: 9px;
+}
+
+.ai-chat-empty__intro > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-chat-empty__intro h2 {
+  font-size: var(--font-size-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.ai-chat-empty__intro p:last-child {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+}
+
+.ai-chat-empty__starters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 14px;
+}
+
+.ai-chat-page .ui-button.ai-chat-starter {
+  justify-content: flex-start;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  color: inherit;
+  text-align: left;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card-edge);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ai-chat-page .ui-button.ai-chat-starter:hover {
+  border-color: var(--border-strong);
+}
+
+.ai-chat-page .ui-button.ai-chat-starter:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.ai-chat-page .ui-button.ai-chat-starter span {
+  color: var(--accent-text);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ai-chat-page .ui-button.ai-chat-starter strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.ai-chat-page .ui-button.ai-chat-starter small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* The agent proposal card (the ChatFocus board). */
+.ai-chat-proposal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  background: var(--surface-card);
+  border: 1px solid var(--accent-deep);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card-edge);
+}
+
+.ai-chat-proposal__text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: min(260px, 100%);
+}
+
+.ai-chat-proposal__text strong {
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.ai-chat-proposal__text p {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.ai-chat-proposal__text small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ai-chat-proposal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ---- Composer ------------------------------------------------------------------ */
+
+.ai-chat-composer {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px 32px 28px;
+}
+
+.ai-chat-composer__box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card-edge);
+}
+
+.ai-chat-composer.is-temporary .ai-chat-composer__box {
+  border-style: dashed;
+}
+
+.ai-chat-composer__box:focus-within {
+  border-color: var(--border-strong);
+}
+
+.ai-chat-composer__input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 52px;
+  max-height: 40dvh;
+  padding: 6px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: var(--font-size-ui);
+  line-height: 1.5;
+  resize: none;
+  field-sizing: content;
+}
+
+/* The ring is drawn on the composer's box, around the input and its tools,
+   so the bare textarea needs none of its own (WCAG 2.4.7; the box's border
+   change alone was too faint to see - polish follow-up). */
+.ai-chat-composer__input:focus-visible {
+  outline: none;
+}
+
+.ai-chat-composer__box:has(.ai-chat-composer__input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.ai-chat-composer__bar,
+.ai-chat-composer__tools,
+.ai-chat-composer__send-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.ai-chat-composer__bar {
+  justify-content: space-between;
+}
+
+.ai-chat-composer__tools small,
+.ai-chat-composer__send-row small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.ai-chat-page .ui-button.ai-chat-composer__attach {
+  width: 36px;
+  padding: 0;
+}

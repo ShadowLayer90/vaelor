@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -15,17 +16,20 @@ from pathlib import Path
 from collections.abc import Mapping
 from typing import Any, Callable
 
+from .app_port_claims import model_port_holders
 from .compose_policy import reject_secret_lines, reject_unsafe_keys, validate_normalized
 from .app_capability_registry import app_instance_id_for_workload
 from .app_catalog import APP_TEMPLATES, install_env_from_compose
 from .managed_app_capabilities import safe_published_ports, template_id_from_labels
 from .runtime_paths import data_path
 from .workload_broker import WorkloadBrokerClient
+#: The model listing (which files are downloaded, and which are serving) lives
+#: in `workload_models`, with the managed-credential id rule it reads.
+from .workload_models import INSPECT_BATCH, WorkloadModelsMixin
 
 
 APP_ID = re.compile(r"^[a-f0-9]{12,64}$")
 MANAGED_TEMPLATE_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
-MANAGED_MODEL_CREDENTIAL = re.compile(r"^cred_managed_local_[a-f0-9]{12,64}$")
 MODEL_HASH_CHUNK_BYTES = 4 * 1024 * 1024
 #: A configuration file the app-files editor will read or write must be text
 #: and this small; 256 KiB is generous for a YAML config and bounds both the
@@ -113,19 +117,69 @@ def model_file_summary(path: Path) -> dict[str, Any]:
     }
 
 
-class WorkloadInventory:
+NOT_MANAGED = "This is not a managed Vaelor application."
+NOT_FROM_CATALOG = (
+    "Vaelor manages this app, but it was not installed from the app catalog, so "
+    "its files cannot be browsed or edited here."
+)
+
+
+def catalog_template(app: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The catalog template a managed app was installed from, or None.
+
+    The one rule (W4d-D4) for whether the template-scoped tools - the file
+    manager, generated credentials, declared config files - can act on an app:
+    "managed" alone also covers Vaelor's own projects (the web-research search
+    app), which have no template and which the broker will not let them reach.
+    """
+    template_id = app.get("template_id")
+    if not app.get("managed") or not isinstance(template_id, str):
+        return None
+    return APP_TEMPLATES.get(template_id)
+
+
+def _host_port(entry: Mapping[str, Any]) -> int | None:
+    host = str(entry.get("host", ""))
+    return int(host) if host.isdigit() else None
+
+
+def _loopback(address: Any) -> bool:
+    try:
+        return ipaddress.ip_address(str(address).strip("[]")).is_loopback
+    except ValueError:
+        return False  # "" or a name: Docker publishes on every interface
+
+
+def local_only_ports(ports: list[dict[str, Any]]) -> list[int]:
+    """Host ports every binding of which is a loopback address (W4d-D5)."""
+    by_port: dict[int, list[bool]] = {}
+    for entry in ports:
+        host = _host_port(entry)
+        if host is not None:
+            by_port.setdefault(host, []).append(_loopback(entry.get("address", "")))
+    return sorted(port for port, flags in by_port.items() if all(flags))
+
+
+class WorkloadInventory(WorkloadModelsMixin):
     def __init__(
         self,
         workloads_root: str = data_path("workloads"),
         models_root: str = data_path("models"),
         runner: Callable[..., Any] = _default_run,
         credential_broker: Any | None = None,
+        npu_models_root: str | None = None,
+        npu_status: Callable[[], Any] | None = None,
     ):
         self.workloads_root = Path(workloads_root).resolve()
         self.models_root = Path(models_root).resolve()
         self.runner = runner
         self.broker = WorkloadBrokerClient() if runner is _default_run else None
         self.credential_broker = credential_broker
+        # The on-device (NPU) models and what the NPU is serving (ACC-106),
+        # read by `WorkloadModelsMixin`; ``npu_status`` is the hardware bridge's
+        # ``flm_status``, or ``None`` where no one can ask it.
+        self.npu_models_root = Path(npu_models_root) if npu_models_root else None
+        self.npu_status = npu_status
 
     @staticmethod
     def _redact(value: str) -> str:
@@ -155,19 +209,9 @@ class WorkloadInventory:
             return False
 
     def _docker_apps(self) -> list[dict[str, Any]]:
-        if shutil.which("docker") is None:
-            return []
-        listed = self._run(["docker", "ps", "-aq", "--no-trunc"])
-        ids = [item for item in listed.stdout.splitlines() if APP_ID.fullmatch(item)][:100]
-        if not ids:
-            return []
-        inspected = self._run(["docker", "inspect", *ids], timeout=12)
-        if inspected.returncode != 0:
-            return []
-        try:
-            records = json.loads(inspected.stdout)
-        except (TypeError, json.JSONDecodeError):
-            return []
+        # The one container read (`_container_records`): every id, in the
+        # batches the workload broker admits; unreadable lists no apps.
+        records = self._container_records() or []
         apps = []
         for record in records:
             labels = (record.get("Config") or {}).get("Labels") or {}
@@ -238,12 +282,25 @@ class WorkloadInventory:
                     "published_ports": published_ports,
                     "ports": ports,
                     "web_port": self._web_port(template_id, ports, published_ports),
+                    # W4d-D5: ports only this machine can reach. Not links.
+                    "local_only_ports": local_only_ports(ports),
+                    # W6 sweep: Docker lists no ports for a host-network
+                    # container (vaelor-llm-proxy serves 11434 that way).
+                    "host_network": str(
+                        (record.get("HostConfig") or {}).get("NetworkMode", "")
+                    ) == "host",
                     "managed": managed,
                     "capabilities": {
                         "logs": True,
                         "configuration": managed,
                         "console": bool(state.get("Running")),
                         "remote_desktop": bool(remote_port),
+                        # W4d-D4: the file manager, credentials and config
+                        # files need a catalog template; same rule as
+                        # `_managed_template`, which refuses the rest.
+                        "file_manager": catalog_template(
+                            {"managed": managed, "template_id": template_id}
+                        ) is not None,
                     },
                     "remote_desktop": (
                         {"kind": "vnc", "host_port": remote_port} if remote_port else None
@@ -268,6 +325,14 @@ class WorkloadInventory:
         the template is unknown, fall back to the current first-published-port
         behaviour rather than guess.
         """
+        # W4d-D5: a port bound only to loopback cannot be opened from the
+        # owner's browser, so it is never the link (searxng on 127.0.0.1:8888,
+        # Phoenix on 127.0.0.1:6006 were offered as LAN links and refused).
+        local = set(local_only_ports(ports))
+        ports = [entry for entry in ports if _host_port(entry) not in local]
+        published_ports = [
+            entry for entry in published_ports if entry.get("host_port") not in local
+        ]
         template = APP_TEMPLATES.get(template_id) if template_id else None
         if template is not None:
             want = template.get("container_port")
@@ -287,245 +352,6 @@ class WorkloadInventory:
                 return int(host)
         return None
 
-    def _managed_model_assignment(self) -> dict[str, Any]:
-        assignment: dict[str, Any] = {"active_for": []}
-        if self.credential_broker is None:
-            return assignment
-        for purpose in ("deployment-agent", "ai-chat"):
-            try:
-                lease = self.credential_broker.resolve_active(purpose)
-            except (OSError, RuntimeError, ValueError):
-                continue
-            credential_id = str((lease or {}).get("credential_id", ""))
-            if not MANAGED_MODEL_CREDENTIAL.fullmatch(credential_id):
-                continue
-            if assignment.get("credential_id") not in (None, credential_id):
-                continue
-            assignment["credential_id"] = credential_id
-            assignment["active_for"].append(purpose)
-            selected = str(
-                (lease or {}).get("model") or (lease or {}).get("selected_model") or ""
-            ).strip()
-            if selected:
-                assignment["model"] = selected
-            endpoint = str((lease or {}).get("base_url", "")).strip()
-            if endpoint:
-                assignment["endpoint"] = endpoint
-        return assignment
-
-    def _ai_chat_model_stem(self) -> str:
-        """The file stem of the model currently serving AI Chat, or ``""``.
-
-        Read from the DURABLE ai-chat credential lease the GPU deploy writes: its
-        label carries the served model's file stem
-        (``MANAGED_LOCAL_CREDENTIAL_LABEL`` = ``"Managed local model · <stem>"``).
-        This is the one signal that lets an OFF-catalog user ``.gguf`` deployed as
-        the GPU AI-Chat model be reported with ``surface`` ``"ai-chat"`` (see
-        :meth:`_models`), so re-activating it from the Manage panel routes it back
-        to the GPU chat tier rather than defaulting to the Assistant - the same
-        stem-in-the-label the boot reconcile resolves the model by, read here so
-        the inventory and the reconcile agree on which model IS chat.
-
-        ``""`` when there is no managed-local ai-chat lease at all (a hosted
-        provider, an NPU-only box, or no assignment), so a genuine Assistant model
-        is never relabelled off this path.
-        """
-        if self.credential_broker is None:
-            return ""
-        try:
-            lease = self.credential_broker.resolve_active("ai-chat")
-        except Exception:
-            # This enrichment fills a blank surface; it must never keep a listing
-            # (or the boot reconcile that drives it) from returning. Any broker
-            # failure - no lease (CredentialError), an unreachable socket, or a
-            # host with no AF_UNIX at all - degrades to "" (the pre-enrichment
-            # value), so the model is simply surfaced by the catalog alone.
-            return ""
-        credential_id = str((lease or {}).get("credential_id", ""))
-        if not MANAGED_MODEL_CREDENTIAL.fullmatch(credential_id):
-            return ""
-        from .executor_model_deploy import MANAGED_LOCAL_CREDENTIAL_LABEL
-
-        prefix = MANAGED_LOCAL_CREDENTIAL_LABEL.format("")
-        label = str((lease or {}).get("label") or "")
-        return label[len(prefix):] if label.startswith(prefix) else ""
-
-    def _managed_model_runtime(self) -> dict[str, Any] | None:
-        """Resolve one managed llama.cpp identity from Docker, not job history."""
-        if shutil.which("docker") is None:
-            return None
-        try:
-            listed = self._run([
-                "docker", "ps", "-aq", "--no-trunc",
-                "--filter", "label=com.docker.compose.project=model-assistant",
-            ])
-        except (OSError, RuntimeError, subprocess.SubprocessError):
-            return None
-        ids = [item for item in listed.stdout.splitlines() if APP_ID.fullmatch(item)][:4]
-        if listed.returncode or not ids:
-            return None
-        try:
-            inspected = self._run(["docker", "inspect", *ids], timeout=12)
-        except (OSError, RuntimeError, subprocess.SubprocessError):
-            return None
-        if inspected.returncode:
-            return None
-        try:
-            records = json.loads(inspected.stdout)
-        except (TypeError, json.JSONDecodeError):
-            return None
-        assignment = self._managed_model_assignment()
-        for record in records if isinstance(records, list) else []:
-            labels = (record.get("Config") or {}).get("Labels") or {}
-            state = record.get("State") or {}
-            if (
-                labels.get("com.docker.compose.project") != "model-assistant"
-                or labels.get("com.docker.compose.service") != "llama-server"
-            ):
-                continue
-            working = str(labels.get("com.docker.compose.project.working_dir", ""))
-            if not working or not self._inside(Path(working), self.workloads_root):
-                continue
-            environment = {}
-            for item in (record.get("Config") or {}).get("Env") or []:
-                key, separator, value = str(item).partition("=")
-                if separator:
-                    environment[key] = value
-            container_model = environment.get("LLAMA_ARG_MODEL", "")
-            if not container_model.startswith("/models/"):
-                continue
-            host_path = None
-            for mount in record.get("Mounts") or []:
-                if mount.get("Type") != "bind" or mount.get("Destination") != "/models":
-                    continue
-                candidate = Path(str(mount.get("Source", ""))) / Path(container_model).name
-                try:
-                    candidate.resolve().relative_to(Path(str(mount.get("Source", ""))).resolve())
-                except (OSError, ValueError):
-                    continue
-                host_path = candidate
-                break
-            name = Path(container_model).stem
-            selected = str(assignment.get("model", ""))
-            selected_name = Path(selected).stem if selected else ""
-            if selected_name and selected_name != name:
-                assignment["identity_warning"] = (
-                    "The active credential reports a different model from the managed runtime."
-                )
-            return {
-                "container_id": str(record.get("Id", "")),
-                "container_name": str(record.get("Name", "")).lstrip("/"),
-                "project": "model-assistant",
-                "service": "llama-server",
-                "running": bool(state.get("Running")),
-                "health": (state.get("Health") or {}).get("Status"),
-                "container_model": container_model,
-                "host_path": str(host_path) if host_path is not None else "",
-                "name": name,
-                **assignment,
-            }
-        return None
-
-    def _models(self) -> list[dict[str, Any]]:
-        runtime = self._managed_model_runtime()
-        # The file the durable ai-chat lease names, so an off-catalog GPU chat
-        # model is surfaced as ``ai-chat`` and re-activates onto the chat tier.
-        ai_chat_stem = self._ai_chat_model_stem()
-        try:
-            active_config = (
-                self.workloads_root / "model-assistant" / "compose.yaml"
-            ).read_text(encoding="utf-8")
-        except OSError:
-            active_config = ""
-        models = []
-        paths = list(self.models_root.rglob("*.gguf"))[:200] if self.models_root.exists() else []
-        runtime_path = Path(str((runtime or {}).get("host_path", "")))
-        if runtime_path.is_file() and all(
-            path.resolve() != runtime_path.resolve() for path in paths
-        ):
-            paths.append(runtime_path)
-        for path in paths:
-            path = path.resolve()
-            if not self._inside(path, self.models_root):
-                if not runtime or path.resolve() != runtime_path.resolve():
-                    continue
-            try:
-                # Stat, not SHA-256. See `model_file_summary`: hashing here
-                # cost 68 s of the 65-100 s this listing took on the appliance,
-                # for a digest no caller of this endpoint reads.
-                identity = model_file_summary(path)
-            except (OSError, ValueError):
-                continue
-            relative = (
-                str(path.relative_to(self.models_root))
-                if self._inside(path, self.models_root) else path.name
-            )
-            runtime_match = bool(
-                runtime and (
-                    path.resolve() == runtime_path.resolve()
-                    or path.name == Path(str(runtime.get("container_model", ""))).name
-                )
-            )
-            # #147: seven files on disk, three in the catalog, and every row
-            # offered "Use model". The extra four are evaluation candidates
-            # and the fine-tune — present because we put them there, not
-            # because an owner installed them. A file the catalog does not
-            # name has no verified identity and no measured footprint, so it
-            # is listed with why it is here, and is not offerable.
-            from .model_footprint import identify_by_file
-            from .model_catalog import catalog_surface_by_file
-
-            # Which tier "Use model" switches. The catalog names it for a stocked
-            # file; an OFF-catalog file resolves to "" there, so a user .gguf that
-            # was deployed as the GPU AI-Chat model would default back to the
-            # Assistant on re-activation. Fill that blank from the durable ai-chat
-            # lease: the file the lease names IS chat, so it is surfaced as such.
-            # Only the empty catalog surface is filled - a genuine Assistant/NPU
-            # model keeps the surface the catalog gives it.
-            surface = catalog_surface_by_file(path.name)
-            if not surface and ai_chat_stem and path.stem[:48] == ai_chat_stem:
-                surface = "ai-chat"
-
-            models.append(
-                {
-                    "id": hashlib.sha256(relative.encode()).hexdigest()[:16],
-                    "name": path.stem,
-                    "file": relative,
-                    **identity,
-                    "modified_at": int(identity["mtime_ns"] / 1_000_000),
-                    "status": "ready",
-                    "catalog": identify_by_file(path.name) is not None,
-                    # Which tier "Use model" switches - the GPU AI-Chat model or
-                    # the NPU Assistant's. "" when the catalog does not name the
-                    # file. The UI labels the switch by this and sends it back on
-                    # the deploy so a GPU chat model is never routed to the
-                    # Assistant surface by a resolution miss.
-                    "surface": surface,
-                    "in_use": bool(
-                        runtime_match and runtime.get("running")
-                    ) or (str(path.parent) in active_config and path.name in active_config),
-                    **({"runtime": runtime} if runtime_match else {}),
-                }
-            )
-        if runtime and not any(item.get("runtime") for item in models):
-            models.append({
-                "id": hashlib.sha256(
-                    ("runtime:" + str(runtime.get("container_model", ""))).encode()
-                ).hexdigest()[:16],
-                "name": runtime["name"],
-                "file": Path(str(runtime.get("container_model", ""))).name,
-                "path": str(runtime.get("host_path", "")),
-                "size_bytes": 0,
-                "modified_at": 0,
-                "sha256": "",
-                "mtime_ns": 0,
-                "status": "degraded",
-                "status_reason": "The running model file is not readable from managed storage.",
-                "in_use": bool(runtime.get("running")),
-                "runtime": runtime,
-            })
-        return sorted(models, key=lambda item: item["name"].lower())
-
     def list_all(self) -> dict[str, Any]:
         return {
             "apps": self._docker_apps(),
@@ -537,6 +363,50 @@ class WorkloadInventory:
                 "remote_desktop": "detected-vnc-only",
             },
         }
+
+    def stored_models(self) -> list[dict[str, Any]]:
+        """The ``models`` `list_all` lists, without its app read: one Docker read, not two."""
+        return self._models()
+
+    def app_names(self, app_ids: Any) -> dict[str, str] | None:
+        """``{container id: name}`` for the wanted ids, read lightly (W8-3).
+
+        The audit trail names an app row with one ``docker ps`` and one
+        ``docker inspect`` of only the ids it shows - never ``list_all``, which
+        inspects every container, reads every model file, asks the NPU bridge
+        and discovers the GPU just to name a few apps. Both reads are the ones
+        the workload broker already admits. An id Docker no longer lists is
+        absent from the answer (the app is gone); ``None`` means Docker could
+        not be read, which the caller says, never as gone (LESSONS 8).
+        """
+        wanted = sorted({str(item) for item in app_ids if APP_ID.fullmatch(str(item))})
+        if not wanted:
+            return {}
+        if shutil.which("docker") is None:
+            return None
+        try:
+            listed = self._run(["docker", "ps", "-aq", "--no-trunc"])
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            return None
+        if listed.returncode:
+            return None
+        present = listed.stdout.split()
+        # An audit row may carry a short id; Docker lists full ones.
+        full = {
+            item: next((each for each in present if each.startswith(item)), None)
+            for item in wanted
+        }
+        ids = sorted({value for value in full.values() if value})
+        found: dict[str, str] = {}
+        for start in range(0, len(ids), INSPECT_BATCH):
+            records = self._inspect(ids[start:start + INSPECT_BATCH])
+            if records is None:
+                return None
+            for record in records:
+                app_id = str(record.get("Id", ""))
+                # The same name the Manage list shows for this container.
+                found[app_id] = str(record.get("Name", "")).lstrip("/") or app_id[:12]
+        return {item: found[value] for item, value in full.items() if value in found}
 
     def _app(self, app_id: str) -> dict[str, Any]:
         if not APP_ID.fullmatch(app_id):
@@ -639,7 +509,12 @@ class WorkloadInventory:
                 raise ValueError(
                     "Docker returned an unreadable normalized configuration."
                 ) from error
-            validate_normalized(normalized, self.workloads_root)
+            # W7-2: an edit applies on the next Restart (W4d-D12), so a port a
+            # stored model comes back on is refused here too.
+            validate_normalized(
+                normalized, self.workloads_root,
+                model_ports=model_port_holders(self.credential_broker),
+            )
             history = path.parent / ".history"
             history.mkdir(mode=0o2770, exist_ok=True)
             try:
@@ -678,7 +553,17 @@ class WorkloadInventory:
             temporary_path.replace(path)
         finally:
             temporary_path.unlink(missing_ok=True)
-        return {"saved": True, "filename": path.name, "backup": backup.name}
+        # W4d-D12: the save writes the file only. The running containers keep
+        # their configuration until Vaelor recreates them (start, restart and
+        # update all run `docker compose up -d`); stop does not.
+        return {
+            "saved": True, "applied": False, "filename": path.name,
+            "backup": backup.name,
+            "applies_when": (
+                "The running app keeps its current configuration until you "
+                "restart, start or update it from Vaelor."
+            ),
+        }
 
     def _managed_template(self, app_id: str) -> tuple[dict[str, Any], str, dict[str, Any]]:
         """Resolve a managed app to its curated template, or refuse.
@@ -689,11 +574,10 @@ class WorkloadInventory:
         container has neither, so it is refused rather than guessed at.
         """
         app = self._app(app_id)
-        template_id = app.get("template_id")
-        template = APP_TEMPLATES.get(template_id) if isinstance(template_id, str) else None
-        if not app.get("managed") or template is None:
-            raise ValueError("This is not a managed Vaelor application.")
-        return app, template_id, template
+        template = catalog_template(app)
+        if template is None:
+            raise ValueError(NOT_FROM_CATALOG if app.get("managed") else NOT_MANAGED)
+        return app, app["template_id"], template
 
     def read_secrets(self, app_id: str) -> dict[str, str]:
         """Return the UN-redacted values of the template's ``secret_env`` keys.

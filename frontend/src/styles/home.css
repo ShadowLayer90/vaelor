@@ -1,0 +1,151 @@
+/*
+ * Home, laid out to the redesign's Main board (VD-200): one column with a 20 px
+ * rhythm - the greeting, four stat tiles, the serving and attention pair,
+ * Machines - and below them the sections Home already had. The panels
+ * themselves are the shared primitives (page-primitives.css).
+ */
+.home-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* The older sections bring their own top margins; the column's gap owns the
+   rhythm now. Doubled class: those margins are set later, in operations.css. */
+.home-page.home-page > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.home-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.home-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 14px;
+}
+
+.home-panel .ui-card__actions a:not(.ui-button) {
+  color: var(--accent-hover);
+}
+
+.home-panel .ui-card__actions a:not(.ui-button):hover {
+  color: var(--accent);
+}
+
+/* A row's name is the way to its page, without looking like a link. */
+.home-row-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.home-row-link:hover,
+.home-row-link:focus-visible {
+  text-decoration: underline;
+}
+
+/* A keyboard reader gets the shell's focus ring, not an underline alone. */
+.home-row-link:focus-visible,
+.home-panel .ui-card__actions a:not(.ui-button):focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.home-row-link:active {
+  color: var(--text-secondary);
+}
+
+/* A count in a card header, in the pill's shape with no state of its own. */
+.home-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-row-active);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-xs);
+}
+
+.home-machine-name {
+  font-weight: 500;
+}
+
+.home-panel .ui-meter {
+  min-width: 160px;
+}
+
+.home-panel__note {
+  margin: 0;
+  padding: 12px 18px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-hairline);
+  font-size: var(--font-size-ui-xs);
+}
+
+/*
+ * A phone (the PhoneHome board): the tiles are the reading alone, two by two,
+ * and rows lose their icon box. The trends, side notes and foot lines are on
+ * the desktop tiles and in Live telemetry below; the greeting and the two
+ * doors give way to the bottom bar.
+ */
+@media (max-width: 720px) {
+  .home-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .home-tiles .ui-stat-tile {
+    gap: 4px;
+    padding: 12px 14px;
+  }
+
+  .home-tiles .ui-stat-tile__value {
+    font-size: var(--font-size-stat-sm);
+  }
+
+  /* A long state ("Enabled, no API keys") goes under the row's text rather
+     than squeezing the name to one word a line. */
+  .home-panel .ui-row {
+    flex-wrap: wrap;
+  }
+
+  .home-panel .ui-row__text {
+    flex: 1 1 calc(18px * 10);
+  }
+
+  /* A 19 px line of text is too small a target for a thumb: the row's name
+     link covers its whole row (44 px or more), and a header link is padded to
+     the touch target. */
+  .home-panel .ui-row {
+    position: relative;
+  }
+
+  .home-row-link::after {
+    position: absolute;
+    inset: 0;
+    content: "";
+  }
+
+  .home-panel .ui-card__actions a:not(.ui-button) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .home-panel .ui-row__trailing {
+    margin-left: auto;
+  }
+
+  .home-tiles .ui-trend,
+  .home-tiles .ui-stat-tile__foot,
+  .home-tiles .ui-stat-tile__top > span + span,
+  .home-page > .ui-page-header,
+  .home-panel .ui-row__icon {
+    display: none;
+  }
+}

@@ -73,7 +73,7 @@ other's; a sha256 comparison cannot.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 #: Where the on-device NPU model is published: the GitHub release, the same
 #: source and split-part artifact ``deploy/fetch-npu-model.sh`` pulls (so the
@@ -84,7 +84,7 @@ from typing import Any, Dict, Optional, Tuple
 #: the installer honours, so overriding the tag moves both; ``VAELOR_NPU_RELEASE_SOURCE``
 #: overrides the whole URL (e.g. for an offline mirror or a test source).
 NPU_RELEASE_REPO = os.environ.get("VAELOR_REPO", "ShadowLayer90/vaelor")
-NPU_RELEASE_TAG = os.environ.get("VAELOR_RELEASE_TAG", "v1.0b2")
+NPU_RELEASE_TAG = os.environ.get("VAELOR_RELEASE_TAG", "v1.5")
 NPU_RELEASE_SOURCE = os.environ.get(
     "VAELOR_NPU_RELEASE_SOURCE",
     "https://api.github.com/repos/{}/releases/tags/{}".format(
@@ -319,6 +319,14 @@ RUNTIME_Z2_GPU_ROCMFP4: Dict[str, Any] = {
     "spec_type": "draft-mtp",
     "spec_draft_n_max": 4,
     "spec_draft_p_min": 0.0,
+    # Which serving image/interface this recipe needs, carried in the runtime so it
+    # threads through the bridge to `gpu_rocmfpx_service` (whose `_engine_container`
+    # keys the ROCmFPX FORK image + run_server.sh interface on it) without a new
+    # cross-boundary argument. It mirrors the FP4 catalog entry's `engine` field
+    # (same file, `qwen3-8-27b-rocmfp4-fast`): the device/`ctv turbo4`/`spec-*`
+    # flags above only load in that fork, so the runtime and the engine are one
+    # fact. Every other runtime omits it or sets `""`, taking the mainline image.
+    "engine": "rocmfpx",
 }
 
 
@@ -558,6 +566,34 @@ def catalog_surface(repo: str, file: str) -> str:
     return ""
 
 
+def deploy_surface(
+    requested: str,
+    catalog: str,
+    *,
+    names_file: bool,
+    npu_holds_assistant: Callable[[], bool],
+    refresh: bool = False,
+) -> str:
+    """The surface a ``model.deploy`` serves: the ONE rule (W5 D13, LESSONS 6).
+
+    Two mechanisms used to answer it and the catalog won silently: the console
+    asked for ``ai-chat`` and a catalog entry stocked for the Pi's Assistant
+    (``assistant``) overrode it, so on a Z2 the deploy took the NPU route and
+    re-served the Assistant's own FLM model instead of the GGUF it was given.
+    Now the request wins and the catalog fills only an absence. And a model
+    FILE cannot be the Assistant on a machine whose Assistant runs on its NPU
+    (VD-001: the NPU serves an FLM tag, never a GGUF), so there it is AI Chat's
+    - except the installer's refresh of the retired llama.cpp Assistant
+    compose, which is the VD-002 migration onto the NPU and keeps its route.
+    ``npu_holds_assistant`` is asked only when the answer could change the
+    surface, so a deploy the cluster refuses has read nothing off the machine.
+    """
+    surface = str(requested or "") or str(catalog or "") or "assistant"
+    if surface == "assistant" and names_file and not refresh and npu_holds_assistant():
+        return "ai-chat"
+    return surface
+
+
 def catalog_surface_by_file(file: str) -> str:
     """Serving surface for an artifact known only by filename, "" if unknown.
 
@@ -625,6 +661,27 @@ def catalog_release_for_tag(release_tag: str) -> Optional[Dict[str, Any]]:
                 "source_url": str(item.get("source_url") or ""),
                 "sha256": str(item.get("sha256") or ""),
             }
+    return None
+
+
+def pinned_release(source_url: Any, sha256: Any) -> Optional[Dict[str, Any]]:
+    """The shipped release whose source AND digest are exactly these, or ``None``.
+
+    The root hardware bridge's gate on ``flm_install_release``: the caller
+    names a release, and the bridge installs it only when that pair is one
+    this wheel's catalog pins - so a caller can ask for the shipped model and
+    nothing else, and the URL and digest the root side then uses are the
+    catalog's, not the request's. An entry with no digest pins nothing.
+    """
+    wanted_source = str(source_url or "")
+    wanted_digest = str(sha256 or "").strip().lower()
+    for item in NPU_RELEASE_MODELS:
+        digest = str(item.get("sha256") or "").strip().lower()
+        if (
+            is_release_model(item) and digest and digest == wanted_digest
+            and str(item.get("source_url") or "") == wanted_source
+        ):
+            return catalog_release_for_tag(str(item.get("release_tag")))
     return None
 
 

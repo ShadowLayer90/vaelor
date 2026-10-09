@@ -1,0 +1,311 @@
+/*
+ * System › Compute › Accelerators (VD-200, the SystemCompute board): a card
+ * per graphics or neural processor - its header and serving pill, four live
+ * readings, the GPU's shared memory, what runs on it, and its facts one
+ * click deeper.
+ */
+.accelerators {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.accelerators > h2 {
+  margin: 0;
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.accelerators > h2 > span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+.accelerators__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr));
+  gap: 14px;
+}
+
+.accelerators__absent {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.accel-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.accel-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.accel-card__titles {
+  flex: 1 1 calc(18px * 10);
+  min-width: 0;
+}
+
+.accel-card__titles h3 {
+  margin: 0;
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.accel-card__titles p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+/* The four readings: 1 px gaps drawn by the strip's own ground. */
+.accel-card__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border-list);
+  border-bottom: 1px solid var(--border-list);
+}
+
+.accel-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--bg-kv);
+}
+
+.accel-stat__label,
+.accel-stat > small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.accel-stat__value {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.accel-stat__value strong {
+  font-size: var(--font-size-stat-sm);
+  font-weight: 300;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.accel-stat__value span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* "Not read" in the value's place: grey, the reason printed under it. */
+.accel-stat .accel-stat__unread {
+  min-width: 0;
+  min-height: 0;
+  justify-content: flex-start;
+  padding: 0;
+  color: var(--text-unread);
+  background: none;
+  border: 0;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 400;
+}
+
+.accel-stat .accel-stat__unread:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.accel-stat__trend {
+  height: 18px;
+}
+
+.accel-card__memory {
+  display: grid;
+  gap: 8px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-list);
+}
+
+.accel-card__memory .ui-meter {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+}
+
+.accel-card__memory .ui-meter__label {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-top: 0;
+}
+
+.accel-card__memory .ui-meter__label strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.accel-card__memory .ui-meter__label span {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+}
+
+.accel-card__memory > small {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.accel-card__running {
+  padding: 6px 0;
+}
+
+.accel-card__running h4 {
+  margin: 0;
+  padding: 8px 18px 2px;
+  color: var(--text-faint-label);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.accel-card__model {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 10px 18px 12px;
+}
+
+.accel-card__model > div {
+  display: grid;
+  flex: 1 1 calc(18px * 10);
+  gap: 2px;
+  min-width: 0;
+}
+
+.accel-card__model strong {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.accel-card__model small,
+.accel-card__empty {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.accel-card__empty {
+  margin: 0;
+  padding: 10px 18px 12px;
+}
+
+/* The facts disclosure: a quiet full-width row at the foot of the card. */
+.accel-card__toggle-heading {
+  margin: auto 0 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.accel-card__toggle-heading > .ui-button-wrap {
+  display: block;
+  width: 100%;
+}
+
+.accel-card__toggle.ui-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 18px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.accel-card__toggle.ui-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-row-hover);
+  border: 0;
+}
+
+.accel-card__toggle.ui-button:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus);
+}
+
+.accel-card__toggle.ui-button:active:not(:disabled) {
+  background: var(--bg-row-active);
+  transform: none;
+}
+
+.accel-card__toggle svg {
+  flex: 0 0 auto;
+  color: var(--text-faint-label);
+  transition: transform var(--motion-fast) ease;
+}
+
+.accel-card__toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.accel-card__details {
+  display: grid;
+  gap: 14px;
+  padding: 0 18px 18px;
+}
+
+.accel-card__details[hidden] {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .accel-card__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .accel-card__head,
+  .accel-card__memory,
+  .accel-card__toggle.ui-button {
+    padding-inline: 16px;
+  }
+
+  .accel-card__details {
+    padding: 0 16px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accel-card__toggle svg {
+    transition: none;
+  }
+}
+
+/* An old sample (the States board's "old" reading): grey, and its trend dims. */
+.accel-stat--stale .accel-stat__value strong,
+.accel-card__memory--stale .ui-meter__label span {
+  color: var(--text-unread);
+}
+
+.accel-stat--stale .accel-stat__trend,
+.accel-card__memory--stale .ui-meter__track {
+  opacity: 0.45;
+}

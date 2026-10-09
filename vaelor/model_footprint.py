@@ -125,7 +125,7 @@ FOOTPRINTS: Dict[Tuple[str, str, int, int], Dict[str, Any]] = {
         cold_start_seconds=6.0,
         source=MEASURED_STEADY,
         provenance=(
-            "Pi 192.168.4.62, 2026-08-08. RSS sampled from /proc/<pid>/status "
+            "Pi 192.0.2.62, 2026-08-08. RSS sampled from /proc/<pid>/status "
             "at 0/20/40/60/80 prompts: 2387, 3111, 3157, 3157, 3157 MB. "
             "Anonymous memory 1329 -> 2099 MB; file-backed constant at 1058 MB."
         ),
@@ -145,7 +145,7 @@ FOOTPRINTS: Dict[Tuple[str, str, int, int], Dict[str, Any]] = {
         cold_start_seconds=37.0,
         source=MEASURED_STEADY,
         provenance=(
-            "Pi 192.168.4.62, 2026-08-08, limit 6656 MB. RSS at 0/20/40 "
+            "Pi 192.0.2.62, 2026-08-08, limit 6656 MB. RSS at 0/20/40 "
             "prompts: 5355, 5542, 5425 MB; anonymous 3541 -> 4228 -> 4228, "
             "plateaued. File-backed *fell* 1814 -> 1197 MB as the cgroup "
             "reclaimed page cache, so RSS overstates the hard requirement and "
@@ -182,7 +182,7 @@ FOOTPRINTS: Dict[Tuple[str, str, int, int], Dict[str, Any]] = {
         source=MEASURED_STEADY,
         basis=CGROUP_BASIS,
         provenance=(
-            "Pi 192.168.4.62, 2026-08-10, limit 5120 MB, engine "
+            "Pi 192.0.2.62, 2026-08-10, limit 5120 MB, engine "
             "llama.cpp build 10335 (74ce15741) at "
             "sha256:2a8440d3aa0be70bf1d1824d2721fc5001616d46be4348b1c1b38fa30af4fe1c, "
             "**--cache-ram 256**. 80 distinct prompts, 96 max_tokens, the "
@@ -216,7 +216,7 @@ FOOTPRINTS: Dict[Tuple[str, str, int, int], Dict[str, Any]] = {
         cold_start_seconds=45.0,
         source=MEASURED_STEADY,
         provenance=(
-            "Pi 192.168.4.62, 2026-08-08. Sized to its cap at startup rather "
+            "Pi 192.0.2.62, 2026-08-08. Sized to its cap at startup rather "
             "than warming into it: 5055 MB immediately, +11 MB over five "
             "prompts, cgroup memory.current 5106 MB against a 5120 MB limit. "
             "The steady-state figure is therefore close to the startup one "

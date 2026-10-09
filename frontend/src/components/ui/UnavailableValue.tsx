@@ -4,6 +4,11 @@ import { joinClassNames } from "./field";
 export type UnavailableValueProps = {
   label?: string;
   reason?: string;
+  /**
+   * The visible mark. `?` by default; the redesign's key/value grids print the
+   * boards' "Not read" in the value's place (VD-200).
+   */
+  mark?: string;
   className?: string;
 } & Omit<HTMLAttributes<HTMLSpanElement>, "aria-label" | "title" | "children">;
 
@@ -31,6 +36,7 @@ export type UnavailableValueProps = {
 export function UnavailableValue({
   label = "Unavailable",
   reason = "Not reported by this device",
+  mark = "?",
   className,
   ...props
 }: UnavailableValueProps) {
@@ -43,7 +49,7 @@ export function UnavailableValue({
       tabIndex={0}
       title={reason}
     >
-      ?
+      {mark}
     </span>
   );
 }

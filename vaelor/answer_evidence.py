@@ -23,11 +23,67 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 
+#: Every evidence ``source`` the appliance itself names - the one list of them
+#: (W6 retest, LESSONS 6). The console names each in
+#: ``frontend/src/lib/evidenceSourceLabels.ts`` and its coverage test reads this
+#: tuple from this file, so it stays a literal tuple of strings;
+#: ``tests/test_evidence_sources.py`` holds it to every module that writes
+#: evidence, in both directions. A source a model or a web page names is not
+#: here: the console shows it as recorded.
+EVIDENCE_SOURCES = (
+    "ai-chat.connections",
+    "apps.catalog",
+    "assistant.capability",
+    "assistant.fallback",
+    "assistant.machine-brief",
+    "assistant.machine-events",
+    "assistant.memory",
+    "assistant.policy",
+    "assistant.response-guard",
+    "assistant.scope",
+    "assistant.scope-guard",
+    "assistant.time-scope",
+    "cluster.digest",
+    "cluster.serving-mode",
+    "cooling.status",
+    "display.status",
+    "gpu.status",
+    "health.status",
+    "inference.status",
+    "jobs.recent",
+    "lighting.status",
+    "llm-server.status",
+    "logs.service",
+    "metrics.history",
+    "network.status",
+    "npu.status",
+    "recovery.checkpoints",
+    "services.status",
+    "storage.status",
+    "system.identity",
+    "system.telemetry",
+    "updates.status",
+    "workloads.capabilities",
+    "workloads.inventory",
+)
+
+#: Sources that are a fixed prefix and a name the owner chose after it: the
+#: custom agent a proposal would run, and the skill an answer used.
+EVIDENCE_SOURCE_FAMILIES = (
+    "custom-agent.",
+    "skill.",
+)
+
+
 #: Human names for the fields a fact object may carry, so a summary reads as
 #: prose rather than as key names. A field absent from this map is described by
 #: its own key, which is still true — it is only less pretty.
+_FAN_SPEED = "fan speed"
+#: The graphics engine's power reading: the evidence name here, and the
+#: Performance dashboard's panel title (`performance_dashboard_words`).
+GPU_POWER = "GPU power"
 FIELD_NAMES = {
-    "rpm": "fan speed",
+    "rpm": _FAN_SPEED,
     "mode": "fan mode",
     "current_state": "cooling state",
     "max_state": "maximum cooling state",
@@ -35,6 +91,13 @@ FIELD_NAMES = {
     "cpu_temperature": "CPU temperature",
     "cpu_percent": "CPU use",
     "memory_percent": "memory use",
+    # Review B9: the GPU and fan readings the store keeps, named for the
+    # trend answer and the evidence panel alike.
+    "gpu_temperature_c": "GPU temperature",
+    "gpu_busy_percent": "GPU use",
+    "gpu_power_watts": GPU_POWER,
+    "fan_rpm": _FAN_SPEED,
+    "pwm_fan_speed": "case fan speed",
     "enabled": "power state",
     "rotation": "rotation",
     "sleep_timeout": "sleep timeout",

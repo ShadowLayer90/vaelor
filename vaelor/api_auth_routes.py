@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 from flask import Response, g, request, send_file
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from .appliance_recovery import (
     CONFIRMATION as RESET_CONFIRMATION,
@@ -25,7 +26,88 @@ from .api_common import (
 )
 from .runtime_paths import env_value
 from .portable_state import MAX_ARCHIVE_BYTES, PortableStateError
-from .security import LastAdministratorError
+from .recovery_plan_release import release_failed_plan
+from .security import ROLE_LEVELS, LastAdministratorError
+
+#: R2-3: the largest body the unauthenticated sign-in routes read. A username
+#: and password are a few hundred bytes; the app has no global
+#: MAX_CONTENT_LENGTH (portable import and file uploads need more), so the
+#: two routes anyone can reach cap their own body before parsing it.
+AUTH_BODY_BYTES = 16 * 1024
+
+
+def _auth_body():
+    """The sign-in body as a dict, or ``None`` when it is over the cap."""
+    request.max_content_length = AUTH_BODY_BYTES
+    try:
+        return request.get_json(silent=True) or {}
+    except RequestEntityTooLarge:
+        return None
+
+
+def _too_large():
+    return _payload(
+        error={"code": "payload_too_large",
+               "message": "That sign-in request is too large."},
+        status=413,
+    )
+
+#: CR2: the token the Accounts confirmation dialog sends when an administrator
+#: changes their OWN role away from administrator, and the sentence the route
+#: answers without it. Owner-readable: it says what will happen, not a code.
+SELF_DEMOTION_CONFIRM = "leave-administrator"
+#: What both API-key routes (revoke, and removing a revoked record) answer for
+#: an id that names no key.
+API_TOKEN_NOT_FOUND = "API connection was not found."
+SELF_DEMOTION_MESSAGE = (
+    "This is your own account. Changing its access level takes away your "
+    "administrator access as soon as it is saved, so confirm the change first."
+)
+
+
+def _usage_view(entry):
+    """A per-key usage view for the token surface - counts only, never a secret.
+
+    No ``last_used_at`` here: when a key was last used is the token row's own
+    field, written each time the key is accepted. The meter's timestamp moved
+    only on a served request, so the row showed two different answers after a
+    failed one (ACC-098); one question, one owner.
+    """
+    return {
+        "request_count": int(entry.get("request_count") or 0),
+        "prompt_tokens": int(entry.get("prompt_tokens") or 0),
+        "completion_tokens": int(entry.get("completion_tokens") or 0),
+    }
+
+
+def tokens_with_usage(rows, meter):
+    """The API-token rows with each one's cumulative gateway usage attached.
+
+    Path-A /inference/v1 usage is metered against the token id, so the meter's
+    per-key totals join straight onto AgentApiTokenStore.list() by id. A
+    revoked token keeps its row (revoke only disables it), so its history stays
+    joined and the surface still labels it. A token with no metered request yet
+    gets a zeroed usage view - the meter was read and holds nothing for it. An
+    absent or unreadable meter yields ``usage: None``, never an error and never
+    a zero: "no requests yet" must not be what a failed read looks like
+    (LESSONS pattern 8).
+    """
+    totals = None
+    if meter is not None:
+        try:
+            totals = {
+                str(entry.get("key_id")): entry for entry in meter.per_key_totals()
+            }
+        except Exception:  # noqa: BLE001 - usage accounting is best-effort
+            totals = None
+    return [
+        {
+            **row,
+            "usage": None if totals is None
+            else _usage_view(totals.get(str(row.get("id"))) or {}),
+        }
+        for row in rows
+    ]
 
 
 def register_auth_routes(context: ApiContext) -> None:
@@ -91,7 +173,9 @@ def register_auth_routes(context: ApiContext) -> None:
 
     @blueprint.post("/auth/bootstrap")
     def bootstrap():
-        body = request.get_json(silent=True) or {}
+        body = _auth_body()
+        if body is None:
+            return _too_large()
         username = str(body.get("username", "")).strip().lower()
         password = str(body.get("password", ""))
         if not username or len(username) > 64:
@@ -126,21 +210,20 @@ def register_auth_routes(context: ApiContext) -> None:
 
     @blueprint.post("/auth/login")
     def login():
-        body = request.get_json(silent=True) or {}
+        body = _auth_body()
+        if body is None:
+            return _too_large()
         username = str(body.get("username", "")).strip().lower()
         password = str(body.get("password", ""))
-        limiter_key = "{}:{}".format(request.remote_addr or "unknown", username)
-        if not limiter.allowed(limiter_key):
-            return _payload(
-                error={
-                    "code": "login_rate_limited",
-                    "message": "Too many attempts. Try again in a few minutes.",
-                },
-                status=429,
-            )
+        # F11: both limits - this address on this account, and this account
+        # from every address (security.LoginLimiter states the numbers).
+        address = request.remote_addr or "unknown"
+        refused = limiter.refusal(address, username)
+        if refused is not None:
+            return _payload(error={"code": refused[0], "message": refused[1]}, status=429)
         user = security.authenticate(username, password)
         if user is None:
-            limiter.failed(limiter_key)
+            limiter.failed(address, username)
             security.audit(
                 username or "unknown",
                 "auth.login",
@@ -157,7 +240,7 @@ def register_auth_routes(context: ApiContext) -> None:
         if user.get("mfa_enabled") and not security.verify_totp(
             username, str(body.get("totp_code", ""))
         ):
-            limiter.failed(limiter_key)
+            limiter.failed(address, username)
             security.audit(
                 username, "auth.mfa", "failure",
                 remote_addr=request.remote_addr or "",
@@ -169,7 +252,7 @@ def register_auth_routes(context: ApiContext) -> None:
                 },
                 status=401,
             )
-        limiter.succeeded(limiter_key)
+        limiter.succeeded(address, username)
         created = security.create_session(
             user["username"],
             request.remote_addr or "",
@@ -318,6 +401,9 @@ def register_auth_routes(context: ApiContext) -> None:
             return _payload(error={"code": "invalid_user", "message": "Account access must be enabled or disabled."}, status=400)
         if password is not None and not 12 <= len(str(password)) <= 256:
             return _payload(error={"code": "weak_password", "message": "Use a passphrase with 12-256 characters."}, status=400)
+        role = str(role).strip().lower() if role is not None else None
+        if role is not None and role not in ROLE_LEVELS:
+            return _payload(error={"code": "invalid_user", "message": "Choose viewer, operator, or administrator access."}, status=400)
         users = {item["username"]: item for item in security.list_users()}
         existing = users.get(username)
         if existing is None:
@@ -329,10 +415,21 @@ def register_auth_routes(context: ApiContext) -> None:
             return _payload(error={"code": "last_administrator", "message": "Keep at least one enabled administrator account."}, status=409)
         if username == g.auth_session.username and enabled is False:
             return _payload(error={"code": "current_account", "message": "You cannot disable the account you are using."}, status=409)
+        # CR2: the Accounts role menu PATCHed on change, so one slip of the
+        # select on your own row took your administrator access away. Changing
+        # your own role off administrator now needs the explicit token the
+        # console's confirmation dialog sends; the last-admin rule above stands.
+        if (
+            username == g.auth_session.username
+            and existing["role"] == "administrator"
+            and role not in (None, "administrator")
+            and body.get("confirm") != SELF_DEMOTION_CONFIRM
+        ):
+            return _payload(error={"code": "confirm_self_demotion", "message": SELF_DEMOTION_MESSAGE}, status=409)
         try:
             user = security.update_user(
                 username,
-                role=str(role).lower() if role is not None else None,
+                role=role,
                 enabled=enabled,
                 password=str(password) if password is not None else None,
             )
@@ -466,6 +563,7 @@ def register_auth_routes(context: ApiContext) -> None:
                 },
                 status=400,
             )
+        release_failed_plan(plans, jobs, "appliance.factory-reset")
         handoff = plans.stage(g.auth_session.username)["plan"]
         job = jobs.create(
             "appliance.factory-reset",
@@ -547,6 +645,7 @@ def register_auth_routes(context: ApiContext) -> None:
             "confirmation": status["confirmation"],
             "removes": status["removes"],
             "retains": status["retains"],
+            "scope_summary": status["scope_summary"],
             "last_result": status["last_result"],
         })
 
@@ -573,6 +672,7 @@ def register_auth_routes(context: ApiContext) -> None:
                 },
                 status=400,
             )
+        release_failed_plan(plans, jobs, "appliance.remove-vaelor")
         handoff = plans.stage(g.auth_session.username)["plan"]
         job = jobs.create(
             "appliance.remove-vaelor",
@@ -643,6 +743,7 @@ def register_auth_routes(context: ApiContext) -> None:
                 },
                 status=503,
             )
+        release_failed_plan(plans, callbacks.get("job_store"), "appliance.portable-import", unapprove=True)
         return _payload(plans.status())
 
     @blueprint.post("/admin/portable-state/export")
@@ -776,6 +877,7 @@ def register_auth_routes(context: ApiContext) -> None:
         plans = callbacks.get("portable_import_plans")
         jobs = callbacks.get("job_store")
         body = request.get_json(silent=True) or {}
+        release_failed_plan(plans, jobs, "appliance.portable-import", unapprove=True)
         status = plans.status() if plans is not None else {"plan": None}
         confirmation = str(body.get("confirmation", ""))
         if confirmation != IMPORT_CONFIRMATION:
@@ -828,7 +930,7 @@ def register_auth_routes(context: ApiContext) -> None:
         tokens = callbacks.get("agent_api_tokens")
         if tokens is None:
             return _payload(error={"code": "agent_api_unavailable", "message": "Assistant API access is unavailable."}, status=503)
-        return _payload(tokens.list())
+        return _payload(tokens_with_usage(tokens.list(), callbacks.get("usage_meter")))
 
     @blueprint.get("/admin/inference-gateway")
     @require_auth("administrator")
@@ -863,6 +965,20 @@ def register_auth_routes(context: ApiContext) -> None:
         try:
             revoked = tokens.revoke(token_id)
         except (AttributeError, KeyError):
-            return _payload(error={"code": "agent_api_token_not_found", "message": "API connection was not found."}, status=404)
+            return _payload(error={"code": "agent_api_token_not_found", "message": API_TOKEN_NOT_FOUND}, status=404)
         security.audit(g.auth_session.username, "admin.agent_api_token.revoke", "success", target=token_id, remote_addr=request.remote_addr or "")
         return _payload(revoked)
+
+    @blueprint.delete("/admin/agent-api-tokens/<token_id>/record")
+    @require_auth("administrator", csrf=True)
+    def admin_agent_api_token_delete(token_id):
+        """ACC-115: clear a revoked key's row; the audit log keeps its history."""
+        tokens = callbacks.get("agent_api_tokens")
+        try:
+            deleted = tokens.delete(token_id)
+        except (AttributeError, KeyError):
+            return _payload(error={"code": "agent_api_token_not_found", "message": API_TOKEN_NOT_FOUND}, status=404)
+        except ValueError as error:
+            return _payload(error={"code": "agent_api_token_active", "message": str(error)}, status=409)
+        security.audit(g.auth_session.username, "admin.agent_api_token.delete", "success", target=token_id, remote_addr=request.remote_addr or "")
+        return _payload(deleted)

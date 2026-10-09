@@ -40,14 +40,21 @@ from .assistant_answer_topics import asks_about
 from .assistant_answer_presentation import (
     asks_about_cpu_count, asks_about_identity, asks_about_os_version,
 )
+from .assistant_console_places import ACTIVITY, DETECTED_HARDWARE_SCREEN, HOME, INSTALL_PLACE, SETTINGS
 from .assistant_intents import named_subjects
 from .assistant_vocabulary import TOOL_PHRASES
 from .telemetry_trend import claimed_by_a_reading
 from .telemetry_trend import evidence as trend_evidence
 from .telemetry_trend import (
-    nothing_to_compare, off_subject, readings_named, span, trend_lines,
+    nothing_to_compare, off_subject, readings_named, trend_lines,
 )
-from .telemetry_store import MAX_HISTORY_WINDOW_SECONDS
+from .assistant_machine_history import (
+    AVERAGED_BUCKETS, HISTORY_SOURCE, history_scope, asks_what_happened, events_sentence, gaps, history_for_question, machine_events,
+    peak_line, reads_a_recent_window, windowed_evidence,
+)
+from .assistant_time_windows import asks_about_a_named_past, asks_for_peak
+from .cluster_placement import CONTROLLER_PLACEMENT_ID
+from .telemetry_trend import wanted
 
 #: Markers that a question is about a *past* moment rather than now.
 #:
@@ -205,7 +212,7 @@ def _hardware_lines(message: str, brief_text: str) -> Tuple[List[str], bool]:
             unread += 1
             lines.append(
                 "I could not read whether this machine has {}. Hardware on "
-                "the Home screen lists what was detected.".format(clause.noun)
+                "the {} screen lists what was detected.".format(clause.noun, HOME)
             )
     return lines, unread == 0
 
@@ -255,7 +262,10 @@ def _retained_samples(facts: Dict[str, Any]) -> Dict[str, Any]:
 #: Phrases that name *when*, not *what*. Subtracted before anything below asks
 #: what a sentence is about, because ``ago``, ``yesterday``, ``trend`` and the
 #: rest select `metrics.history` and name no subject at all.
-_WHEN_PHRASES = frozenset(TOOL_PHRASES["metrics.history"])
+_WHEN_PHRASES = frozenset(TOOL_PHRASES["metrics.history"]) | frozenset(
+    # VD-205 item 3: "the worker", "the cluster" say *whose* rows, not what
+    # reading - a machine is not a subject the store fails to carry.
+    TOOL_PHRASES["cluster.digest"])
 
 #: A subordinate clause and everything in it, up to the next comma or the end
 #: of the sentence.
@@ -351,8 +361,8 @@ def _readings_asked_about(message: str) -> Tuple[Tuple[str, ...], bool]:
 #: `tests/test_duplicate_literals` counts.
 _LOOK_ELSEWHERE = (
     "Anything I report is the current moment. If you were asking about a "
-    "reading, Home shows the live values; if you were asking what happened, "
-    "Activity keeps the record of jobs and changes."
+    "reading, " + HOME + " shows the live values; if you were asking what "
+    "happened, " + ACTIVITY + " keeps the record of jobs and changes."
 )
 
 
@@ -403,7 +413,7 @@ def scoped_answer(
     # or a control plane without the callback) it falls back to that count read.
     history_range = appliance.get("telemetry_history_range")
     return (
-        past_time_answer(message, facts, history_range)
+        past_time_answer(message, facts, history_range, appliance)
         or identity_answer(message, facts, brief_text)
         or host_fact_answer(message, facts, brief_text)
         or operational_claim_answer(message)
@@ -448,7 +458,7 @@ def operational_claim_answer(message: str) -> Optional[Dict[str, Any]]:
             "I cannot validate a Compose configuration from here - that needs a "
             "validation run I do not perform in this chat, so I will not tell "
             "you it is valid or invalid, or that its services are running. On "
-            "Workloads > Install, Import a Docker stack runs the guarded checks "
+            + INSTALL_PLACE + ", Import a Docker stack runs the guarded checks "
             "- image architecture, ports, storage, memory, and health - before "
             "anything is approved."
         ),
@@ -459,7 +469,7 @@ def operational_claim_answer(message: str) -> Optional[Dict[str, Any]]:
                        "claimed here.",
         }],
         "suggested_actions": [
-            "Open Workloads > Install and use Import a Docker stack to validate "
+            "Open " + INSTALL_PLACE + " and use Import a Docker stack to validate "
             "a Compose workload before approval.",
         ],
         "proposed_job": None,
@@ -520,8 +530,8 @@ def host_fact_answer(
         else:
             answered = False
             lines.append(
-                "I could not read this machine's CPU core count. The Home "
-                "screen lists the detected processor."
+                "I could not read this machine's CPU core count. {} lists the "
+                "detected processor.".format(DETECTED_HARDWARE_SCREEN)
             )
     if os_asked:
         found = _OPERATING_SYSTEM_LINE.search(text)
@@ -539,8 +549,8 @@ def host_fact_answer(
         else:
             answered = False
             lines.append(
-                "I could not read this appliance's operating system. The Home "
-                "screen shows what was detected."
+                "I could not read this appliance's operating system. {} shows "
+                "what was detected.".format(DETECTED_HARDWARE_SCREEN)
             )
     return _scoped(lines, evidence, answered=answered)
 
@@ -591,9 +601,10 @@ _BARE_WINDOWS = (
     (re.compile(r"\bfew minutes\b|\bcouple of minutes\b"), "15m"),
     (re.compile(r"\bfew hours\b|\bcouple of hours\b"), "6h"),
     (re.compile(r"\bfew days\b|\bcouple of days\b"), "3d"),
-    (re.compile(r"\byesterday\b|\blast night\b|\bovernight\b"), "48h"),
-    (re.compile(r"\btoday\b|\btonight\b|\bthis (?:morning|afternoon|evening)\b"),
-     "24h"),
+    # "yesterday", "last night", "overnight", "today", "tonight" and the day
+    # parts are not here: `assistant_time_windows.named_window` resolves each
+    # to local start and end times (review S1). A rolling 48 or 24 hours read
+    # under those names was the defect.
 )
 
 
@@ -638,117 +649,9 @@ def window_for_question(message: str) -> Optional[str]:
     return "{}{}".format(amount, unit)
 
 
-def _windowed_history(
-    message: str, history_range: Any
-) -> Optional[Dict[str, Any]]:
-    """The retained trend over the window this question names, or ``None``.
-
-    Reuses the a68 query path in full: :func:`assistant_machine_tools.metrics_history`
-    with a ``window`` argument runs :func:`_metrics_trend`, which downsamples the
-    span to at most 168 buckets and carries the store's own honest-failure
-    sentences (off, unreadable, or readable-but-empty). Nothing here re-reads the
-    store or re-parses a duration; this only chooses the window and hands it to
-    that one path.
-
-    ``None`` when the question names no window, or when this control plane wired
-    in no time-ranged callback - in both cases the caller falls back to the
-    count-based samples already gathered, which is the pre-a68 behaviour.
-    """
-    if history_range is None:
-        return None
-    window = window_for_question(message)
-    if window is None:
-        return None
-    from .assistant_machine_tools import metrics_history
-
-    return metrics_history(
-        {"telemetry_history_range": history_range}, {"window": window}
-    )
-
-
-def _reads_a_recent_window(
-    history: Dict[str, Any], samples: List[Any], held: bool
-) -> bool:
-    """Whether this read is a recent slice of a larger store (VD-097 / #224).
-
-    The closing span sentence must not call a partial read "everything this
-    appliance has retained" when older rows exist, nor claim more is retained
-    when the read already holds all there is. Two read shapes reach here and the
-    signal differs:
-
-    * **count-based** (`metrics_history` without a window) returns ``requested``,
-      and getting a full page - ``len(samples) >= requested`` - means older rows
-      were left behind.
-    * **windowed** (`_metrics_trend`) returns ``window_seconds`` and no
-      ``requested``. Older rows exist beyond the window only when the window is
-      shorter than the store's retention *and* the buckets actually reach back
-      to the window's **far edge**. The threshold is near-full for a reason a
-      half-window one got wrong: a store aged 0.7 of the asked window covers 70%
-      of it and has nothing older, yet `>= 0.5 * window` called it a slice of a
-      larger store and told the owner "more is retained" - false on a fresh
-      reboot. Buckets are capped at 168, so a genuinely full window measures
-      ≈ window minus one bucket (~0.6% short); ``0.9`` clears that and still
-      rejects the aged-0.7 store, which measures well under it. A store younger
-      than the window measures far below ``0.9`` and is correctly not told more
-      exists.
-    """
-    if not held:
-        return False
-    window_seconds = history.get("window_seconds")
-    if isinstance(window_seconds, int) and window_seconds > 0:
-        if window_seconds >= MAX_HISTORY_WINDOW_SECONDS:
-            return False
-        measured = span(samples)
-        return (
-            measured.seconds is not None
-            and measured.seconds >= 0.9 * window_seconds
-        )
-    requested = history.get("requested")
-    return (
-        isinstance(requested, int) and requested > 0
-        and len(samples) >= requested
-    )
-
-
-#: The disclosure a windowed answer owes, because its figures are not readings.
-#:
-#: `_metrics_trend` downsamples a span to at most 168 buckets, each the **mean**
-#: of the samples in it. Stating an endpoint ("from 40°C to 47.8°C") off a mean
-#: and calling it a reading is the same class of overstatement this module was
-#: written to stop, one layer in: the min/max spike guard in
-#: `telemetry_trend.describe` runs over the means too, so a bucket can average
-#: out a real peak. The count path holds raw rows and says "retained samples"
-#: unchanged; only the windowed path appends this, and it names the resolution
-#: and the peak a bucket can hide. (No direction word here - the module never
-#: writes one outside a computed movement, and the guard scans for it.)
-_AVERAGED_BUCKETS = (
-    "These figures are {}-second averaged buckets, not individual readings: "
-    "they show the shape of the change across the window, and a brief spike "
-    "between two buckets can be averaged away and not appear here."
-)
-
-
-def _windowed_evidence(
-    samples: List[Any], history: Dict[str, Any]
-) -> Dict[str, str]:
-    """The evidence entry for a windowed read, naming what the rows are.
-
-    `trend_evidence` says "retained telemetry samples", which is true of the
-    count path's raw rows and misleading of a windowed read's downsampled means.
-    This states the resolution instead, so the evidence panel and the answer's
-    own caveat agree about what was read.
-    """
-    bucket = history.get("bucket_seconds")
-    return {
-        "source": "metrics.history",
-        "summary": "Read {} downsampled telemetry buckets, each a {}-second "
-                   "average, covering the requested window.".format(
-                       span(samples).count, int(bucket) if bucket else 0),
-    }
-
-
 def past_time_answer(
-    message: str, facts: Dict[str, Any], history_range: Any = None
+    message: str, facts: Dict[str, Any], history_range: Any = None,
+    appliance: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """An honest answer to a question about a past moment, or ``None``.
 
@@ -801,9 +704,60 @@ def past_time_answer(
     boot window, a fresh store, and `metrics_history`'s "readable but holds no
     samples yet". The gate is now taken once, at the top, for every branch.
     """
-    retrospective = asks_about_a_past_time(message)
+    # Review S1: a past-tense question naming a clock time, a weekday or the
+    # last reboot is about the past too, and used to get the live reading.
+    retrospective = asks_about_a_past_time(message) or asks_about_a_named_past(message)
     if not (retrospective or asks_about("history", message)):
         return None
+    # VD-205 item 3 / review S1: the machine and the window the question
+    # names, read with an end bound; never a worker from the controller's rows.
+    wired = {**(appliance or {}), "telemetry_history_range": history_range}
+    scope = history_scope(message, wired)
+    if scope == "feature":
+        # Review round 3 (N-S1): AI Chat, the LLM Server and the Assistant keep
+        # no telemetry of their own; their past is not this controller's rows.
+        return None
+    if scope:
+        # Review round 3 (N-S1): "both machines" read the controller alone.
+        replies = [_history_reply(message, facts, appliance, history_for_question(
+            message, facts, wired, window_for_question(message), machine=machine), retrospective)
+            for machine in scope]
+        # Review round 4 (R3-S1): a machine whose history could not be read
+        # is named, so its failure never reads as this controller's.
+        parts = [reply["answer"] if reply["answered"] else
+                 "{}: nothing could be read from its telemetry for that window.".format(machine.name)
+                 for machine, reply in zip(scope, replies)]
+        return {**_scoped(parts,
+                          [item for reply in replies for item in reply["evidence"]],
+                          answered=all(reply["answered"] for reply in replies)),
+                "source": "built-in-cluster"}
+    read = history_for_question(message, facts, wired, window_for_question(message))
+    reply = _history_reply(message, facts, appliance, read, retrospective)
+    # VD-205 live check L2: a worker's history is read from that worker's own
+    # records, so it outranks the model and the scope redirect exactly as the
+    # other cluster answers do. As "built-in-live-data" it was discarded for
+    # "What happened on the ZBook last night?" and the redirect answered.
+    # Review round 2 (S4): "what happened" on this controller is read from
+    # its own records too, and was redirected for the same reason.
+    if read.node is not None or read.ask:
+        reply["source"] = "built-in-cluster"
+    elif reply["answered"] and asks_what_happened(message):
+        reply["source"] = HISTORY_SOURCE
+    return reply
+
+
+def _history_reply(message: str, facts: Dict[str, Any], appliance: Optional[Dict[str, Any]],
+                   read: Any, retrospective: bool) -> Dict[str, Any]:
+    """`past_time_answer`'s reply for the machine and window ``read`` names."""
+    if read.ask:
+        return _scoped([read.ask], [], answered=False)
+    if read.history is not None and (read.history.get("refused") or read.history.get("unwired")):
+        # Review B-3: a named window with no readings is said, never answered
+        # from the most recent rows.
+        return _scoped([read.history["reason"]], [{
+            "source": "assistant.time-scope",
+            "summary": "The window this question names could not be read.",
+        }], answered=False)
     # **When the question names a window, read that window.** A69: the store
     # retains seven days, but the fact the router pre-gathers is the newest
     # thirty rows *by count* - about half a minute. Asked "how much has the CPU
@@ -813,7 +767,7 @@ def past_time_answer(
     # the window is parsed from the question and the a68 time-ranged path is
     # queried for it; the count-based fact stays the fallback for a
     # retrospective question that names no window ("what was it earlier").
-    history = _windowed_history(message, history_range) or _retained_samples(facts)
+    history = read.history or (_retained_samples(facts) if read.node is None else {})
     samples = history.get("samples") or []
     held = bool(history.get("available")) and bool(samples)
     named, other_subject = _readings_asked_about(message)
@@ -829,7 +783,7 @@ def past_time_answer(
                  "you what was true then.",
             history, samples, held,
         )
-    more_retained = _reads_a_recent_window(history, samples, held)
+    more_retained = reads_a_recent_window(history, samples, held)
     # A windowed read carries `bucket_seconds`; a count read does not. The
     # figures it yields are bucket means, so the answer discloses that rather
     # than presenting them as raw readings.
@@ -838,23 +792,42 @@ def past_time_answer(
         list(trend_lines(samples, named, more_retained=more_retained))
         if held else []
     )
-    if movement:
-        if windowed:
+    if movement and asks_for_peak(message):
+        lowest = bool(re.search(r"\b(?:lowest|coolest|minimum)\b", message.lower()))
+        peaks = [peak_line(samples, reading.field, reading.label, reading.unit, lowest)
+                 for reading in wanted(named)]
+        movement = [line for line in peaks if line] + movement
+    # "What happened" is answered from the machine's events even when its rows
+    # hold nothing to trend (VD-205 live check L2): the events were read only
+    # beside a movement, so a quiet window refused a question it could answer.
+    events, trended = None, bool(movement)
+    if asks_what_happened(message) and read.history and read.history.get("available"):
+        events = machine_events(
+            (appliance or {}).get("history_sources") or {}, read.node or CONTROLLER_PLACEMENT_ID,
+            read.history.get("window_start", 0), read.history.get("window_end", 0), name=read.name)
+        if not movement:
+            movement.append(str(history.get("reason") or "") or nothing_to_compare(samples, named))
+        movement.append(events_sentence(events, gaps(samples, int(history.get("bucket_seconds") or 0))))
+    movement = read.lead + movement if movement else movement
+    if movement and (trended or (events is not None and events.read)):
+        if windowed and trended:
             movement.append(
-                _AVERAGED_BUCKETS.format(int(history.get("bucket_seconds") or 0))
+                AVERAGED_BUCKETS.format(int(history.get("bucket_seconds") or 0))
             )
-        if retrospective:
+        if retrospective and trended:
             movement.append(
                 "I cannot look up one exact past moment; these retained "
                 "samples are what this appliance holds."
             )
         evidence = (
-            _windowed_evidence(samples, history) if windowed
-            else trend_evidence(samples)
+            windowed_evidence(samples, history) if windowed and trended
+            else trend_evidence(samples) if trended
+            else {"source": "assistant.machine-events",
+                  "summary": "Read the records of what happened to this machine in that window."}
         )
         return _scoped(movement, [evidence], answered=True)
     if held:
-        return _refused(nothing_to_compare(samples), history, samples, held)
+        return _refused(nothing_to_compare(samples, named), history, samples, held)
     # **Not every retrospective question is about a sensor.** "What did we
     # change yesterday" and "when was this installed" are about the past and
     # are not readings, and answering them with "no record covering that
@@ -933,8 +906,8 @@ def identity_answer(
         })
     else:
         lines.append(
-            "I could not read this appliance's Vaelor version. Settings shows "
-            "it, and so does the foot of the Home screen."
+            "I could not read this appliance's Vaelor version. {} shows "
+            "it, and so does the foot of the {} screen.".format(SETTINGS, HOME)
         )
     if name:
         lines.append("The detected hardware reports itself as {}.".format(name))

@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 from flask import Blueprint, g, jsonify, request
 
-from .model_reachability import probe_connection
+from .model_reachability import probe_selected_model
 from .security import LoginLimiter, SecurityStore
 from .runtime_paths import env_value
 
@@ -78,10 +78,9 @@ def assistant_model_status(callbacks: Dict[str, Any], actor: str) -> Dict[str, A
     # UI show verified health while every request through it failed.
     probe = {"reachable": False, "detail": "", "endpoint": ""}
     if configured:
-        try:
-            probe = probe_connection(agent._connection(mode))
-        except (AttributeError, OSError, TypeError, ValueError):
-            probe = {"reachable": True, "detail": "", "endpoint": ""}
+        # A check that raises is reported as not answering, never as
+        # reachable; `probe_selected_model` owns that rule (ACC-136).
+        probe = probe_selected_model(lambda: agent._connection(mode))
     return {
         "ready": configured,
         "reachable": bool(probe.get("reachable")),
@@ -134,7 +133,7 @@ class ApiContext:
         # that: container and VM bridges are `up`, are private, and are
         # enumerated alongside the real one. On 2026-08-11 the remote console
         # offered `172.20.0.1:3389` - a Docker bridge - behind a green "remote
-        # access available" badge, while eth0 held 192.168.0.50. This Pi has
+        # access available" badge, while eth0 held 192.0.2.50. This Pi has
         # seven such bridges.
         #
         # Worse than being wrong, it was *unstably* wrong: bridges come and go

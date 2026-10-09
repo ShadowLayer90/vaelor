@@ -18,36 +18,53 @@
  */
 import type { AssistantModelFacts } from "./agentTypes";
 
-export function AssistantModelState(props: { model?: AssistantModelFacts }) {
-  const shortcomings = props.model?.shortcomings ?? [];
-  const idleMinutes = props.model?.sleep_idle_seconds
-    ? Math.round(props.model.sleep_idle_seconds / 60)
-    : 0;
+/**
+ * The sleep period and the wake, as whole minutes and seconds, or `null` when
+ * the server did not send both - the model then does not sleep, or nobody
+ * measured its wake, and neither is a sentence to state.
+ */
+function sleepFacts(model?: AssistantModelFacts): { idleMinutes: number; wake: number } | null {
+  const idleMinutes = model?.sleep_idle_seconds ? Math.round(model.sleep_idle_seconds / 60) : 0;
   // Rounded, because the record stores a measurement (37.0, 21.2) and a
   // sentence promising "21.2 seconds" claims a precision the next wake will
   // not honour.
-  const wake = Math.round(props.model?.cold_start_seconds ?? 0);
+  const wake = Math.round(model?.cold_start_seconds ?? 0);
+  return idleMinutes > 0 && wake > 0 ? { idleMinutes, wake } : null;
+}
 
-  if (!shortcomings.length && !idleMinutes) return null;
+function sleepSentence({ idleMinutes, wake }: { idleMinutes: number; wake: number }) {
+  return `The local model unloads itself after ${idleMinutes} minutes without a question, to give the memory back `
+    + `to the rest of the appliance. The next question loads it again and takes about ${wake} seconds; the ones `
+    + "after that are normal speed.";
+}
+
+/**
+ * The same sentence as one quiet line on Ask (owner, 2026-10-07: "Keep on
+ * Ask"). The drawer keeps it too; the wait happens at the composer, so the
+ * reason for it is stated there, not only behind Change intelligence.
+ */
+export function AssistantModelSleepNote(props: { model?: AssistantModelFacts }) {
+  const facts = sleepFacts(props.model);
+  return facts ? <p className="as-sleep-note">{sleepSentence(facts)}</p> : null;
+}
+
+export function AssistantModelState(props: { model?: AssistantModelFacts }) {
+  const shortcomings = props.model?.shortcomings ?? [];
+  const facts = sleepFacts(props.model);
+
+  if (!shortcomings.length && !facts) return null;
 
   return (
-    <section className="assistant-model-state" aria-label="Local model">
+    <div className="as-model-state" role="group" aria-label="Local model">
       {/*
         * Stated, not hidden. Rendered only when the server sent both numbers,
         * because a sentence about a duration nobody measured is the thing
         * VD-073's own row warns against.
         */}
-      {idleMinutes > 0 && wake > 0 && (
-        <p className="assistant-model-state__periods">
-          The local model unloads itself after {idleMinutes} minutes without a
-          question, to give the memory back to the rest of the appliance. The
-          next question loads it again and takes about {wake} seconds; the ones
-          after that are normal speed.
-        </p>
-      )}
+      {facts && <p className="as-note">{sleepSentence(facts)}</p>}
 
       {shortcomings.length > 0 && (
-        <details className="assistant-model-state__limits">
+        <details className="as-disclosure">
           <summary>What this model is not good at</summary>
           <ul>
             {shortcomings.map((item) => (
@@ -56,6 +73,6 @@ export function AssistantModelState(props: { model?: AssistantModelFacts }) {
           </ul>
         </details>
       )}
-    </section>
+    </div>
   );
 }

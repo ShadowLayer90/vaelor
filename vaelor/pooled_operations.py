@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable, Dict
 
-from .cluster_placement import CONTROLLER_PLACEMENT_ID
+from .cluster_placement import CONTROLLER_PLACEMENT_ID, departed_node_ids
 from .pooled_inference import (
     artifact_architecture,
     node_thread_count,
@@ -163,9 +163,8 @@ class PooledDeploymentOperations:
                 raise RuntimeError(
                     str(test.get("message", "The pooled model API test failed."))
                 )
+            # VD-202 item 1: never the Assistant's lease (refused at deploy_llm).
             self.broker.activate(credential_id, "cluster-inference")
-            if payload.get("use_for_assistant"):
-                self.broker.activate(credential_id, "deployment-agent")
             units = {"root": root_unit, "workers": worker_units}
             self.store.put_pooled_deployment(
                 name=name, state="healthy", model_id=model_id,
@@ -227,18 +226,36 @@ class PooledDeploymentOperations:
         deployment = self.store.get_pooled_deployment(name)
         if deployment is None:
             raise ValueError("The pooled deployment was not found.")
+        # The GPU/vLLM path shares this table with an ``engine`` discriminator in
+        # ``units`` (gpu_pool_operations). A vLLM row carries no ``root``/
+        # ``workers`` units, so removing it here would stop nothing, yet still
+        # delete its credential and record - leaving the vLLM server and Ray
+        # units running and orphaned. Refuse and point at the GPU removal path.
+        if deployment.get("units", {}).get("engine") == "vllm":
+            raise ValueError(
+                "That is a vLLM GPU deployment; remove it through the GPU "
+                "inference removal path, not pooled-memory removal."
+            )
+        units = deployment.get("units", {})
+        # A machine that has left the fleet (a forced removal, owner decision
+        # 2026-09-28) cannot be reached or resolved any more; its unit is
+        # skipped. Derived from the cluster store, not the record's display
+        # marker, which a stale writer can overwrite (review R2).
+        lost = departed_node_ids(self.store, deployment["node_ids"])
+        placed = [
+            (node_id, unit) for node_id, unit in zip(
+                deployment["node_ids"],
+                [units.get("root", "")] + list(units.get("workers", [])),
+            )
+            if str(node_id) not in lost and str(unit or "")
+        ]
         nodes = [
             self.joined_node(node_id, include_credential=True)
-            for node_id in deployment["node_ids"]
+            for node_id, _unit in placed
         ]
         transports = self._transports(nodes)
-        units = deployment.get("units", {})
-        root_unit = str(units.get("root", ""))
-        worker_units = list(units.get("workers", []))
-        if root_unit:
-            self.runtime.stop_unit(transports[0], root_unit)
-        for index, unit in enumerate(worker_units, start=1):
-            self.runtime.stop_unit(transports[index], str(unit))
+        for transport, (_node_id, unit) in zip(transports, placed):
+            self.runtime.stop_unit(transport, str(unit))
         credential_id = str(deployment.get("credential_id", ""))
         if credential_id:
             self.broker.delete(credential_id)

@@ -757,6 +757,22 @@ class ApplicationDeploymentStore:
             connection.commit()
         return self.get(draft_id, actor_name)
 
+    def secret_references(self) -> set:
+        """Every managed credential id a kept draft's compose names as a secret.
+
+        What Settings > Connections reads (`credential_listing.read_references`)
+        to tell an app secret still in use from one nothing uses any more.
+        """
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT compose_json FROM application_drafts WHERE compose_json IS NOT NULL"
+            ).fetchall()
+        referenced = set()
+        for row in rows:
+            compose = json.loads(row["compose_json"]) or {}
+            referenced.update(str(value) for value in (compose.get("x-vaelor-secret-references") or {}).values())
+        return referenced
+
     def get(self, draft_id: str, actor: Optional[str] = None) -> Optional[Dict[str, Any]]:
         query = "SELECT * FROM application_drafts WHERE id=?"
         params: tuple[Any, ...] = (str(draft_id),)
@@ -860,18 +876,34 @@ class ApplicationDeploymentStore:
         )
 
     def approve(self, draft_id: str, actor: str, manifest_digest: str) -> Dict[str, Any]:
+        # ``_require_digest`` runs first for every state, so a digest MISMATCH is
+        # refused before any state branch -- an already-approved draft included.
         current = self._require_digest(draft_id, actor, manifest_digest)
+        if current["state"] == "approved":
+            # Idempotent re-approve. The cluster plan-preview path approves the
+            # draft (validated->approved) at preview time via ``resolve_import``.
+            # If the operator then abandons the plan modal and clicks the
+            # single-node "Review approval", approving the *same* already-approved
+            # draft must be a no-op that returns the standing job rather than a
+            # raise that permanently dead-ends the single-node install. The digest
+            # already matched above, so this returns the same job a fresh approve
+            # would; a non-validated/non-approved draft still cannot be approved.
+            return self._import_proposal(current, manifest_digest)
         if current["state"] != "validated":
             raise ApplicationDeploymentError("Only a validated server draft can be approved.")
         approved = self._transition(draft_id, actor, {"validated"}, "approved")
+        return self._import_proposal(approved, manifest_digest)
+
+    @staticmethod
+    def _import_proposal(draft: Dict[str, Any], manifest_digest: str) -> Dict[str, Any]:
         return {
-            "draft": approved,
+            "draft": draft,
             "proposed_job": {
                 "type": "compose.import",
                 "payload": {
-                    "draft_id": draft_id,
+                    "draft_id": str(draft["id"]),
                     "manifest_digest": manifest_digest,
-                    "project": compose_project_name(approved["manifest"]),
+                    "project": compose_project_name(draft["manifest"]),
                 },
             },
         }

@@ -13,15 +13,12 @@ from .agent_prompts import (
     LOCAL_PLANNER_PROMPT,
     SYSTEM_PROMPT,
 )
-from .answer_evidence import (
-    add_evidence,
-    describe_missing,
-    first_sentence,
-    present,
-    sentence,
-)
-from .assistant_answer_topics import asks_about, capability_sentence
-from .byte_units import describe_gb
+from .assistant_accelerator_answers import npu_readings_answer
+from .assistant_builtin_answer import builtin_reply
+from .assistant_cluster_answers import cluster_answer, workers_named
+from .assistant_serving_answers import SERVING_SOURCE, serving_answer
+from .assistant_log_answers import LOG_WORDS
+from .phrase_match import mentions
 from .assistant_fault_answers import (
     READING_BACKED_SOURCES,
     accelerator_presence_answer,
@@ -29,12 +26,10 @@ from .assistant_fault_answers import (
     accelerator_slowness_answer,
     health_alert_answer,
     names_other_component_subject,
-    overall_verdict_line,
 )
 from .assistant_answer_scope import scoped_answer
-from .assistant_local_answer import first_choice_content, local_answer, local_user_content
+from .assistant_local_answer import first_choice_content, local_answer, local_turn
 from .assistant_recovery import recovery_answer
-from .assistant_static_answers import static_answer
 from .assistant_answer_presentation import (
     connected_model_failure_answer,
     with_model_failure_stated,
@@ -44,20 +39,11 @@ from .assistant_answer_presentation import (
     normalize_model_answer,
     with_performance,
     out_of_scope_after_model_failure,
-    managed_workload_summary,
-    network_summary,
-    storage_summary,
 )
 from .assistant_intents import knowledge_redirect, world_followup
-from .assistant_acting_wiring import acting_answer, acting_proposal
+from .assistant_acting_wiring import acting_answer, acting_decline, acting_proposal
 from .assistant_request_policy import assistant_refusal, specialist_refusal
 from .assistant_scope_guard import guarded_answer
-from .assistant_hardware_answers import (
-    case_fan_answer,
-    cpu_temperature,
-    display_line,
-    lighting_line,
-)
 from .assistant_memory_grounding import grounded_memory_answer
 from .assistant_policy import deployment_capability_answer, is_deployment_request
 from .agent_failure_messages import plan_failure_warning
@@ -99,6 +85,9 @@ from .specialist_model import specialist_review
 from .runtime_paths import env_value
 
 MAX_MESSAGE_LENGTH = 4000
+#: What the status says when no model is pinned: the server's first offered
+#: model is used. A placeholder, never a model name (review round 3).
+AUTO_DETECT_MODEL = "Auto-detect loaded model"
 
 
 class DeploymentAgent:
@@ -146,7 +135,7 @@ class DeploymentAgent:
             "configured": configured,
             "provider": connection.get("label", "OpenAI-compatible server") if connection else "built-in-planner",
             "model": (
-                connection.get("model") or "Auto-detect loaded model"
+                connection.get("model") or AUTO_DETECT_MODEL
                 if connection else None
             ),
             "provider_type": connection.get("provider") if connection else "built-in",
@@ -328,10 +317,13 @@ class DeploymentAgent:
         clean_message = str(message).strip()
         if not clean_message or len(clean_message) > MAX_MESSAGE_LENGTH:
             raise ValueError("Assistant questions must be between 1 and 4,000 characters.")
-        refusal = assistant_refusal(clean_message)
+        refusal = assistant_refusal(clean_message, workers_named(clean_message, context))
         if refusal:
+            # Review S4: a power or delete request is declined with the
+            # control that does it, and recorded as not answered.
             return self._validate_answer(
-                refusal, source="policy-refusal", question=clean_message
+                refusal, source="policy-refusal", question=clean_message,
+                answered=bool(refusal.pop("answered", True)),
             )
         live_context = context or {}
         # The acting seam (VD-100 #96): if the operator holds workloads:act and
@@ -348,6 +340,17 @@ class DeploymentAgent:
         if acting is not None:
             return self._validate_answer(
                 acting_answer(acting), source="assistant-acting",
+                question=clean_message,
+            )
+        # Review S3: an acting request nothing proposed says nothing was done.
+        declined = acting_decline(
+            clean_message,
+            live_context.get("appliance", live_context).get("facts", {}),
+            granted_scopes,
+        )
+        if declined is not None:
+            return self._validate_answer(
+                declined, source="assistant-acting", answered=False,
                 question=clean_message,
             )
         grounded = self._fallback_answer(clean_message, live_context)
@@ -404,6 +407,7 @@ class DeploymentAgent:
                 result = self._model_answer(clean_message, live_context, connection)
                 validated = self._validate_answer(result, source="connected-model", question=clean_message)
                 validated["performance"] = result.get("performance", {})
+                validated["skills_sent"] = list(result.get("skills_sent") or [])
                 return validated
             except (OSError, ValueError, KeyError, IndexError, urllib.error.URLError):
                 if general_knowledge:
@@ -428,7 +432,8 @@ class DeploymentAgent:
                     scoped["fallback_used"] = True
                     return scoped
                 fallback = grounded
-                if "Connect a local model" in fallback.get("answer", ""):
+                stood_in = bool(fallback.get("answered", True))
+                if not stood_in:
                     fallback["answer"] = connected_model_failure_answer()
                     # The model failed and there was no built-in answer to
                     # put in its place. Nothing was answered.
@@ -440,9 +445,16 @@ class DeploymentAgent:
                     fallback["answer"] = with_model_failure_stated(
                         fallback.get("answer", "")
                     )
+                # Review S11: only claim a built-in answer when one stood in.
                 fallback["evidence"] = [{
                     "source": "assistant.fallback",
-                    "summary": "The selected AI connection did not answer correctly, so Vaelor used built-in live-data intelligence.",
+                    "summary": (
+                        "The Assistant's model did not answer, so Vaelor answered "
+                        "from this machine's own readings instead."
+                        if stood_in else
+                        "The Assistant's model did not answer, and no built-in "
+                        "reading could answer this question either."
+                    ),
                 }, *fallback.get("evidence", [])][:10]
                 fallback["fallback_used"] = True
                 return fallback
@@ -491,16 +503,15 @@ class DeploymentAgent:
         )
         # VD: a managed-local model echoes a JSON prompt envelope (measured
         # 10/10 live) but answers natural language (9/9). See assistant_local_answer.
-        user_content = (
-            local_user_content(message, context, connection) if managed
-            else provider_user_content(
-                {
-                    "question": message,
-                    "context": assistant_context(message, context, connection),
-                },
-                connection,
-            )
-        )
+        # Review B5: memories, earlier turns and matched guidance travel with
+        # the question, and only guidance actually sent may be claimed.
+        if managed:
+            user_content, skills_sent = local_turn(message, context, connection)
+        else:
+            trimmed = assistant_context(message, context, connection)
+            skills_sent = [str(item.get("slug")) for item in (trimmed.get("guidance") or [])
+                           if isinstance(item, dict) and item.get("slug")] if isinstance(trimmed, dict) else []
+            user_content = provider_user_content({"question": message, "context": trimmed}, connection)
         request_body = {
             "model": model,
             "messages": [
@@ -526,9 +537,13 @@ class DeploymentAgent:
         # Managed-local runs through local_answer, which retries once on a
         # degenerate (echoed or empty) reply before returning humanized text.
         if managed:
-            return normalize_model_answer(local_answer(request_body, headers, timeout, connection, _chat_completion))
-        body = _chat_completion(connection, request_body, headers, timeout)
-        return with_performance(normalize_model_answer(_parse_model_object(first_choice_content(body))), body)
+            result = normalize_model_answer(local_answer(request_body, headers, timeout, connection, _chat_completion))
+        else:
+            body = _chat_completion(connection, request_body, headers, timeout)
+            result = with_performance(normalize_model_answer(_parse_model_object(first_choice_content(body))), body)
+        if isinstance(result, dict):
+            result["skills_sent"] = skills_sent
+        return result
 
     @staticmethod
     def _validate_answer(
@@ -592,29 +607,6 @@ class DeploymentAgent:
 
     def _fallback_answer(self, message: str, context: Dict[str, Any]):
         facts = context.get("appliance", context).get("facts", {})
-        lower = message.lower()
-        evidence = []
-        lines = []
-        cooling = facts.get("cooling.status", {})
-        telemetry = facts.get("system.telemetry", {})
-        identity = facts.get("system.identity", {})
-        display = facts.get("display.status", {})
-        lighting = facts.get("lighting.status", {})
-        updates = facts.get("updates.status", {})
-        services = facts.get("services.status", [])
-        storage = facts.get("storage.status", {})
-        network = facts.get("network.status", {})
-        # The probed answer for what this machine has. Where prose written from
-        # a fact object disagrees with it, this wins: the fact object may carry
-        # defaults, this carries a discovery result and its reason.
-        capabilities_map = facts.get("machine.capabilities", {}) or (
-            facts.get("system.identity", {}) or {}
-        ).get("capabilities", {})
-        workloads = facts.get("workloads.inventory", {})
-        jobs = facts.get("jobs.recent", [])
-        specialist_results = context.get("appliance", context).get(
-            "specialist_results", []
-        )
 
         recovery = recovery_answer(message, facts)
         if recovery is not None:
@@ -636,10 +628,30 @@ class DeploymentAgent:
 
         # Faults and accelerator slowness are answered from readings first: both
         # reached the model on the Z2 and came back invented (see those modules).
-        fault = health_alert_answer(message, facts)
+        # VD-205 live check L1: which model AI Chat, the LLM Server and the
+        # Assistant use is read, never handed to the model to guess.
+        serving = serving_answer(message, facts)
+        if serving is not None:
+            return self._validate_answer(
+                serving, source=SERVING_SOURCE, question=message,
+                answered=bool(serving.pop("answered", True)),
+            )
+        # VD-205 item 4: cluster questions are answered from the cluster
+        # digest, each machine from its own readings, before any branch that
+        # reads only this controller's sensors.
+        cluster = cluster_answer(message, facts, context.get("appliance", context))
+        if cluster is not None:
+            return self._validate_answer(
+                cluster, source="built-in-cluster", question=message,
+                answered=bool(cluster.pop("answered", True)),
+            )
+        # Review S7: a question about the logs is answered from the journal,
+        # not from the health verdict its "any errors" also matches.
+        fault = None if mentions(message, LOG_WORDS) else health_alert_answer(message, facts)
         if fault is not None:
             return self._validate_answer(
-                fault, source="built-in-health", question=message
+                fault, source="built-in-health", question=message,
+                answered=bool(fault.pop("answered", True)),
             )
 
         slowness = accelerator_slowness_answer(message, facts)
@@ -655,12 +667,13 @@ class DeploymentAgent:
         # not return here dropping every other reading; it folds into the
         # accumulation below instead.
         compound_reading = names_other_component_subject(message)
-        readings = accelerator_readings_answer(message, facts)
+        readings = _merged(accelerator_readings_answer(message, facts),
+                           npu_readings_answer(message, facts))
         if readings is not None and not compound_reading:
             return self._validate_answer(
                 readings, source="built-in-accelerator", question=message
             )
-        presence = accelerator_presence_answer(message, facts)
+        presence = None if readings is not None else accelerator_presence_answer(message, facts)
         if presence is not None and not compound_reading:
             return self._validate_answer(
                 presence, source="built-in-accelerator", question=message
@@ -700,216 +713,15 @@ class DeploymentAgent:
             answer["application_intent"] = plan.get("application_intent")
             return answer
 
-        asks_health = asks_about("health-verdict", lower)
-        # Resolved once, before any sentence is written. Every mention of the
-        # CPU temperature in this reply is this number or it is absent; two
-        # readings taken moments apart must never share a paragraph.
-        reading = cpu_temperature(cooling, telemetry)
-        temperature_stated = False
-        if asks_health and cooling:
-            lines.append(overall_verdict_line(facts, reading))
-
-        if asks_about("cooling", lower) and cooling:
-            cpu = cooling.get("cpu", {})
-            case = cooling.get("case", {})
-            # Every clause here is conditional on a reading existing. The old
-            # version defaulted `rpm` to 0 and the cooling states to the word
-            # "unknown", then wrote a sentence around them - so a machine whose
-            # fan speed Vaelor could not read was told its fan was at 0 RPM,
-            # and given an invented explanation of why.
-            stated = []
-            fan_speed = sentence(
-                "The CPU fan is turning at {rpm} RPM", rpm=cpu.get("rpm")
-            )
-            if fan_speed:
-                mode = sentence(" in {mode} mode", mode=cpu.get("mode"))
-                stated.append(fan_speed + mode + ".")
-            else:
-                stated.append(describe_missing(
-                    "the processor fan's speed",
-                    str(cpu.get("reason") or ""),
-                ))
-            cooling_state = sentence(
-                "The cooling state is {current} of {maximum}.",
-                current=cpu.get("current_state"), maximum=cpu.get("max_state"),
-            )
-            if cooling_state:
-                stated.append(cooling_state)
-            if reading is not None:
-                stated.append("The CPU is {:.1f}°C.".format(float(reading)))
-                temperature_stated = True
-            # The causal story is only told where the policy that governs it was
-            # read: asserting how cooling behaves on unseen hardware is invention.
-            if (
-                present(cpu.get("rpm")) and float(cpu.get("rpm") or 0) == 0
-                and present(cpu.get("policy"))
-                and reading is not None and float(reading) < 55
-            ):
-                stated.append(
-                    "Zero RPM is expected here: this machine's cooling policy "
-                    "starts the fan above {}.".format(cpu.get("policy"))
-                )
-            lines.append(" ".join(part for part in stated if part))
-            case_line = case_fan_answer(case)
-            if case_line:
-                lines.append(case_line)
-            add_evidence(
-                evidence, "cooling.status", cpu,
-                ("rpm", "mode", "current_state", "max_state", "policy"),
-            ) or add_evidence(evidence, "cooling.status", cooling.get("cpu_temperature"))
-        if asks_about("display", lower) and display:
-            lines.append(display_line(display, capabilities_map))
-            add_evidence(
-                evidence, "display.status", display,
-                ("hardware", "bus", "enabled", "rotation", "sleep_timeout"),
-            )
-        if asks_about("lighting", lower) and lighting:
-            lines.append(lighting_line(lighting, capabilities_map))
-            add_evidence(
-                evidence, "lighting.status", lighting,
-                ("led_count", "rgb_enable", "rgb_style", "rgb_brightness"),
-            )
-        if asks_about("updates", lower) and updates:
-            lines.append(
-                "{} operating-system updates are available. They are {} and have not been installed.".format(
-                    updates.get("count", 0),
-                    "downloaded and staged" if updates.get("staged") else "not staged",
-                )
-            )
-            add_evidence(evidence, "updates.status", updates, ("count", "staged", "reboot_required"))
-        if asks_about("services", lower) and services:
-            unhealthy = [
-                item.get("id", "service") for item in services
-                if item.get("available") and item.get("active") != "active"
-            ]
-            lines.append(
-                "All managed Vaelor services are active."
-                if not unhealthy else "These services need attention: {}.".format(", ".join(unhealthy))
-            )
-            add_evidence(evidence, "services.status", services)
-        if asks_about("cpu", lower) and telemetry:
-            cpu_percent = telemetry.get("cpu_percent")
-            details = []
-            if cpu_percent is not None:
-                details.append("{}% use".format(round(float(cpu_percent), 1)))
-            # Saying the temperature again here is what produced two readings in
-            # one paragraph. It is the same sensor, already reported above.
-            if reading is not None and not temperature_stated:
-                details.append("{:.1f}°C".format(reading))
-            lines.append(
-                "The host CPU is currently {}.".format(
-                    " and ".join(details) if details else "reporting live telemetry"
-                )
-            )
-            add_evidence(evidence, "system.telemetry", telemetry, ("cpu_percent", "cpu_temperature"))
-        if asks_about("memory", lower) and telemetry:
-            # `memory_total`/`memory_used` ride on every telemetry sample and
-            # nothing read them, so "how much RAM" was answered with a percentage
-            # of an unstated whole (#183, LESSONS 11). Whole decimal GB, the unit
-            # `assistant_machine_brief` uses, so brief and answer cannot disagree.
-            fitted = describe_gb(telemetry.get("memory_total"), 0)
-            in_use = describe_gb(telemetry.get("memory_used"), 1)
-            share = telemetry.get("memory_percent")
-            used = "{}%{}".format(
-                round(float(share), 1), " ({})".format(in_use) if in_use else "",
-            ) if share is not None else ""
-            stated = first_sentence(
-                sentence(
-                    "This machine has {fitted} of memory, and {used} of it is "
-                    "in use.", fitted=fitted, used=used,
-                ),
-                sentence("This machine has {fitted} of memory.", fitted=fitted),
-                sentence("Memory use is currently {used}.", used=used),
-            )
-            if stated:
-                lines.append(
-                    "{} RAM is the working space shared by the operating "
-                    "system, apps, and local AI.".format(stated)
-                )
-                add_evidence(
-                    evidence, "system.telemetry", telemetry,
-                    ("memory_total", "memory_used", "memory_percent"),
-                )
-        if asks_about("storage", lower) and storage:
-            lines.append(storage_summary(storage))
-            add_evidence(evidence, "storage.status", storage)
-        # `network_summary` says why the sentence carries the address itself
-        # and not just the adapter name.
-        if asks_about("network", lower) and network:
-            lines.append(network_summary(network))
-            add_evidence(evidence, "network.status", network, ("interfaces",))
-        if asks_about("workloads", lower) and workloads:
-            lines.append(managed_workload_summary(workloads))
-            add_evidence(evidence, "workloads.inventory", workloads)
-        if asks_about("jobs", lower) and jobs:
-            current = jobs[0]
-            lines.append(
-                "The latest deployment job is {} and is {} ({}%).".format(
-                    str(current.get("type", "workload")).replace(".", " "),
-                    current.get("state", "unknown"),
-                    current.get("progress", 0),
-                )
-            )
-            add_evidence(evidence, "jobs.recent", jobs)
-        # The accelerator is a live-reading subject like the rest: a compound
-        # question named it beside CPU/memory/storage, so its reading is appended
-        # here rather than returned alone above. None unless the question named it.
-        accelerator = readings if readings is not None else presence
-        if accelerator is not None:
-            lines.append(accelerator["answer"])
-            evidence.extend(accelerator.get("evidence") or [])
-        # Constants, not readings. Kept in their own module so this method
-        # stays about interpreting live facts; only consulted when nothing
-        # measured answered.
-        if not lines:
-            lines = static_answer(lower) or []
-        if not lines and asks_about("specialist", lower):
-            if specialist_results:
-                latest = specialist_results[0]
-                lines = [
-                    "The latest {} specialist concluded: {}".format(
-                        latest.get("profile", "system"),
-                        latest.get("summary", "review completed"),
-                    )
-                ]
-                findings = latest.get("findings", [])[:3]
-                if findings:
-                    lines.append("Key findings: {}.".format("; ".join(findings)))
-                recommendations = latest.get("recommendations", [])[:3]
-                if recommendations:
-                    lines.append(
-                        "Recommended next steps: {}.".format(
-                            "; ".join(recommendations)
-                        )
-                    )
-            else:
-                lines = [
-                    "There are no completed appliance checks yet. "
-                    "Run a focused read-only specialist review, then use Discuss this result "
-                    "to bring its output into this conversation."
-                ]
-        # Nothing on this machine answered. Two things were wrong with saying
-        # so (#184). The list of what this path *can* answer was typed by hand
-        # and named eight subjects against the eighteen it has - a false
-        # capability denial, which removes working capability and is worse
-        # than the guess it prevents - so it is derived from `ANSWER_TOPICS`
-        # now. And the paragraph went out through `_validate_answer`'s
-        # `answered=True` default, so the audit trail recorded a refusal as a
-        # success. A default cannot know what was written; the flag is set
-        # here, where the refusal is.
-        answered = True
-        if not lines:
-            model = identity.get("name") or identity.get("id") or "this Vaelor node"
-            lines = [
-                "I don’t have enough built-in knowledge to answer that reliably "
-                "without guessing. Connect a local model, hosted API, or "
-                "OpenAI-compatible endpoint for broader questions. {}".format(
-                    capability_sentence(model)
-                ),
-            ]
-            answered = False
-            if identity:
-                add_evidence(evidence, "system.identity", identity, ("name", "id", "model", "architecture"))
+        # Every per-subject sentence lives in `assistant_builtin_answer`. The
+        # accelerator is a live-reading subject like the rest: a compound
+        # question named it beside CPU/memory/storage, so its reading is
+        # appended there rather than returned alone above.
+        reply = builtin_reply(
+            message, facts, context.get("appliance", context),
+            readings if readings is not None else presence,
+        )
+        lines, evidence, answered = reply["lines"], reply["evidence"], reply["answered"]
         # A compound question answered for its appliance half must not drop the
         # world half in silence (#205 item 3): point that part at AI Chat rather
         # than pretend it was not asked. Only ever fires beside a real answer.
@@ -984,7 +796,7 @@ class DeploymentAgent:
         )
         message_body = body["choices"][0]["message"]
         content = message_body.get("content", "")
-        if not str(content or "").strip() and message_body.get("reasoning_content"):
+        if not str(content or "").strip() and (message_body.get("reasoning") or message_body.get("reasoning_content")):
             raise ValueError(
                 "The model's reasoning used the full output budget before "
                 "producing a JSON plan."
@@ -997,3 +809,16 @@ class DeploymentAgent:
 
     def _fallback_plan(self, message: str) -> Dict[str, Any]:
         return fallback_plan(message)
+
+
+def _merged(*answers):
+    """One reading-backed answer from the GPU's and the NPU's, or ``None``."""
+    found = [item for item in answers if item is not None]
+    if not found:
+        return None
+    if len(found) == 1:
+        return found[0]
+    merged = dict(found[0])
+    merged["answer"] = " ".join(item["answer"] for item in found)
+    merged["evidence"] = [entry for item in found for entry in item.get("evidence") or []]
+    return merged

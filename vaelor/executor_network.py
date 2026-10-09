@@ -42,8 +42,13 @@ def parse_memory_usage(text: str) -> int:
         return 0
 
 
-def available_model_port(socket_factory=socket.socket) -> int:
+def available_model_port(socket_factory=socket.socket, exclude=frozenset()) -> int:
+    """The lowest loopback port of the model band that binds and is not in
+    ``exclude`` - the ports a stopped model will come back on (F6), which bind
+    exactly like free ones."""
     for port in range(8080, 8100):
+        if port in exclude:
+            continue
         with socket_factory(socket.AF_INET, socket.SOCK_STREAM) as probe:
             try:
                 probe.bind(("127.0.0.1", port))

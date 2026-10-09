@@ -26,13 +26,20 @@ import json
 import re
 import shutil
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 from packaging.version import InvalidVersion, Version
 
+from .build_provenance import BASIS_STAMP, BUILT_AT_BASES, INSTALLED_RECORDED, parse_time
+from .published_build_stamp import (
+    SUMS_NAME,
+    parse_sums,
+    published_stamp_name,
+    verify_published_stamp,
+)
 from .runtime_paths import env_value, state_path
 
 
@@ -49,6 +56,14 @@ MANIFEST_FIELDS = (
     "signature",
     "published_at",
 )
+#: The published wheel's own build identity, when the release states it: the
+#: time its release build stamped (``build_provenance.BASIS_STAMP``), and the
+#: commit. Optional because no release published so far carries them, and
+#: ``published_at`` cannot stand in: it is the upload time, which an old build
+#: uploaded again today also carries (F2, VD-184). Without them a different
+#: build of the same version is never offered as a replacement.
+MANIFEST_BUILD_FIELDS = ("built_at", "built_at_basis", "commit")
+_HEX_DIGITS = frozenset("0123456789abcdef")
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 #: A wheel filename, never a path. `..` and separators are refused so a manifest
@@ -77,6 +92,12 @@ class ReleaseManifest:
     min_from_version: str
     signature: Optional[str]
     published_at: str
+    built_at: Optional[str] = None
+    built_at_basis: Optional[str] = None
+    commit: Optional[str] = None
+    #: Why a stamp the release published was not believed; empty when there
+    #: was none or it was believed. Set by the source, never by a manifest.
+    build_stamp_problem: str = ""
 
     def public(self) -> Dict[str, Any]:
         """The manifest as an API surface omits the internal fetch URL.
@@ -94,7 +115,35 @@ class ReleaseManifest:
             "min_from_version": self.min_from_version,
             "signature": self.signature,
             "published_at": self.published_at,
+            "built_at": self.built_at,
+            "built_at_basis": self.built_at_basis,
+            "commit": self.commit,
+            "build_stamp_problem": self.build_stamp_problem,
         }
+
+
+def _manifest_build_identity(raw: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """The optional build fields, each either absent or exactly right.
+
+    A build time that does not parse, or a basis that is not one of
+    ``BUILT_AT_BASES``, is refused here: a release that states its build
+    imprecisely must not reach a comparison that would believe it (LESSONS 9).
+    """
+    built_at = raw.get("built_at")
+    basis = raw.get("built_at_basis")
+    commit = raw.get("commit")
+    if built_at is not None:
+        if not isinstance(built_at, str) or parse_time(built_at) is None:
+            raise ReleaseError("The manifest build time is not an ISO 8601 time.")
+        if basis not in BUILT_AT_BASES:
+            raise ReleaseError(
+                "The manifest build time does not say how it was measured "
+                "(built_at_basis must be one of {}).".format(", ".join(BUILT_AT_BASES)))
+    elif basis is not None:
+        raise ReleaseError("The manifest names a build-time basis but no build time.")
+    if commit is not None and (not isinstance(commit, str) or not 7 <= len(commit) <= 40 or not set(commit) <= _HEX_DIGITS):
+        raise ReleaseError("The manifest commit is not a hexadecimal commit id.")
+    return {"built_at": built_at, "built_at_basis": basis, "commit": commit}
 
 
 def parse_manifest(raw: Any) -> ReleaseManifest:
@@ -113,7 +162,8 @@ def parse_manifest(raw: Any) -> ReleaseManifest:
                 ", ".join(missing)
             )
         )
-    extra = [key for key in raw if key not in MANIFEST_FIELDS]
+    extra = [key for key in raw
+             if key not in MANIFEST_FIELDS and key not in MANIFEST_BUILD_FIELDS]
     if extra:
         raise ReleaseError(
             "The release manifest carries unknown fields: {}.".format(
@@ -146,43 +196,168 @@ def parse_manifest(raw: Any) -> ReleaseManifest:
         min_from_version=min_from,
         signature=signature,
         published_at=published_at,
+        **_manifest_build_identity(raw),
     )
 
 
+#: What the offered release is relative to the installed build. ``update`` and
+#: ``same-build`` and ``replace-build`` are eligible; the rest are refusals.
+#: A wire vocabulary (``eligibility.kind``) the update panel branches on: its
+#: one hand copy is OFFER_KINDS in SystemUpdatePanel.tsx (LESSONS 6 / VD-090
+#: item 5, W4d-D8). ``unparseable`` is written by api_upgrade_routes.
+OFFER_KINDS = (
+    "update",
+    "same-build",
+    "replace-build",
+    "local-build-newer",
+    "build-not-comparable",
+    "build-unknown",
+    "older",
+    "too-old-to-upgrade",
+    "unsigned",
+    "unparseable",
+)
+
+
+def _short(sha256: Any) -> str:
+    return str(sha256 or "")[:12] or "unknown"
+
+
+def _day(iso: Any) -> str:
+    return str(iso or "")[:10] or "an unrecorded date"
+
+
 def upgrade_eligibility(
-    running_version: str, manifest: ReleaseManifest
+    running_version: str,
+    manifest: ReleaseManifest,
+    installed: Optional[Dict[str, Any]] = None,
+    *,
+    signature_required: bool = False,
 ) -> Dict[str, Any]:
-    """Whether ``running_version`` may take this release, and why not if not.
+    """Whether this appliance may take this release, what it is, and why not.
 
     One decision, read by both ``GET /api/v2/upgrade`` and the executor's check
-    step, so the interface and the job never disagree about eligibility - the
-    LESSONS 6 shape. Note that a target *equal* to the running version is
-    eligible: an upgrade to the same version number is a real reinstall through
-    ``--force-reinstall`` (#134), not a no-op to be refused here.
+    step, so the interface and the job never disagree (LESSONS 6).
+
+    W4d-D8: an equal version string is not an equal build. A box running a
+    1.0b2 wheel built today was told it was "up to date" and offered a reinstall
+    of the month-older, different published 1.0b2. So when the versions are
+    equal the *build* decides, from ``installed`` (what
+    ``build_provenance.installed_build`` returns): the same wheel SHA-256 is a
+    reinstall of the same bytes; a different wheel is installed only when the
+    published one is newer than the installed build; and an installed build
+    Vaelor cannot identify is refused, because "cannot tell" must not be read as
+    "same" (LESSONS 8). A newer version number is an update whatever the build.
     """
+    def verdict(eligible: bool, kind: str, reason: str = "") -> Dict[str, Any]:
+        return {"eligible": eligible, "kind": kind, "reason": reason}
+
     try:
         running = Version(str(running_version))
         minimum = Version(manifest.min_from_version)
         target = Version(manifest.version)
     except InvalidVersion:
-        return {"eligible": False, "reason": "A version number could not be parsed."}
+        return verdict(False, "unparseable", "A version number could not be parsed.")
     if running < minimum:
-        return {
-            "eligible": False,
-            "reason": (
-                "This release upgrades from {} or newer; this appliance runs {}."
-                .format(manifest.min_from_version, running_version)
-            ),
-        }
+        return verdict(
+            False, "too-old-to-upgrade",
+            "This release upgrades from {} or newer; this appliance runs {}."
+            .format(manifest.min_from_version, running_version),
+        )
     if target < running:
-        return {
-            "eligible": False,
-            "reason": (
-                "The offered release {} is older than the running {}."
-                .format(manifest.version, running_version)
+        return verdict(
+            False, "older",
+            "The offered release {} is older than the running {}."
+            .format(manifest.version, running_version),
+        )
+    if signature_required and not manifest.signature:
+        return verdict(
+            False, "unsigned",
+            "The offered release {} is not signed, and this release source "
+            "accepts only signed releases.".format(manifest.version),
+        )
+    if target > running:
+        return verdict(True, "update")
+    installed = installed or {}
+    build = installed.get("build") if installed.get("state") == INSTALLED_RECORDED else None
+    if not isinstance(build, dict):
+        return verdict(
+            False, "build-unknown",
+            "Vaelor cannot tell which build of {} this appliance runs ({}) so it "
+            "cannot tell whether the published {} is the same build, a newer one "
+            "or an older one, and will not replace it. Installing Vaelor with the "
+            "installer records the build.".format(
+                running_version,
+                (installed.get("reason") or "no install record").rstrip("."),
+                manifest.version,
             ),
-        }
-    return {"eligible": True, "reason": ""}
+        )
+    if str(build.get("sha256") or "") == manifest.sha256:
+        return verdict(True, "same-build")
+    return _different_build_verdict(running_version, build, manifest, verdict)
+
+
+def _different_build_verdict(running_version, build, manifest, verdict):
+    """Two different wheels of one version: replace only on proof of newer.
+
+    **F2 (adversarial review, VD-184).** This first compared the local build
+    time with the manifest's ``published_at`` - the time a release was
+    *uploaded*. An old build uploaded again today carries today's date, so it
+    was judged ``replace-build`` and the W4d-D8 downgrade came back (LESSONS 5,
+    a label that is not the measurement). Now both sides must carry a build
+    time their release build *stamped* (``BASIS_STAMP``), and the published one
+    must be strictly later. A ``newest-file-in-wheel`` time is a lower bound -
+    it cannot show a local build is old, and a file dated in the future would
+    make it show a published one is new - so it proves nothing either way, and
+    equal stamped times order nothing. Commits are carried but not ordered:
+    which of two commits is newer is a fact about history this appliance does
+    not hold.
+    """
+    sha_local, sha_published = _short(build.get("sha256")), _short(manifest.sha256)
+    head = "This appliance runs a different build of {} (wheel {}) from the published {} (wheel {}). ".format(
+        running_version, sha_local, manifest.version, sha_published)
+    if manifest.built_at is None and manifest.build_stamp_problem:
+        return verdict(
+            False, "build-not-comparable",
+            head + "The published release carries a build stamp that could not be "
+            "authenticated ({}), so its build time is not believed, it is not "
+            "provably newer, and Vaelor will not replace this build with it.".format(
+                manifest.build_stamp_problem))
+    if manifest.built_at is None:
+        return verdict(
+            False, "build-not-comparable",
+            head + "The published release does not say when its wheel was built - "
+            "it records only its upload time ({}), which an older build uploaded "
+            "again would carry too - so it is not provably newer, and Vaelor will "
+            "not replace this build with it.".format(_day(manifest.published_at)))
+    local_time = parse_time(build.get("built_at"))
+    if local_time is None:
+        return verdict(
+            False, "build-not-comparable",
+            head + "This build's time was never recorded, so the published one is "
+            "not provably newer, and Vaelor will not replace this build with it.")
+    stamped = (build.get("built_at_basis") == BASIS_STAMP,
+               manifest.built_at_basis == BASIS_STAMP)
+    if not all(stamped):
+        side = "this appliance's build" if not stamped[0] else "the published build"
+        return verdict(
+            False, "build-not-comparable",
+            head + "The build time of {} is only a lower bound (the newest file in "
+            "its wheel), so the published one is not provably newer, and Vaelor "
+            "will not replace this build with it.".format(side))
+    published_time = parse_time(manifest.built_at)
+    if published_time > local_time:
+        return verdict(True, "replace-build")
+    if published_time == local_time:
+        return verdict(
+            False, "build-not-comparable",
+            head + "Both were stamped as built at {}, so neither is provably newer, "
+            "and Vaelor will not replace this build with it.".format(manifest.built_at))
+    return verdict(
+        False, "local-build-newer",
+        head + "This build was made {} and the published one {}: the published "
+        "build is older, so Vaelor will not replace this one with it.".format(
+            _day(build.get("built_at")), _day(manifest.built_at)))
 
 
 @runtime_checkable
@@ -224,6 +399,10 @@ class StubReleaseSource:
     """
 
     name = "stub"
+    #: Whether a release without a signature is refused. Nothing in Vaelor signs
+    #: releases yet, so no source claims to; a source that does sets this True
+    #: and `upgrade_eligibility` refuses an unsigned manifest from it.
+    signatures_required = False
 
     def __init__(self, manifest_path: Optional[Path] = None):
         self.manifest_path = (
@@ -288,6 +467,9 @@ class GitHubReleaseSource:
     """
 
     name = "github"
+    #: GitHub releases carry a SHA256SUMS file, not a signature: the digest
+    #: proves the download matches the release, not who published it.
+    signatures_required = False
 
     def __init__(
         self,
@@ -334,11 +516,13 @@ class GitHubReleaseSource:
         chosen_version: Optional[Version] = None
         chosen_wheel: Optional[Dict[str, Any]] = None
         chosen_sums: Optional[Dict[str, Any]] = None
+        chosen_stamp: Optional[Dict[str, Any]] = None
         for release in releases:
             if not isinstance(release, dict) or release.get("draft"):
                 continue
             wheel_asset = None
             sums_asset = None
+            assets_by_name: Dict[str, Dict[str, Any]] = {}
             for asset in release.get("assets") or []:
                 if not isinstance(asset, dict):
                     continue
@@ -348,7 +532,8 @@ class GitHubReleaseSource:
                 # TypeError up into GET /api/v2/upgrade (a 500). Skip it instead.
                 if not isinstance(name, str):
                     continue
-                if name == "SHA256SUMS":
+                assets_by_name[name] = asset
+                if name == SUMS_NAME:
                     sums_asset = asset
                 elif (
                     _WHEEL_NAME.fullmatch(name)
@@ -369,6 +554,8 @@ class GitHubReleaseSource:
                 chosen_version = version
                 chosen_wheel = wheel_asset
                 chosen_sums = sums_asset
+                chosen_stamp = assets_by_name.get(
+                    published_stamp_name(wheel_asset["name"]))
 
         if chosen is None:
             return None
@@ -383,14 +570,14 @@ class GitHubReleaseSource:
         if not isinstance(published_at, str) or not published_at.strip():
             return None
 
-        sha256 = self._sha256_for(
-            chosen_sums.get("browser_download_url") or "",
-            chosen_wheel.get("name") or "",
-        )
+        sums = self._sums(chosen_sums.get("browser_download_url") or "")
+        if sums is None:
+            return None
+        sha256 = sums.get(chosen_wheel.get("name") or "")
         if sha256 is None:
             return None
 
-        return parse_manifest(
+        manifest = parse_manifest(
             {
                 "version": _WHEEL_VERSION.match(
                     chosen_wheel["name"]
@@ -404,14 +591,42 @@ class GitHubReleaseSource:
                 "published_at": published_at,
             }
         )
+        if chosen_stamp is None:
+            return manifest
+        return self._with_published_stamp(manifest, chosen_stamp, sums)
 
-    def _sha256_for(self, sums_url: str, wheel_name: str) -> Optional[str]:
-        """The wheel's digest read from the release's ``SHA256SUMS`` asset.
+    def _with_published_stamp(
+        self, manifest: ReleaseManifest, asset: Dict[str, Any], sums: Dict[str, str],
+    ) -> ReleaseManifest:
+        """The manifest with the release's build stamp, if the release vouches for it.
 
-        The file is the ``<64hex> *<name>`` / ``<64hex>  <name>`` format ``sha256sum``
-        emits; the line whose filename equals the wheel wins. A missing line is
-        ``None`` (no offer); a malformed digest is left for ``parse_manifest`` to
-        refuse as a :class:`ReleaseError`.
+        W4d-D8 gap: the stamp is believed only as far as the release's own
+        ``SHA256SUMS`` covers it and binds it to this wheel's digest
+        (``published_build_stamp.verify_published_stamp``). Anything less leaves
+        the manifest without a build time and records why, so the decision says
+        "not comparable" rather than trusting it (LESSONS 9).
+        """
+        url = asset.get("browser_download_url")
+        body: Optional[bytes] = None
+        if isinstance(url, str) and url:
+            try:
+                with self._opener(url, timeout=30) as response:
+                    body = response.read()
+            except (OSError, ValueError):  # absence-ok: an unreadable stamp is recorded as not believed
+                body = None
+        identity, problem = verify_published_stamp(
+            body, wheel_name=manifest.wheel_name, wheel_sha256=manifest.sha256, sums=sums,
+        )
+        if identity is None:
+            return replace(manifest, build_stamp_problem=problem)
+        return replace(manifest, **identity)
+
+    def _sums(self, sums_url: str) -> Optional[Dict[str, str]]:
+        """The release's ``SHA256SUMS`` as ``{filename: digest}``, or ``None``.
+
+        The file is the ``<64hex> *<name>`` / ``<64hex>  <name>`` format
+        ``sha256sum`` emits. A missing wheel line is no offer; a malformed digest
+        is left for ``parse_manifest`` to refuse as a :class:`ReleaseError`.
         """
         if not sums_url:
             return None
@@ -420,14 +635,7 @@ class GitHubReleaseSource:
                 body = response.read().decode("utf-8")
         except (OSError, ValueError):
             return None
-        for line in body.splitlines():
-            parts = line.split(None, 1)
-            if len(parts) != 2:
-                continue
-            digest, name = parts
-            if name.lstrip("*").strip() == wheel_name:
-                return digest.strip().lower()
-        return None
+        return parse_sums(body)
 
     def fetch(self, manifest: ReleaseManifest, destination: Path) -> Path:
         """Stream the manifest's wheel to ``destination`` and return the path.

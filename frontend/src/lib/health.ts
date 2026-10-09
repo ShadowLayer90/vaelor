@@ -164,6 +164,12 @@ export interface HealthClaim {
   pillStatus: Health["status"];
   /** True when the claim is the server's verdict rather than a withdrawal. */
   reported: boolean;
+  /**
+   * True when the verdict evaluated nothing (`checked: []`). Its sentence says
+   * so, and nothing that carries it may be painted green: green means "read
+   * just now and fine", and nothing was read.
+   */
+  checkedNothing: boolean;
 }
 
 export function healthClaim(
@@ -177,6 +183,7 @@ export function healthClaim(
       detail: `Readings are not arriving from this ${machineNoun}, so nothing about it can be checked.`,
       pillStatus: "offline",
       reported: false,
+      checkedNothing: true,
     };
   }
   if (connection === "unknown" || health.status === "offline") {
@@ -185,6 +192,7 @@ export function healthClaim(
       detail: "No readings have arrived yet, so nothing has been checked.",
       pillStatus: "offline",
       reported: false,
+      checkedNothing: true,
     };
   }
   return {
@@ -194,5 +202,6 @@ export function healthClaim(
     detail: healthReassurance(health),
     pillStatus: health.status,
     reported: true,
+    checkedNothing: health.reasons.length === 0 && healthCoverage(health).kind === "none",
   };
 }

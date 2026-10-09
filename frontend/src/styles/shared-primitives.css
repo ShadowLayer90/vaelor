@@ -6,16 +6,29 @@
  * decisions on the existing token vocabulary so new surfaces stay aligned.
  */
 
+/*
+ * A field's rows keep their own height (#VD-B4-1).
+ *
+ * `.ui-field` is a grid, and a grid's default `align-content` is `stretch`:
+ * when a parent row made the field taller than its content — a 4-up form grid
+ * where one sibling carries a two-line hint and this one carries none — the
+ * spare height was shared out across the field's own auto rows, so the CONTROL
+ * grew. Live in "Serve a model" (GPU mode) the hintless "API port" input
+ * rendered visibly taller than the three fields beside it. `start` parks the
+ * spare height below the field instead of inside it, so a field with no hint
+ * is the same control height as one with a hint.
+ */
 .ui-field {
   min-width: 0;
   display: grid;
+  align-content: start;
   gap: var(--space-2);
 }
 
 .ui-field__label {
   color: var(--text-secondary);
   font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
+  font-weight: 500;
 }
 
 .ui-field__hint,
@@ -23,10 +36,29 @@
 .ui-field__disabled-reason,
 .ui-field__counter,
 .ui-button__disabled-reason {
-  margin: var(--space-1) 0 0;
   color: var(--text-muted);
   font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-hint);
   overflow-wrap: anywhere;
+}
+
+/*
+ * Help text inside a field is spaced by the field's own `gap` and nothing
+ * else. These carried `margin-block-start: var(--space-1)` on top of that gap,
+ * so one field disagreed with itself — 8px from label to control, 12px from
+ * control to hint — and the compound put each hint on its own rhythm.
+ *
+ * A button's reason is spaced the same way, by `.ui-button-wrap`'s own gap.
+ * It used to add a top margin on top of that gap, and a screen that sets the
+ * reason beside its button (Memory "Review and remember", Fleet "Review
+ * conversion") then centred the reason 1.5 px below the button's centre.
+ */
+.ui-field__hint,
+.ui-field__error,
+.ui-field__disabled-reason,
+.ui-field__counter,
+.ui-button__disabled-reason {
+  margin: 0;
 }
 
 /* Doubled on purpose (#149). Screen stylesheets recolour their own prose —
@@ -61,11 +93,16 @@
 .ui-control--file-picker {
   width: 100%;
   min-width: 0;
-  min-height: 44px;
+  /* One token, every control, every surface. Screens that set their own
+     46px here made two fields on one row disagree by 2px. */
+  min-height: var(--control-height);
   padding: var(--space-3) var(--space-4);
   color: var(--text-primary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
+  background: var(--bg-control);
+  /* WCAG 1.4.11: a field's edge is how it is found. --border-default read
+     1.4:1 against the field; --border-field is 3:1 or better (held by
+     styles/sharedPrimitivesPolish.test.ts). */
+  border: 1px solid var(--border-field);
   border-radius: var(--radius-md);
   font-size: var(--font-size-body);
   transition:
@@ -74,9 +111,25 @@
     box-shadow var(--motion-fast) ease;
 }
 
+/*
+ * A one-line control is exactly the token high (polish audit, cause 5).
+ * `min-height` alone let the padding and whatever line height the control
+ * inherited decide: the same input measured 44, 45, 47, 50 and 51.6 px on
+ * different screens, so two fields on one row disagreed. The height is stated,
+ * the block padding is dropped (the browser centres the text in a one-line
+ * input or select) and the line height is the control's own. A textarea, a
+ * file picker, a checkbox and a radio size themselves and are excluded by
+ * element, at no extra specificity, so a screen's own rule still wins.
+ */
+.ui-control:where(:not(textarea, [type="file"], [type="checkbox"], [type="radio"])) {
+  block-size: var(--control-height);
+  padding-block: 0;
+  line-height: 1.2;
+}
+
 .ui-control:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--border-strong);
+  border-color: var(--border-field-hover);
 }
 
 .ui-control:focus-visible {
@@ -96,7 +149,10 @@
   border-color: var(--danger);
 }
 
+/* A text box writes in the page's face, as the boards draw it, not in the
+   browser's monospace default for a textarea. A code editor sets its own. */
 .ui-control--textarea {
+  font-family: inherit;
   min-height: 112px;
   resize: vertical;
   overflow-wrap: anywhere;
@@ -134,7 +190,7 @@
 
 .ui-checkbox {
   min-width: 0;
-  min-height: 44px;
+  min-height: var(--control-height);
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -151,7 +207,9 @@
   min-width: 0;
   display: inline-grid;
   justify-items: stretch;
-  gap: var(--space-1);
+  /* The reason under a button sits at a field hint's distance (the field's
+     gap); it no longer adds a margin of its own. */
+  gap: var(--space-2);
   vertical-align: middle;
   /*
    * A button must never inherit the height of whatever grid row it lands in.
@@ -167,16 +225,47 @@
   block-size: fit-content;
 }
 
+/*
+ * A toolbar button's reason, hung under it and out of the row's flow
+ * (`disabledReasonLayout="detached"`, polish audit cause 8). In flow, the
+ * reason made the wrap taller, so a centred row lifted the button ~14 px off
+ * its neighbours, and its width pushed the viewer's top bar 84 px past a
+ * 768 px window. Out of flow it changes neither; it stays visible text (owner
+ * rule: a disabled control says why in words, not only in a tooltip), on the
+ * canvas so it reads over whatever it overhangs, right-aligned to the button
+ * so it opens towards the bar rather than off the window's edge.
+ */
+.ui-button-wrap--reason-detached {
+  position: relative;
+}
+
+.ui-button-wrap--reason-detached > .ui-button__disabled-reason {
+  position: absolute;
+  inset-block-start: calc(100% + var(--space-1));
+  inset-inline-end: 0;
+  z-index: var(--layer-raised);
+  inline-size: max-content;
+  max-inline-size: min(36ch, calc(100vw - 2 * var(--space-4)));
+  padding: 1px var(--space-2);
+  background: var(--bg-canvas);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-ui-xs);
+  pointer-events: none;
+}
+
 .ui-button {
   min-width: 44px;
-  min-height: 44px;
-  padding: var(--space-3) var(--space-5);
+  min-height: var(--control-height);
+  padding: var(--space-2) var(--space-5);
   color: var(--text-primary);
-  background: var(--bg-surface-raised);
+  background: var(--bg-button);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
+  /* The redesign's buttons are pills; a field stays a rounded rectangle, so
+     a button and an input side by side read as two kinds of thing. */
+  border-radius: var(--radius-pill);
   font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-bold);
+  font-weight: var(--weight-medium);
+  line-height: 1.3;
   overflow-wrap: anywhere;
   transition:
     color var(--motion-fast) ease,
@@ -201,21 +290,34 @@
 }
 
 .ui-button--primary {
-  color: var(--bg-canvas);
+  color: var(--text-on-accent);
   background: var(--accent);
   border-color: var(--accent);
 }
 
 .ui-button--primary:hover:not(:disabled) {
-  color: var(--bg-canvas);
+  color: var(--text-on-accent);
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
 
-.ui-button--secondary,
-.ui-button--quiet {
+.ui-button--secondary {
   color: var(--text-primary);
-  background: var(--bg-surface-raised);
+  background: var(--bg-button);
+}
+
+/* A quiet button is the lesser action beside a primary one: an outline with
+   no fill. It keeps its outline because many screens use it on its own
+   ("Reload", "Refresh"), where a borderless word would not read as a button. */
+.ui-button--quiet {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.ui-button--quiet:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-default);
 }
 
 .ui-button--danger {
@@ -240,85 +342,18 @@
   transform: none;
 }
 
-.ui-card {
-  min-width: 0;
-  max-width: 100%;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  color: var(--text-primary);
-  background: var(--bg-surface-raised);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-}
-
-.ui-card__header,
-.ui-card__body,
-.ui-card__footer {
-  min-width: 0;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-
-.ui-card__header {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-5);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.ui-card__header h2,
-.ui-card__header p {
-  min-width: 0;
-  margin: var(--space-1) 0;
-  overflow-wrap: anywhere;
-}
-
-.ui-card__header h2 {
-  color: var(--text-primary);
-  font-size: var(--font-size-heading-sm);
-  font-weight: var(--weight-bold);
-}
-
-.ui-card__header p {
-  color: var(--text-secondary);
-  font-size: var(--font-size-body-sm);
-}
-
-.ui-card__body {
-  flex: 1 1 auto;
-  padding: var(--space-5);
-  overflow: auto;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.ui-card__footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border-subtle);
-}
-
-.ui-card__footer > * {
-  min-width: 0;
-  max-width: 100%;
-}
-
 .ui-notice {
   min-width: 0;
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  padding: var(--space-4);
-  color: var(--text-primary);
-  background: var(--bg-surface-raised);
-  border: 1px solid var(--border-default);
-  border-inline-start-width: 3px;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
   border-radius: var(--radius-md);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
@@ -330,46 +365,45 @@
 }
 
 .ui-notice__heading {
-  color: var(--text-primary);
+  color: inherit;
   font-size: var(--font-size-body-sm);
   font-weight: var(--weight-bold);
   overflow-wrap: anywhere;
 }
 
 .ui-notice--info {
+  color: var(--info-text);
   background: var(--info-soft);
-  border-color: var(--info-border);
-  border-inline-start-color: var(--info);
+  border-color: var(--info-line);
 }
 
 .ui-notice--success {
+  color: var(--success-text);
   background: var(--success-soft);
   border-color: var(--success-border);
-  border-inline-start-color: var(--success);
 }
 
 .ui-notice--warning {
+  color: var(--warning-text);
   background: var(--warning-soft);
   border-color: var(--warning-border);
-  border-inline-start-color: var(--warning);
 }
 
 .ui-notice--danger {
+  color: var(--danger-text);
   background: var(--danger-soft);
   border-color: var(--danger-border);
-  border-inline-start-color: var(--danger);
 }
 
 .ui-operation-feedback {
   min-width: 0;
-  min-height: 44px;
+  min-height: var(--control-height);
   display: flex;
   align-items: center;
   padding: var(--space-3) var(--space-4);
   color: var(--text-secondary);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  border-inline-start-width: 3px;
   border-radius: var(--radius-md);
   overflow-wrap: anywhere;
 }
@@ -384,36 +418,28 @@
   word-break: break-word;
 }
 
-.ui-operation-feedback--neutral {
-  border-inline-start-color: var(--border-strong);
-}
-
 .ui-operation-feedback--info {
-  color: var(--info);
+  color: var(--info-text);
   background: var(--info-soft);
   border-color: var(--info-border);
-  border-inline-start-color: var(--info);
 }
 
 .ui-operation-feedback--success {
   color: var(--success-text);
   background: var(--success-soft);
   border-color: var(--success-border);
-  border-inline-start-color: var(--success);
 }
 
 .ui-operation-feedback--warning {
-  color: var(--warning);
+  color: var(--warning-text);
   background: var(--warning-soft);
   border-color: var(--warning-border);
-  border-inline-start-color: var(--warning);
 }
 
 .ui-operation-feedback--danger {
   color: var(--danger-text);
   background: var(--danger-soft);
   border-color: var(--danger-border);
-  border-inline-start-color: var(--danger);
 }
 
 .ui-tab-set {
@@ -427,23 +453,45 @@
   min-width: 0;
   max-width: 100%;
   display: flex;
-  gap: var(--space-2);
+  gap: var(--space-1);
   overflow-x: auto;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-row);
   scrollbar-color: var(--border-strong) var(--bg-surface);
+}
+
+/* B2: a strip narrower than its tabs fades out at each end that hides tabs,
+   so the cut tab reads as "more this way" rather than as the last one. TabSet
+   sets the attributes from the scroll position, and scrolls the selected tab
+   past the fade (CUE_WIDTH_PX in TabSet.tsx is this width). The mask is
+   alpha only: black is "shown", transparent is "faded". */
+.ui-tab-set__list {
+  --tab-strip-cue: 40px;
+}
+
+.ui-tab-set__list[data-more-end] {
+  mask-image: linear-gradient(to left, transparent, black var(--tab-strip-cue));
+}
+
+.ui-tab-set__list[data-more-start] {
+  mask-image: linear-gradient(to right, transparent, black var(--tab-strip-cue));
+}
+
+.ui-tab-set__list[data-more-start][data-more-end] {
+  mask-image: linear-gradient(to right, transparent, black var(--tab-strip-cue),
+    black calc(100% - var(--tab-strip-cue)), transparent);
 }
 
 .ui-tab {
   min-width: 44px;
-  min-height: 44px;
+  min-height: var(--control-height);
   flex: 0 0 auto;
   padding: var(--space-3) var(--space-4);
-  color: var(--text-secondary);
+  color: var(--text-muted);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
+  border-radius: 0;
+  font-size: var(--font-size-body);
+  font-weight: 500;
   text-align: center;
   overflow-wrap: anywhere;
   transition:
@@ -454,7 +502,6 @@
 
 .ui-tab:hover:not(:disabled) {
   color: var(--text-primary);
-  background: var(--bg-hover);
 }
 
 .ui-tab:focus-visible {
@@ -463,10 +510,10 @@
   box-shadow: 0 0 0 3px var(--accent-deep);
 }
 
+/* The current tab is the one place a tab strip uses the accent: a 2 px rule
+   under a white word. No box, so a strip reads as a row of words. */
 .ui-tab--selected {
   color: var(--text-primary);
-  background: var(--bg-surface-raised);
-  border-color: var(--border-default);
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 
@@ -484,11 +531,8 @@
 .ui-tab-set__panel {
   min-width: 0;
   max-width: 100%;
-  padding: var(--space-4);
+  padding: var(--space-2) 0 0;
   color: var(--text-primary);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
   overflow: auto;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -496,7 +540,7 @@
 
 .ui-unavailable-value {
   min-width: 44px;
-  min-height: 44px;
+  min-height: var(--control-height);
   max-width: 100%;
   display: inline-flex;
   align-items: center;
@@ -513,6 +557,8 @@
 }
 
 .status-pill {
+  --pill-dot: var(--dot-off);
+  --pill-halo: transparent;
   min-width: 0;
   min-height: 28px;
   max-width: 100%;
@@ -520,26 +566,29 @@
   flex: 0 0 auto;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-1) var(--space-3);
   color: var(--text-secondary);
-  background: var(--bg-surface);
+  background: transparent;
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-status);
-  font-family: var(--font-family-data);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-family-sans);
   font-size: var(--font-size-body-sm);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
+  /* The board's pill is regular weight; the colour carries the tone. */
+  font-weight: 400;
+  line-height: 1.3;
   overflow-wrap: anywhere;
 }
 
+/* The dot and the word are one value: a tone sets both, through the two
+   custom properties above, and nothing else colours the dot. */
 .status-pill__dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   flex: 0 0 auto;
   display: inline-block;
-  background: currentColor;
+  background: var(--pill-dot);
   border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--pill-halo);
 }
 
 .status-pill--neutral {
@@ -547,45 +596,134 @@
 }
 
 .status-pill--info {
-  color: var(--info);
-  background: var(--info-soft);
-  border-color: var(--info-border);
+  --pill-dot: var(--info);
+  --pill-halo: var(--info-halo);
+  color: var(--info-text);
+  border-color: var(--info-line);
 }
 
 .status-pill--success {
+  --pill-dot: var(--success);
+  --pill-halo: var(--success-halo);
   color: var(--success-text);
-  background: var(--success-soft);
   border-color: var(--success-border);
 }
 
 .status-pill--warning {
-  color: var(--warning);
-  background: var(--warning-soft);
+  --pill-dot: var(--warning);
+  --pill-halo: var(--warning-halo);
+  color: var(--warning-text);
   border-color: var(--warning-border);
 }
 
 .status-pill--danger {
+  --pill-dot: var(--danger);
+  --pill-halo: var(--danger-halo);
   color: var(--danger-text);
-  background: var(--danger-soft);
   border-color: var(--danger-border);
 }
 
+/* Not read: nothing was measured, so the dot is hollow and dashed - never a
+   filled light that could be taken for a reading. */
+.status-pill--unread .status-pill__dot {
+  width: 6px;
+  height: 6px;
+  background: transparent;
+  border: 1.5px dashed var(--text-unread);
+  box-shadow: none;
+}
+
+/* Old: the last good reading, marked as old by a dashed outline and its age
+   in words. Grey whatever it last said. */
+.status-pill--stale {
+  color: var(--text-secondary);
+  border-style: dashed;
+}
+
+.panel-heading {
+  border-bottom-color: var(--border-row);
+}
+
+.panel-heading h2 {
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+}
+
+/*
+ * Disclosure affordance (moved here from the professional-polish.css override
+ * layer: it is a primitive every page uses, not one page's polish).
+ *
+ * A `<summary>` is only recognisable as expandable if something on it says so.
+ * Two places drew their own chevron; everywhere else the control was styled
+ * with `display: flex` or a colour change, which removes the browser's native
+ * triangle and leaves what looks like inert bold text. One marker is drawn for
+ * every disclosure in the product, and the native one is suppressed so the two
+ * can never appear together.
+ *
+ * Two summaries are excluded because they are fixed-column grids whose layout
+ * an extra generated box would break: the sidebar's mobile "More" nav item, and
+ * the numbered custom-agent step groups. Both already carry their own icon.
+ */
+details:not(.custom-agent-step-group) > summary:not(.nav-item) {
+  cursor: pointer;
+  list-style: none;
+}
+
+details:not(.custom-agent-step-group) > summary:not(.nav-item)::-webkit-details-marker {
+  display: none;
+}
+
+details:not(.custom-agent-step-group) > summary:not(.nav-item)::before {
+  content: "";
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  margin-right: var(--space-2);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid currentColor;
+  transition: transform var(--motion-fast) ease;
+}
+
+details[open]:not(.custom-agent-step-group) > summary:not(.nav-item)::before {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  details:not(.custom-agent-step-group) > summary:not(.nav-item)::before {
+    transition: none;
+  }
+}
+
+/*
+ * Every disclosure is a target at least 24 px high (WCAG 2.5.8), and a full
+ * 44 px touch target on a phone or a touch screen (polish audit, cause 10: 18
+ * summaries measured under 24 px on desktop and 98 under 44 px on a phone).
+ * Zero specificity on purpose: a screen that sizes its own summary still wins,
+ * and `align-content` centres the line without changing the summary's display.
+ * Because a screen rule wins, a screen that sizes a summary sizes it with
+ * --target-min too (or a phone rule of its own); a literal there kept the
+ * desktop floor on a phone (polish review R12; held by
+ * styles/sharedPrimitivesPolish.test.ts).
+ */
+:where(details) > summary:where(:not(.nav-item)) {
+  min-block-size: var(--target-min);
+  align-content: center;
+}
+
+/*
+ * A tab panel is in the tab order (TabSet gives it tabindex=0, so a panel with
+ * no control in it can still be reached), so it shows where focus is. Screen
+ * rules removed the ring on two of them (`outline: none` on the Applications
+ * and Manage panels); this beats them on specificity, not on import order.
+ */
+.ui-tab-set__panel[tabindex]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 @media (max-width: 720px) {
-  .ui-card__header,
-  .ui-card__body {
-    padding: var(--space-4);
-  }
-
-  .ui-card__footer {
-    align-items: stretch;
-    padding: var(--space-4);
-  }
-
-  .ui-card__footer .ui-button-wrap,
-  .ui-card__footer .ui-button {
-    width: 100%;
-  }
-
   .ui-button-wrap {
     max-width: 100%;
   }
@@ -632,6 +770,12 @@
 
   .status-pill__dot {
     background: currentColor;
+  }
+
+  /* Still hollow: "not read" is never drawn as a filled light (review L5). */
+  .status-pill--unread .status-pill__dot {
+    background: transparent;
+    border-color: currentColor;
   }
 }
 

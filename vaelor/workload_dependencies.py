@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from .managed_local_credentials import PREFIX as MANAGED_CREDENTIAL_PREFIX
 from .workload_inventory import model_file_identity
+from .workload_models import model_removal_refusal
 
 
 RESOURCE_KINDS = {"app", "model", "runtime"}
@@ -231,16 +232,21 @@ class WorkloadDependencyService:
             model = next((item for item in models if item.get("id") == clean_id), None)
             if model is None:
                 raise DependencyError("Choose a downloaded managed model.")
+            refusal = model_removal_refusal(model)
+            if refusal:
+                raise DependencyError(refusal)
             display_identity = str(model.get("display_identity") or model["name"])
             resource = {
                 "kind": "model", "name": display_identity,
                 "display_identity": display_identity,
                 **self._model_binding(model),
             }
-            if model.get("in_use"):
+            # The Assistant's runtime serving it, or configured to (ACC-106:
+            # `selected` is the compose file naming it, running or not).
+            if model.get("in_use") or model.get("selected"):
                 dependencies.append(self._edge(
                     "runtime", "model-assistant", "Managed llama.cpp runtime",
-                    "loads-model", active=True, blocking=True,
+                    "loads-model", active=bool(model.get("in_use")), blocking=True,
                 ))
                 dependencies.extend(self._runtime_edges(data, actor))
                 dependencies = [
@@ -283,6 +289,10 @@ class WorkloadDependencyService:
                 "Active dependents block removal unless cascade is explicitly approved.",
                 "Backup, dependent removal, and retained data are separate choices.",
                 "The dependency graph is checked again immediately before execution.",
+                # W6 sweep: removal never deletes container images, which other
+                # apps may share and which nothing records as this app's own.
+                "Container images it downloaded stay on this machine; other apps "
+                "may use them, so Vaelor does not delete them.",
             ],
         }
 

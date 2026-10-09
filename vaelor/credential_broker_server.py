@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import socketserver
 from pathlib import Path
@@ -11,10 +12,23 @@ from typing import Any, Dict, Optional
 
 from .credential_broker import (
     MAX_REQUEST_BYTES,
+    REQUEST_TOO_LARGE,
     CredentialError,
     CredentialVault,
 )
+from .credential_broker_client import VERB_FAILED
+from .credential_use import record_use
 from .runtime_paths import env_value, run_path, state_path
+
+LOGGER = logging.getLogger(__name__)
+
+#: A verb that raised anything but a `CredentialError` answers with
+#: `credential_broker_client.VERB_FAILED` (its owner, where the client reads it
+#: as "no answer, retry"). The traceback goes to the journal; the client gets a
+#: sentence, never an empty frame - an empty frame is what the first live
+#: ``FileNotFoundError`` inside ``vault.list`` produced, and it reached the AI
+#: Chat page as an HTTP 500 rather than as the degraded answer a broker error
+#: is (VD-127).
 
 
 def dispatch(vault: CredentialVault, request: Dict[str, Any]) -> Any:
@@ -49,6 +63,34 @@ def dispatch(vault: CredentialVault, request: Dict[str, Any]) -> Any:
             payload.get("credential_id", ""), payload.get("purpose", ""),
             payload.get("actor", ""),
         ),
+        "mint": lambda: vault.mint(
+            payload.get("endpoint_id", ""), payload.get("label", ""),
+        ),
+        "rotate": lambda: vault.rotate(
+            payload.get("credential_id", ""), payload.get("endpoint_id", ""),
+        ),
+        "revoke": lambda: vault.revoke(
+            payload.get("credential_id", ""), payload.get("endpoint_id", ""),
+        ),
+        # F3b-ii: the executor's gate renderer sources its key SET over the socket
+        # (design section 2's "a socket verb is added THEN"), and the control-plane
+        # migration imports the pre-F3b-ii key over it. Both hand plaintext only to
+        # an in-group caller reaching the 0o660 socket, the same trust boundary
+        # ``resolve`` leases a secret across; ``import_key`` refuses a populated
+        # endpoint, so it can only ever establish a first key, never plant a second.
+        "endpoint_keys": lambda: {
+            "keys": vault.endpoint_keys(payload.get("endpoint_id", "")),
+        },
+        "import_key": lambda: vault.import_key(
+            payload.get("endpoint_id", ""), payload.get("key", ""),
+            payload.get("label", ""),
+        ),
+        # ACC-107 / ACC-043: the one writer of `last_used_at` for a real use. It
+        # decrypts nothing and only moves the stamp forward, so an in-group
+        # caller can at worst make a key look recently used - never read one.
+        "record_use": lambda: record_use(
+            vault, payload.get("credential_id", ""), payload.get("used_at"),
+        ),
     }
     if operation not in operations:
         raise CredentialError("Unsupported credential broker operation.")
@@ -60,11 +102,14 @@ class CredentialRequestHandler(socketserver.StreamRequestHandler):
         raw = self.rfile.readline(MAX_REQUEST_BYTES + 1)
         try:
             if len(raw) > MAX_REQUEST_BYTES:
-                raise CredentialError("Credential broker request is too large.")
+                raise CredentialError(REQUEST_TOO_LARGE)
             data = dispatch(self.server.vault, json.loads(raw.decode("utf-8")))
             response = {"ok": True, "data": data}
         except (CredentialError, json.JSONDecodeError, UnicodeDecodeError) as error:
             response = {"ok": False, "error": str(error)[:240]}
+        except Exception:  # noqa: BLE001 - the verb's failure is the answer, not silence
+            LOGGER.exception("A credential broker operation failed.")
+            response = {"ok": False, "error": VERB_FAILED}
         self.wfile.write(
             json.dumps(response, separators=(",", ":")).encode("utf-8") + b"\n"
         )

@@ -9,7 +9,9 @@ import {
 } from "../lib/operationOwner";
 import { timeAgo } from "../lib/format";
 import { Button, Card, Input, Notice, OperationFeedback, Textarea, type OperationState as FeedbackState } from "./ui";
+import type { StatusTone } from "./ui/status";
 import { OperationAuditDialog } from "./OperationAuditDialog";
+import { StatusPill } from "./StatusPill";
 
 type MaybePromise = void | Promise<unknown>;
 type OwnerAction = OperationAction | "correct";
@@ -52,6 +54,8 @@ export interface OperationOwnerProps {
   description?: ReactNode;
   className?: string;
   children?: ReactNode;
+  /** The owner's own next steps (Change port, Review and deploy), first in the action row. */
+  actions?: ReactNode;
 }
 
 type Feedback = {
@@ -95,6 +99,20 @@ function operationStateLabel(value: string): string {
     interrupted: "Needs attention", cancelled: "Cancelled", superseded: "Superseded",
   };
   return known[value] ?? humanize(value);
+}
+
+/**
+ * The state pill's colour (the AppsSetupActivity board): blue while it works,
+ * green only once it finished well, red when it failed, amber when it needs a
+ * person. Waiting, paused, ended-without-outcome and silent are grey: a
+ * running operation that has stopped reporting is not shown as working.
+ */
+function operationStateTone(value: string, stalled: boolean): StatusTone {
+  if (["completed", "healthy"].includes(value)) return "success";
+  if (["failed", "rejected"].includes(value)) return "danger";
+  if (["blocked", "interrupted"].includes(value)) return "warning";
+  if (value === "running") return stalled ? "neutral" : "info";
+  return "neutral";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -346,6 +364,7 @@ export function OperationOwner({
   description,
   className,
   children,
+  actions,
 }: OperationOwnerProps) {
   const generatedId = useId().replaceAll(":", "");
   const [correctionValues, setCorrectionValues] = useState<Record<string, string>>({});
@@ -483,7 +502,9 @@ export function OperationOwner({
           <span className="operation-owner__eyebrow">Current step</span>
           <strong>{currentStep}</strong>
         </div>}
-        <span className="operation-owner__state" data-state={operation.state}>{operationStateLabel(operation.state)}</span>
+        <span className="operation-owner__state" data-state={operation.state}>
+          <StatusPill label={operationStateLabel(operation.state)} tone={operationStateTone(operation.state, stalled)} />
+        </span>
       </div>
 
       {operationIsTerminal(operation.state) ? (
@@ -621,6 +642,7 @@ export function OperationOwner({
 
       {!readOnly && (
         <footer className="operation-owner__actions" aria-label="Operation actions">
+          {actions}
           {actionButton("cancel", canCancel, controller?.cancel)}
           {actionButton("retry", canRetry, controller?.retry)}
           {actionButton("resume", canResume, controller?.resume)}

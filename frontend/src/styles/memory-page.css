@@ -1,0 +1,273 @@
+/*
+ * The Memory page, `#/memory` (VD-200: the MemoryPage board). What Vaelor
+ * remembers for both AI surfaces: four counts, the teach form beside the
+ * recent conversations, then the reviewed memories with their search.
+ *
+ * Tokens only. The `mp-` prefix keeps these clear of the pre-redesign
+ * memory-* rules in memory-center.css; `.memory-page.mp-page` outranks that
+ * file's `.memory-page` grid.
+ */
+
+.memory-page.mp-page {
+  max-width: 1240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.mp-page > * {
+  min-width: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+/* The board's quiet second line under the title: 14 px, grey. */
+.mp-page .ui-page-header__title > span {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+  letter-spacing: 0;
+  line-height: 1.5;
+}
+
+/* "Local & private": a fact about the store, so an outline with no state dot. */
+.mp-local {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-row-active);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-xs);
+}
+
+.mp-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 14px;
+}
+
+/* Teach (wider) beside Recent conversations; one column when narrow. */
+.mp-split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.mp-teach {
+  flex: 3 1 460px;
+  min-width: 0;
+}
+
+.mp-recent {
+  flex: 2 1 340px;
+  min-width: 0;
+}
+
+.mp-teach__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.mp-teach__grid {
+  gap: 12px;
+}
+
+.mp-teach__check {
+  padding: 12px 14px;
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+.mp-teach__submit .ui-button-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.mp-teach__submit .ui-button__disabled-reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* An outline tag: a memory's kind and scope, the search engine. */
+.mp-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-row-active);
+  border-radius: 6px;
+  font-size: var(--font-size-ui-xs);
+}
+
+.mp-conversation {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.mp-conversation > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mp-conversation__icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: var(--text-secondary);
+  background: var(--bg-icon);
+  border: 1px solid var(--border-icon);
+  border-radius: var(--radius-md);
+}
+
+.mp-conversation__title {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+}
+
+.mp-unread {
+  margin: 0;
+  padding: 16px 18px;
+}
+
+/* Reviewed memories: the label and name, then search at the right. */
+.mp-library {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mp-library__header {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.mp-library__header .ui-card__titles h2 {
+  margin: 2px 0 0;
+}
+
+.mp-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mp-search .ui-field {
+  min-width: 0;
+}
+
+.mp-search__input {
+  width: min(100%, 240px);
+}
+
+.mp-memory {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  border-top: 1px solid var(--border-list);
+}
+
+.mp-memory--pinned {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.mp-memory__tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mp-pinned {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  color: var(--accent-text);
+  border: 1px solid var(--accent-deep);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-ui-xs);
+}
+
+.mp-memory__text {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.mp-memory__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+}
+
+.mp-memory__foot > .as-small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mp-memory__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* The "Remember this?" review: the exact words, quoted. */
+.mp-review__content {
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--text-primary);
+  background: var(--bg-control);
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .mp-teach__form,
+  .mp-conversation,
+  .mp-memory {
+    padding-inline: 16px;
+  }
+
+  .mp-search,
+  .mp-search__input {
+    width: 100%;
+  }
+
+  .mp-search .ui-field {
+    flex: 1 1 100%;
+  }
+
+  .mp-memory__actions {
+    margin-left: 0;
+  }
+}
+
+/* The button is a block by default, where gap does nothing: the icon sat against "Search" (VD-200 review). */
+.ui-button.mp-search__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

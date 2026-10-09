@@ -14,6 +14,7 @@ from .data_logger import DataLogger
 from .database import Database
 from .telemetry_store import (
     DEFAULT_RETENTION_DAYS,
+    HISTORY_MEASUREMENT,
     TELEMETRY_STORE_NAME,
     RetentionState,
     TelemetryStoreError,
@@ -25,6 +26,13 @@ from .telemetry_store import (
     resolve_settings,
     start_retention,
 )
+from .serving_store import SERVING_MEASUREMENT, latest_serving, record_serving
+from .performance_dashboard_wiring import ROLLUP_STATE_KEY, dashboard_callbacks, start_rollup
+
+#: The Performance dashboard's own reader, colour slots and roll-up progress
+#: (VD-147 S4): one set per process, spread into the API callbacks below.
+__dashboard_sources__ = dashboard_callbacks(TELEMETRY_STORE_NAME, DEFAULT_RETENTION_DAYS)
+from .generation_health import serving_window_totals
 from .utils import log_error
 from .runtime_paths import LOG_ROOT, env_value
 from .legacy_v1_routes import API_PREFIX, register_legacy_v1_routes
@@ -178,6 +186,81 @@ def _telemetry_source():
     return history_source(__db__, state, __telemetry_start_failure__)
 
 
+def _telemetry_ingest_write(node_id, points):
+    """Store validated worker telemetry, each row tagged with the node id.
+
+    Reads the same retention state `_telemetry_source` exposes, so an off,
+    starting, failed or unreadable store raises the store's own
+    `TelemetryStoreError` - which the ingest route maps to a 503 - rather than
+    silently discarding a worker's telemetry. The stored `node` tag comes from
+    the AUTHENTICATED `node_id` the route resolved, never from the payload.
+    """
+    database = _telemetry_source()  # raises in the STARTING / FAILED states
+    if database is None:
+        raise TelemetryStoreError(
+            "Telemetry retention is switched off, so ingested telemetry cannot "
+            "be stored."
+        )
+    written = 0
+    for point in points:
+        accepted, detail = database.set_tagged(
+            HISTORY_MEASUREMENT, {"node": node_id}, point.fields, time=point.time
+        )
+        if not accepted:
+            raise TelemetryStoreError(
+                "the telemetry store rejected an ingested row: {}".format(
+                    " ".join(str(detail).split())
+                )
+            )
+        written += 1
+    return written
+
+
+def _record_serving_sample(gauges):
+    """Store one scraped serving-metrics sample, honest on the retention state.
+
+    The write callback the E′ serving poller calls. It resolves the store
+    through the same `_telemetry_source` the history callbacks use, so it obeys
+    the identical four retention states: `RUNNING` writes, `OFF` writes nothing
+    (the store is None), and `STARTING`/`FAILED` raise `TelemetryStoreError`,
+    which is caught here so a scrape during the boot window degrades to "nothing
+    stored" rather than crashing the poll loop.
+    """
+    try:
+        database = _telemetry_source()
+    except TelemetryStoreError:
+        return False
+    return record_serving(database, gauges)
+
+
+def _latest_serving_sample():
+    """The newest stored serving sample, or None, honest on the retention state.
+
+    The read callback the Performance route calls. Same `_telemetry_source`
+    resolution as the write side, so retention off/starting/failed all degrade to
+    None (nothing to show) rather than a fabricated reading.
+    """
+    try:
+        database = _telemetry_source()
+    except TelemetryStoreError:
+        return None
+    return latest_serving(database)
+
+
+def _serving_window(seconds):
+    """The model's own timings summed over the last ``seconds``, or None.
+
+    The speed verdict's basis (`generation_health`), read from the same store
+    and with the same retention states as the newest sample: off, starting or
+    failed is None - "not known" - never an empty window.
+    """
+    try:
+        database = _telemetry_source()
+    except TelemetryStoreError:
+        return None
+    return serving_window_totals(database, seconds, SERVING_MEASUREMENT)
+
+
 def _v2_current_data():
     if __data_logger__ is None:
         return __read_data__() or {}
@@ -213,6 +296,7 @@ def _telemetry_write_source():
     return __control_plane__.current_data()
 
 
+from .agent_memory import AgentMemoryStore, RetainedTelemetryDatabase
 from .control_plane_runtime import ControlPlaneRuntime
 
 __control_plane__ = ControlPlaneRuntime(__app__, {
@@ -230,14 +314,42 @@ __control_plane__ = ControlPlaneRuntime(__app__, {
     # trend instead of only the newest handful of per-interval rows. Reads the
     # same `_telemetry_source`, so it honours the identical four retention
     # states (off / starting / failed / running) rather than a second rule.
-    "telemetry_history_range": lambda since_seconds, max_points=None: history_range(
-        _telemetry_source(), since_seconds, max_points
+    "telemetry_history_range": lambda since_seconds, max_points=None, node=None, until_seconds=0: history_range(
+        _telemetry_source(), since_seconds, max_points, node=node, until_seconds=until_seconds
     ),
+    # The write side of per-node telemetry (Phase E2a): the keyed ingest route
+    # hands validated points here and they are stored tagged with the
+    # authenticated node. Reads the same retention state as the range callback.
+    "telemetry_ingest_write": lambda node_id, points: _telemetry_ingest_write(
+        node_id, points
+    ),
+    # How many of this controller's own readings the bounds table discarded
+    # since it started (VD-147 review S-15): the machine card says so.
+    "telemetry_implausible": lambda: (
+        __data_logger__.implausible_dropped if __data_logger__ is not None else 0
+    ),
+    **__dashboard_sources__,
+    # The serving-metrics scrape (Phase E′): the controller's poller writes the
+    # GPU llama.cpp engine's live gauges here, and the Performance route reads the
+    # newest sample back. Both resolve the store through `_telemetry_source`, so
+    # they honour the same four retention states and degrade to nothing rather
+    # than a fabricated reading when the store is off/starting/failed.
+    "serving_metrics_record": lambda gauges: _record_serving_sample(gauges),
+    "serving_metrics_latest": lambda: _latest_serving_sample(),
+    # The same scrape's per-tick timing fields summed over a window: time to
+    # first word and writing speed, which the request card is judged on.
+    "serving_metrics_window": lambda seconds: _serving_window(seconds),
     # The configured-vs-applied retention period and state, so the override
     # (#186) is visible on /api/v2 rather than only in the boot journal.
     # Deferred through a lambda: the function is defined further down, after the
     # retention start path it sits beside.
     "telemetry_retention": lambda: telemetry_retention_status(),
+    # A deployed cluster agent's private memory (F5a/ACC-132). Kept in the same
+    # telemetry store, resolved per call through `_telemetry_source` so the four
+    # retention states answer honestly (off/starting/failed are a 503, never an
+    # empty recall). Before this line the memory routes read a callback nothing
+    # in the running product supplied; only their test injected it.
+    "agent_memory": AgentMemoryStore(RetainedTelemetryDatabase(_telemetry_source)),
 })
 
 
@@ -432,6 +544,11 @@ def start_telemetry_retention():
         # there yet.
         __telemetry_retention__ = retention
         __telemetry_state__ = RetentionState.RUNNING
+        # The dashboard's one-minute roll-up: created once, backfilled in the
+        # background, retried after a failure; until it is ready the dashboard
+        # reads raw rows for every range (`performance_dashboard_wiring`).
+        start_rollup(__dashboard_sources__["telemetry_reader"], DEFAULT_RETENTION_DAYS,
+                     state=__dashboard_sources__[ROLLUP_STATE_KEY])
         return __telemetry_retention__
 
 

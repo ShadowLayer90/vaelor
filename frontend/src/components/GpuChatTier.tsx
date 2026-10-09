@@ -29,19 +29,38 @@ export interface GpuChatTierResult {
   fit_mode?: "gpu" | "partial" | "cpu" | string;
   /** A ready-to-show human sentence from the backend. Printed verbatim. */
   fit_reason?: string;
+  /**
+   * What GPU memory showed once the server was up: `resident` is `true`,
+   * `false`, or `null` when the adapter could not be read.
+   */
+  gpu_residency?: { resident?: boolean | null } | null;
 }
 
 /**
- * The three fit verdicts, each with the headline and the pill tone the task
- * fixes. A partial offload is information, not a fault, and a CPU-only run is an
- * honest "does not fit the GPU budget" rather than a failure — so neither is
- * painted as a degradation.
+ * Where the model runs, from the plan AND the measurement (ACC-096).
+ *
+ * `fit_mode` is what the deploy planned; `gpu_residency.resident` is whether
+ * GPU memory actually rose by a model's worth. The pill used to read green
+ * "Running fully on the GPU" off the plan alone, beside an Accelerator pill
+ * that could not establish anything. A CPU-only plan needs no measurement and
+ * is not a fault; a GPU plan is only "running on the GPU" once it is measured
+ * there, is a fault when memory shows it did not load, and says it is
+ * unconfirmed when the adapter could not be read.
  */
-const FIT_HEADLINES: Record<string, { headline: string; tone: StatusTone }> = {
-  gpu: { headline: "Running fully on the GPU", tone: "success" },
-  partial: { headline: "Partly on the GPU, the rest on the CPU", tone: "info" },
-  cpu: { headline: "Running on the CPU", tone: "neutral" },
-};
+function whereItRuns(result: GpuChatTierResult): { headline: string; tone: StatusTone } | undefined {
+  const mode = result.fit_mode;
+  if (!mode) return undefined;
+  if (mode === "cpu") return { headline: "Running on the CPU", tone: "neutral" };
+  if (mode !== "gpu" && mode !== "partial") return { headline: "Reported", tone: "neutral" };
+  const resident = result.gpu_residency?.resident;
+  if (resident === true) {
+    return mode === "gpu"
+      ? { headline: "Running fully on the GPU", tone: "success" }
+      : { headline: "Partly on the GPU, the rest on the CPU", tone: "info" };
+  }
+  if (resident === false) return { headline: "Meant for the GPU, but it did not load there", tone: "danger" };
+  return { headline: "Planned for the GPU, not confirmed", tone: "neutral" };
+}
 
 /**
  * Whether a deploy result carries the GPU AI-Chat descriptors at all. Only a
@@ -65,10 +84,8 @@ export function GpuChatTier({
   const Heading = headingLevel;
   const optimized = result.optimized === true;
   // An unrecognised fit_mode still prints its reason, under a neutral pill —
-  // "not established", never invented into one of the three verdicts.
-  const fit = result.fit_mode
-    ? FIT_HEADLINES[result.fit_mode] ?? { headline: "Reported", tone: "neutral" as StatusTone }
-    : undefined;
+  // "not established", never invented into one of the verdicts.
+  const fit = whereItRuns(result);
   return (
     <section aria-label={title} className="acceleration-verdict">
       <Heading>{title}</Heading>

@@ -7,10 +7,13 @@ does not update, merge, or otherwise rewrite either ledger while projecting.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any, Dict, Optional
 from urllib.parse import quote
+
+LOGGER = logging.getLogger(__name__)
 
 
 OPERATION_SCHEMA = "vaelor.operation.v1"
@@ -59,6 +62,104 @@ ACTIVE_OPERATION_STATES = frozenset({
 #: the server owns it here and the frontend renders ``staleness.stale``.
 OPERATION_STALE_AFTER_SECONDS = 60 * 60
 STALE_REPORTING_STATES = frozenset({"running"})
+#: ACC-125. The Activity page's summary tiles - in progress, need attention,
+#: finished - are a partition of every operation, and they used to be computed
+#: in the browser over the newest fifty, so a failure older than the fiftieth
+#: operation silently left "need attention". The partition is answered here,
+#: once, over every row both ledgers hold, and the console renders it: an
+#: operation :func:`needs_attention` says so is "need attention"; otherwise a
+#: terminal one is finished and anything else - `draft` included - is in
+#: progress.
+ACTIVITY_IN_PROGRESS = "in_progress"
+ACTIVITY_ATTENTION = "attention"
+ACTIVITY_FINISHED = "finished"
+ACTIVITY_BUCKETS = (ACTIVITY_IN_PROGRESS, ACTIVITY_ATTENTION, ACTIVITY_FINISHED)
+
+#: VD-139, the owner's ONE "needs attention" rule (2026-09-28): an operation
+#: needs attention when it is in one of these states AND it has not since been
+#: resolved - by a later successful retry of it, or by the owner dismissing it.
+#: The job ledger used to count failed / needs-approval / paused / unknown rows
+#: cleared only by a successful retry while Activity counted only failed rows
+#: cleared by ANY later attempt, so one question had two answers. Every surface
+#: that counts or lists attention now asks :func:`needs_attention`: the
+#: Activity tiles and ``?bucket=attention``, ``JobStore.ledger`` (and through
+#: it ``/jobs?summary`` and the metrics export), and the console, which renders
+#: the server's ``needs_attention`` rather than deciding again.
+#: ``unknown`` is the job projection's own word for a state it could not map:
+#: an operation Vaelor cannot read is not known to be fine, so it is counted
+#: rather than quietly left out (review nit on VD-139).
+ATTENTION_STATES = frozenset({"failed", "needs_approval", "paused", "unknown"})
+#: A later attempt in one of these states resolves the failures it retried.
+RETRY_RESOLVING_STATES = frozenset({"completed", "healthy"})
+#: The states a retry can resolve (the ones an operation is retried from).
+RETRY_RESOLVABLE_STATES = frozenset({"failed", "cancelled"})
+
+
+def needs_attention(state: str, *, resolved_by_retry: bool = False, dismissed: bool = False) -> bool:
+    """THE answer to "does this operation need the owner?" (VD-139).
+
+    ``state`` is the canonical operation state; ``resolved_by_retry`` is
+    whether a later successful attempt retried it (:func:`retry_resolved_ids`);
+    ``dismissed`` is whether the owner dismissed it. Whether a retry is even
+    possible plays no part: a failure that cannot be retried (a destructive
+    recovery, say) is cleared by a dismissal.
+    """
+    return state in ATTENTION_STATES and not resolved_by_retry and not dismissed
+
+
+def retry_resolved_ids(records: Any, state_of: Any) -> set:
+    """The ids of every record a later SUCCESSFUL attempt retried, transitively.
+
+    ``records`` carry ``id`` and ``retry_of``; ``state_of(record)`` is its
+    canonical state. Each record in :data:`RETRY_RESOLVING_STATES` resolves
+    every ancestor on its ``retry_of`` chain that is in
+    :data:`RETRY_RESOLVABLE_STATES`. An attempt still running, or one that
+    failed too, resolves nothing. Ancestors outside ``records`` end the walk.
+    """
+    by_id = {str(record["id"]): record for record in records}
+    resolved: set = set()
+    for record in records:
+        if state_of(record) not in RETRY_RESOLVING_STATES:
+            continue
+        ancestor = record.get("retry_of")
+        visited: set = set()
+        while ancestor and str(ancestor) not in visited:
+            visited.add(str(ancestor))
+            prior = by_id.get(str(ancestor))
+            if prior is None:
+                break
+            if state_of(prior) in RETRY_RESOLVABLE_STATES:
+                resolved.add(str(prior["id"]))
+            ancestor = prior.get("retry_of")
+    return resolved
+
+
+def dismissal_in_force(record: Dict[str, Any]) -> bool:
+    """Whether the owner's dismissal still covers this row (review B1).
+
+    A dismissal is of one attention EPISODE: the row's raw ``state`` and its
+    ``updated_at`` when it was dismissed are recorded with it, and it counts
+    only while the row is still exactly there. Any transition - approved and
+    then failed, failed and then back to waiting - moves ``updated_at`` and
+    starts a new episode, which needs attention again until it too is
+    dismissed or resolved. A row whose recorded episode cannot be read is not
+    dismissed.
+    """
+    if not record.get("dismissed_at"):
+        return False
+    return (
+        str(record.get("dismissed_state") or "") == str(record.get("state") or "")
+        and record.get("dismissed_updated_at") is not None
+        and record.get("updated_at") is not None
+        and float(record["dismissed_updated_at"]) == float(record["updated_at"])
+    )
+
+
+def _dismissal(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Who dismissed this attention item and when, while that dismissal holds."""
+    if not dismissal_in_force(record):
+        return None
+    return {"dismissed_at": record.get("dismissed_at"), "dismissed_by": str(record.get("dismissed_by") or "")}
 _OPERATION_ID = re.compile(r"^(jobs|agent_tasks):([^:]+)$")
 _SECRET_KEY = re.compile(
     r"(?:password|passwd|token|secret|api[_-]?key|authorization|credential|private[_-]?key)",
@@ -249,6 +350,20 @@ def _task_state(record: Dict[str, Any]) -> str:
     }.get(raw, "waiting")
 
 
+def activity_bucket(state: str, *, attention: bool) -> str:
+    """Which Activity tile one operation belongs to; see ``ACTIVITY_BUCKETS``.
+
+    ``attention`` is :func:`needs_attention`'s verdict for it. A dismissed or
+    retry-resolved failure is finished; a dismissed wait for approval is still
+    in progress, because it has not ended.
+    """
+    if attention:
+        return ACTIVITY_ATTENTION
+    if state in TERMINAL_STATES:
+        return ACTIVITY_FINISHED
+    return ACTIVITY_IN_PROGRESS
+
+
 def _job_owner(record: Dict[str, Any]) -> tuple[str, Optional[str]]:
     payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
     job_type = str(record.get("type", ""))
@@ -259,6 +374,7 @@ def _job_owner(record: Dict[str, Any]) -> tuple[str, Optional[str]]:
                 payload.get("draft_id"), payload.get("app_id"),
                 payload.get("instance_id"), payload.get("model_id"),
                 payload.get("project"), payload.get("id"),
+                payload.get("name"),
             ) if value not in (None, "")
         ),
         None,
@@ -267,6 +383,8 @@ def _job_owner(record: Dict[str, Any]) -> tuple[str, Optional[str]]:
         route = "/workloads/applications" if payload.get("draft_id") else "/workloads"
     elif job_type.startswith("model.") or job_type == "agent.deploy":
         route = "/workloads/models"
+    elif job_type.startswith("cluster.agent."):
+        route = "/fleet/agents"
     elif job_type.startswith("cluster."):
         route = "/fleet"
     elif job_type.startswith("host.") or job_type.startswith("system."):
@@ -274,6 +392,56 @@ def _job_owner(record: Dict[str, Any]) -> tuple[str, Optional[str]]:
     else:
         route = "/operations"
     return route, str(resource) if resource not in (None, "") else None
+
+
+#: How far back a retry chain is followed to find the run that started it.
+_MAX_ORIGIN_DEPTH = 20
+
+
+def _retry_chain(
+    record: Dict[str, Any], by_source_id: Optional[Dict[str, Dict[str, Any]]],
+    fetch: Optional[Any] = None,
+) -> list[str]:
+    """The task id and every retry ancestor's id, newest first.
+
+    A retry is a new task whose ``retry_of`` names the one it retried, so a
+    retried alert run is found through the run it retried. ``fetch`` reads an
+    ancestor that is not in ``by_source_id``.
+    """
+    chain: list[str] = []
+    current: Optional[Dict[str, Any]] = record
+    task_id = str(record.get("id") or "")
+    while task_id and task_id not in chain and len(chain) < _MAX_ORIGIN_DEPTH:
+        chain.append(task_id)
+        parent = str((current or {}).get("retry_of") or "")
+        if not parent:
+            break
+        current = (by_source_id or {}).get(parent)
+        if current is None and fetch is not None:
+            current = fetch(parent)
+        task_id = parent
+    return chain
+
+
+def _task_origin(
+    record: Dict[str, Any], by_source_id: Optional[Dict[str, Dict[str, Any]]],
+    origins: Optional[Dict[str, str]],
+) -> str:
+    """Who started an agent task, from the RECORDED run that created it.
+
+    ``origins`` maps a task id to ``alert_rule`` or ``schedule`` from the
+    automation store's run tables (``AutomationStore.task_origins``). The
+    idempotency key is never read: any caller of ``POST /assistant/tasks`` may
+    choose a key shaped like the alert engine's, so it proves nothing (ACC-127
+    review). A retried run keeps the origin of the run it retried. With no run
+    record available the origin is ``""`` - not known - rather than a guess.
+    """
+    if origins is None:
+        return ""
+    for task_id in _retry_chain(record, by_source_id):
+        if task_id in origins:
+            return origins[task_id]
+    return "person"
 
 
 def _task_owner(record: Dict[str, Any]) -> tuple[str, Optional[str]]:
@@ -342,6 +510,7 @@ def _endpoints(
 
 def project_job(
     record: Dict[str, Any], *, by_source_id: Optional[Dict[str, Dict[str, Any]]] = None,
+    attention: Optional[bool] = None,
     detail: bool = False, now: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Adapt one JobStore record into the versioned operation contract."""
@@ -353,7 +522,9 @@ def project_job(
     raw_state = str(record.get("state", ""))
     permissions = {
         "cancel": raw_state not in {"completed", "healthy", "failed", "rejected", "cancelled", "superseded"},  # vocabulary: terminal-state
-        "retry": (raw_state == "failed" and state == "failed") or raw_state == "cancelled",
+        "retry": (
+            (raw_state == "failed" and state == "failed") or raw_state == "cancelled"
+        ) and record.get("retryable", True) is not False,  # CR1: job_projection decides
         "resume": False,
         "discard": False,
     }
@@ -375,6 +546,10 @@ def project_job(
         "owner_route": route,
         "owner_resource": resource,
         "type": str(record.get("type", "job")),
+        # A job is named by its type; only an agent task carries its own title
+        # and a known starter (see project_agent_task). Empty, not guessed.
+        "title": "",
+        "origin": "",
         "state": state,
         "canonical_state": state,
         "source_state": raw_state,
@@ -394,6 +569,12 @@ def project_job(
         "timestamps": _timestamp_fields(record, state),
         "staleness": _staleness(record, state, now=now),
         "cleanup": {"state": cleanup_state, "message": ""},
+        # VD-139: the server's verdict; the console renders it, never re-derives it.
+        "needs_attention": attention if attention is not None else (
+            bool(record["needs_attention"]) if "needs_attention" in record
+            else needs_attention(state, dismissed=dismissal_in_force(record))
+        ),
+        "dismissal": _dismissal(record),
     }
     operation["action_endpoints"] = _endpoints(op_id, permissions)
     operation["endpoints"] = operation["action_endpoints"]
@@ -405,6 +586,7 @@ def project_job(
 def project_agent_task(
     record: Dict[str, Any], *, by_source_id: Optional[Dict[str, Dict[str, Any]]] = None,
     detail: bool = False, now: Optional[float] = None,
+    origins: Optional[Dict[str, str]] = None, attention: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Adapt one AgentTaskStore record into the versioned operation contract."""
     now = time.time() if now is None else float(now)
@@ -434,6 +616,10 @@ def project_agent_task(
         "owner_route": route,
         "owner_resource": resource,
         "type": "agent.task",
+        # The task's own title (it names the rule and the machine for a fired
+        # alert) and who started it, so Activity can say what this was.
+        "title": str(record.get("title") or "")[:300],
+        "origin": _task_origin(record, by_source_id, origins),
         "state": state,
         "canonical_state": state,
         "source_state": raw_state,
@@ -460,6 +646,12 @@ def project_agent_task(
             "state": "completed" if state == "cancelled" else "not_required",
             "message": "",
         },
+        # VD-139: the server's verdict (retry resolution needs the caller's
+        # view of the ledger; without it only the dismissal is known).
+        "needs_attention": attention if attention is not None else needs_attention(
+            state, dismissed=dismissal_in_force(record),
+        ),
+        "dismissal": _dismissal(record),
     }
     operation["action_endpoints"] = _endpoints(op_id, permissions)
     operation["endpoints"] = operation["action_endpoints"]
@@ -474,35 +666,171 @@ def project_agent_task(
 class OperationProjection:
     """Read/adapt both source ledgers and delegate actions to their owners."""
 
-    def __init__(self, job_store: Any, agent_task_store: Any):
+    def __init__(self, job_store: Any, agent_task_store: Any, automations: Any = None):
         self.job_store = job_store
         self.agent_task_store = agent_task_store
+        # The automation store's run tables are what say a task was started by
+        # an alert rule or a schedule; None leaves the origin unknown ("").
+        self.automations = automations
+
+    def _origins(
+        self, records: list[Dict[str, Any]], by_id: Dict[str, Dict[str, Any]],
+    ) -> Optional[Dict[str, str]]:
+        """One resolved origin per record id, or None when origins are unknown.
+
+        Each record's retry chain is walked HERE, reading an ancestor outside
+        the listed window from the store, and the answer is keyed by the
+        record's own id - so the projection never re-walks a shorter chain
+        (a retry of a retry whose ancestors fell out of the window read
+        "person" when it did).
+        """
+        if self.automations is None:
+            return None
+
+        def fetch(task_id: str) -> Optional[Dict[str, Any]]:
+            try:
+                return self.agent_task_store.get(task_id)
+            except Exception as error:  # noqa: BLE001 - an unreadable ancestor ends the chain
+                LOGGER.warning("A retried task's ancestor could not be read: %s", error)
+                return None
+
+        chains = {
+            str(record.get("id") or ""): _retry_chain(record, by_id, fetch)
+            for record in records
+        }
+        ids = sorted({task_id for chain in chains.values() for task_id in chain})
+        try:
+            recorded = self.automations.task_origins(ids)
+        except Exception as error:  # noqa: BLE001 - an unknown origin reads "", never "person"
+            LOGGER.warning("Task origins could not be read from the run records: %s", error)
+            return None
+        return {
+            record_id: next(
+                (recorded[task_id] for task_id in chain if task_id in recorded), "person"
+            )
+            for record_id, chain in chains.items()
+        }
+
+    @staticmethod
+    def _verdicts(jobs: list, tasks: list) -> Dict[str, bool]:
+        """:func:`needs_attention` for every job and task row, by operation id.
+
+        Job rows arrive from ``JobStore.records`` with the verdict attached
+        (the store resolves its own retry lineage by the same rule); task rows
+        are resolved here over the whole task index.
+        """
+        verdicts = {
+            operation_id(LEDGER_JOBS, str(item["id"])): bool(item.get("needs_attention"))
+            for item in jobs
+        }
+        resolved = retry_resolved_ids(tasks, _task_state)
+        for item in tasks:
+            verdicts[operation_id(LEDGER_AGENT_TASKS, str(item["id"]))] = needs_attention(
+                _task_state(item), resolved_by_retry=str(item["id"]) in resolved,
+                dismissed=dismissal_in_force(item),
+            )
+        return verdicts
+
+    def _verdict(self, ledger: str, source_id: str, actor: Optional[str]) -> bool:
+        """The verdict for one operation, read over its whole visible ledger."""
+        if ledger == LEDGER_JOBS:
+            jobs = self.job_store.records(actor) if self.job_store is not None else []
+            return self._verdicts(jobs, []).get(operation_id(ledger, source_id), False)
+        tasks = self.agent_task_store.activity_index(actor) if self.agent_task_store is not None else []
+        return self._verdicts([], tasks).get(operation_id(ledger, source_id), False)
+
+    def dismiss(self, value: str, actor: str, *, allow_all: bool = False) -> Dict[str, Any]:
+        """The owner's "I've dealt with this" for one attention item (VD-139).
+
+        Refused unless the operation needs attention now. The row keeps its
+        state and history; ``dismissed_at``/``dismissed_by`` record who cleared
+        it and when, and every count then leaves it out.
+        """
+        ledger, source_id = parse_operation_id(value)
+        scope = None if allow_all else actor
+        self.get(value, scope, detail=False)  # visibility: raises OperationNotFound
+        if not self._verdict(ledger, source_id, scope):
+            raise OperationActionError(
+                "This operation does not need attention, so there is nothing to dismiss."
+            )
+        store = self.job_store if ledger == LEDGER_JOBS else self.agent_task_store
+        if store is None:
+            raise OperationActionError("This operation's ledger is unavailable.")
+        store.dismiss(source_id, actor, scope=scope)
+        return self.get(value, scope, detail=False)
 
     def list(self, actor: Optional[str] = None, *, ledger: Optional[str] = None, limit: int = 50) -> list[Dict[str, Any]]:
+        return self.page(actor, ledger=ledger, limit=limit)["operations"]
+
+    def page(
+        self, actor: Optional[str] = None, *, ledger: Optional[str] = None,
+        limit: int = 50, bucket: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """The newest ``limit`` operations, and the partition of all of them.
+
+        ``summary`` counts EVERY row the ledgers hold for ``actor`` (ACC-125);
+        ``bucket`` narrows the returned window to one tile, and ``matched`` is
+        how many operations that tile holds, so a window can say what it is a
+        window of. Tasks are indexed from four columns and only the tasks in
+        the window are read in full.
+        """
         safe_limit = max(1, min(int(limit), 200))
         if ledger is not None and ledger not in LEDGERS:
             raise ValueError("Choose jobs or agent_tasks as the operation ledger.")
-        rows: list[tuple[str, Dict[str, Any]]] = []
+        if bucket is not None and bucket not in ACTIVITY_BUCKETS:
+            raise ValueError(
+                "Choose in_progress, attention or finished as the operation bucket.")
+        jobs: list[Dict[str, Any]] = []
+        tasks: list[Dict[str, Any]] = []
         if ledger in (None, LEDGER_JOBS) and self.job_store is not None:
-            try:
-                source = self.job_store.ledger(200, actor=actor).get("jobs", [])
-            except AttributeError:
-                source = self.job_store.list(safe_limit, actor=actor)
-            rows.extend((LEDGER_JOBS, item) for item in source)
+            jobs = self.job_store.records(actor)
         if ledger in (None, LEDGER_AGENT_TASKS) and self.agent_task_store is not None:
-            rows.extend(
-                (LEDGER_AGENT_TASKS, item)
-                for item in self.agent_task_store.list(actor=actor, limit=200)
-            )
+            tasks = self.agent_task_store.activity_index(actor)
+        rows = [(LEDGER_JOBS, item) for item in jobs]
+        rows.extend((LEDGER_AGENT_TASKS, item) for item in tasks)
         rows.sort(key=lambda item: _updated_sort_value(item[1]), reverse=True)
-        job_map = {str(item["id"]): item for source, item in rows if source == LEDGER_JOBS}
-        task_map = {str(item["id"]): item for source, item in rows if source == LEDGER_AGENT_TASKS}
-        projected = [
-            project_job(item, by_source_id=job_map)
-            if source == LEDGER_JOBS else project_agent_task(item, by_source_id=task_map)
-            for source, item in rows[:safe_limit]
-        ]
-        return projected
+        verdicts = self._verdicts(jobs, tasks)
+        summary = {"total": len(rows)}
+        summary.update((name, 0) for name in ACTIVITY_BUCKETS)
+        matching: list[tuple[str, Dict[str, Any]]] = []
+        for source, item in rows:
+            state = _job_state(item) if source == LEDGER_JOBS else _task_state(item)
+            tile = activity_bucket(
+                state, attention=verdicts[operation_id(source, str(item["id"]))],
+            )
+            summary[tile] += 1
+            if bucket is None or tile == bucket:
+                matching.append((source, item))
+        window = matching[:safe_limit]
+        wanted = [str(item["id"]) for source, item in window if source == LEDGER_AGENT_TASKS]
+        full_tasks = {
+            str(item["id"]): item
+            for item in (self.agent_task_store.list_by_ids(wanted, actor) if wanted else [])
+        }
+        job_map = {str(item["id"]): item for item in jobs}
+        task_map = {str(item["id"]): item for item in tasks}
+        # Who started each task in the window (a person, an alert rule, a
+        # schedule), walked over the index and read from the automation run
+        # records; without it Activity shows every origin as "" (ACC-127).
+        origins = self._origins(list(full_tasks.values()), task_map)
+        operations = []
+        for source, item in window:
+            verdict = verdicts[operation_id(source, str(item["id"]))]
+            if source == LEDGER_JOBS:
+                operations.append(project_job(item, by_source_id=job_map, attention=verdict))
+            elif str(item["id"]) in full_tasks:
+                # A task deleted between the index read and this one leaves
+                # the window; the counts keep it, because they describe the
+                # snapshot the index read.
+                operations.append(project_agent_task(
+                    full_tasks[str(item["id"])], by_source_id=task_map,
+                    origins=origins, attention=verdict))
+        return {
+            "operations": operations,
+            "summary": summary,
+            "matched": len(matching),
+            "bucket": bucket,
+        }
 
     def get(self, value: str, actor: Optional[str] = None, *, detail: bool = True) -> Dict[str, Any]:
         ledger, source_id = parse_operation_id(value)
@@ -513,7 +841,10 @@ class OperationProjection:
             record["events"] = self.job_store.events(source_id, actor=actor) if detail else []
             source = self.job_store.list(200, actor=actor)
             by_id = {str(item["id"]): item for item in source}
-            return project_job(record, by_source_id=by_id, detail=detail)
+            return project_job(
+                record, by_source_id=by_id, detail=detail,
+                attention=self._verdict(ledger, source_id, actor),
+            )
         if self.agent_task_store is None:
             raise OperationNotFound(value)
         visible = self.agent_task_store.get(source_id, actor=actor)
@@ -525,7 +856,11 @@ class OperationProjection:
         )
         source = self.agent_task_store.list(actor=actor, limit=200)
         by_id = {str(item["id"]): item for item in source}
-        return project_agent_task(record, by_source_id=by_id, detail=detail)
+        return project_agent_task(
+            record, by_source_id=by_id, detail=detail,
+            origins=self._origins([record], by_id),
+            attention=self._verdict(ledger, source_id, actor),
+        )
 
     def cancel(self, value: str, actor: str, *, allow_all: bool = False) -> Dict[str, Any]:
         ledger, source_id = parse_operation_id(value)
@@ -578,6 +913,9 @@ class OperationProjection:
 
 
 __all__ = [
+    "ACTIVITY_ATTENTION", "ACTIVITY_BUCKETS", "ACTIVITY_FINISHED",
+    "ACTIVITY_IN_PROGRESS", "ATTENTION_STATES", "activity_bucket",
+    "dismissal_in_force", "needs_attention", "retry_resolved_ids",
     "CANONICAL_STATES", "LEDGER_AGENT_TASKS", "LEDGER_JOBS", "LEDGERS",
     "OPERATION_SCHEMA", "OPERATION_STALE_AFTER_SECONDS", "STALE_REPORTING_STATES",
     "OperationActionError", "OperationNotFound",

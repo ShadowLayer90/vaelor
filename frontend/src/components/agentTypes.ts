@@ -1,3 +1,4 @@
+import type { AutomationItemStatus } from "../lib/automationStatus";
 import type { PerformanceSummary } from "../lib/performanceLine";
 
 export interface AssistantModelFacts {
@@ -172,6 +173,15 @@ export interface CapabilityDisclosure {
   writes: string;
 }
 
+/** A schedule's latest recorded run, in plain words (server-derived). */
+export interface AutomationLastRun {
+  state: string;
+  state_label: string;
+  message: string;
+  at?: number | null;
+  task_id?: string | null;
+}
+
 export interface Automation {
   id: string;
   name: string;
@@ -182,6 +192,9 @@ export interface Automation {
   next_run_at?: number | null;
   enabled: boolean;
   capability_disclosure?: CapabilityDisclosure;
+  /** What the schedule is doing, derived by the server from its runs. */
+  status?: AutomationItemStatus;
+  last_run?: AutomationLastRun | null;
 }
 
 export interface Trigger {
@@ -194,9 +207,17 @@ export interface Trigger {
   threshold: number;
   cooldown_seconds: number;
   enabled: boolean;
+  /** The machine this rule watches: "" is the controller, else a worker node id. */
+  node?: string;
   last_value?: number | null;
+  /** When the rule last read its signal (seconds since the epoch). */
+  last_value_at?: number | null;
+  /** The signal in words, from the server's one table of signals. */
+  signal_label?: string;
   last_triggered_at?: number | null;
   capability_disclosure?: CapabilityDisclosure;
+  /** What the rule is doing, derived by the server from what it measured. */
+  status?: AutomationItemStatus;
 }
 
 /**
@@ -265,6 +286,8 @@ export interface ChatMessage {
     proposed_agent_task?: AgentRunProposal | null;
     /** Compact per-answer timing (total, TTFT, prefill/decode tok/s). */
     performance?: PerformanceSummary;
+    /** The model tier that wrote this answer, recorded with it. */
+    model_label?: string;
     /**
      * A response the reader stopped. Terminal, and never a failure: it is
      * written by this client into the transcript so that a stopped answer has
@@ -278,6 +301,8 @@ export interface AssistantAnswer {
   answer: string;
   conversation_id: string;
   source: string;
+  /** The model tier that wrote a model answer; "" for any other source. */
+  model_label?: string;
   evidence: AssistantEvidence[];
   suggested_actions: string[];
   next_steps?: AssistantNavigationStep[];
@@ -303,6 +328,13 @@ export interface AgentStatus {
   /** Whether the endpoint answered a probe, as opposed to merely being set. */
   reachable?: boolean;
   unreachable_reason?: string;
+  /**
+   * Whether the reachable server offers any model: `false` is reachable and
+   * offering nothing, `null`/absent is "not asked". Read by the status pill
+   * so a server with nothing to answer with is not shown green (ACC-099).
+   */
+  offering_models?: boolean | null;
+  model_availability_reason?: string;
   /**
    * What is measured about the model that is actually deployed - its
    * shortcomings (VD-071) and the idle-unload periods llama-server is

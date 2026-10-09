@@ -23,6 +23,14 @@ served by two different processes on two different loopback ports. So this path:
   trap is real: a fork that cannot resolve its TheRock libraries falls back to
   the CPU and still answers HTTP 200, so a healthy endpoint is not proof of GPU
   residency and the deploy result says which was actually observed.
+
+**The gate here used to be written twice more (VD-125).** The failure-watch, the
+LLM Server apply and ``api_llm_server_routes`` each spelled "is ai-chat an
+independent managed-local GPU tier", in three vocabularies, and none could see
+GPU clustering. :func:`vaelor.gpu_serving_target.resolve_gpu_serving_target` is
+now the one home and both methods below are adapters over it, so Mode B follows
+for free: the proxy fronts a cluster target, and the watch declines to relaunch
+llama.cpp under one.
 """
 
 from __future__ import annotations
@@ -35,19 +43,33 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from .accelerator_runtime import BASIS_DIFFERENTIAL, MINIMUM_ACCELERATED_BYTES
-from .credential_broker import CredentialBrokerClient, CredentialError
+from .accelerator_runtime import (
+    ACCELERATED, BASIS_DIFFERENTIAL, ON_CPU_BY_PLAN, MINIMUM_ACCELERATED_BYTES,
+    NOT_ESTABLISHED, NOT_OFFLOADED,
+)
+from .app_port_claims import pick_model_port
+from .credential_broker import CredentialBrokerClient
 from .job_control import JobCancelled
 from .gpu_model_choice import (
     discover_gpu_rocm_serving,
     generic_gpu_runtime,
     gpu_offload_plan,
 )
+from .gpu_cluster_mode import GPU_SERVING_LOCK, ClusterModeStore
+from .gpu_loading_door import (
+    RELAUNCH_COMPOSE, RELAUNCH_FP4, RELAUNCH_GENERIC, RELAUNCH_NONE, RELAUNCH_UNRESOLVED,
+    watch_door,
+)
 from .gpu_rocm_supervisor import GpuBridgeLauncher, GpuRocmSupervisor
+from .gpu_serving_target import (
+    KIND_MANAGED_LOCAL,
+    gpu_cluster_mode_active, resolve_gpu_serving_target,
+)
 from .managed_local_credentials import (
-    PREFIX,
-    _endpoint_of,
+    AI_CHAT_MODEL_PREFIX,
+    MANAGED_LOCAL_CREDENTIAL_LABEL,
     activate_managed_chat,
+    managed_model_by_label,
 )
 from .model_catalog import (
     catalog_engine,
@@ -58,9 +80,7 @@ from .model_start_verification import accelerator_baseline
 from .executor_model_deploy import (
     CONNECTION_TEST_FAILED_DETAIL,
     GPU_CHAT_COMPOSE_PROJECT,
-    MANAGED_LOCAL_CREDENTIAL_LABEL,
     _artifact_identity,
-    _loopback_port,
 )
 
 
@@ -124,9 +144,22 @@ BASIS_UNREAD = "unread"
 
 
 def gpu_residency_verdict(
-    before_bytes: Optional[int], after_bytes: Optional[int], model_bytes: int
+    before_bytes: Optional[int], after_bytes: Optional[int], model_bytes: int,
+    *, fit_mode: str = "gpu", fit_reason: str = "",
 ) -> Dict[str, Any]:
     """Whether the GPU actually took the model, from a before/after memory delta.
+
+    The block also carries ``state`` and ``in_use`` in the vocabulary every
+    accelerator reading uses (`accelerator_runtime.verify_accelerator_in_use`),
+    because the job card renders it as one (ACC-096): without them the card's
+    Accelerator pill read "Not established" on every GPU deploy while the
+    panel below it said "Running fully on the GPU" from the plan. ``fit_mode``
+    is what the plan asked for: ``cpu`` expects no GPU memory at all, and
+    ``partial`` expects some layers, so only the idle floor applies to it. A
+    CPU plan is ``cpu-planned``, not the compose path's ``cpu`` ("by
+    configuration"): the GPU plan decided it, and ``fit_reason`` - the plan's
+    own sentence, which is "does not fit" or "the budget could not be read" -
+    is the detail.
 
     ``before_bytes`` is read with no managed GPU model of ours resident and
     ``after_bytes`` once the server is healthy; the difference is this load's own
@@ -143,6 +176,8 @@ def gpu_residency_verdict(
         return {
             "basis": BASIS_UNREAD,
             "resident": None,
+            "in_use": None,
+            "state": NOT_ESTABLISHED,
             "vram_delta_bytes": None,
             "detail": (
                 "GPU memory could not be read, so residency was not verified; "
@@ -150,7 +185,19 @@ def gpu_residency_verdict(
             ),
         }
     delta = int(after_bytes) - int(before_bytes)
-    threshold = max(
+    if fit_mode == "cpu":
+        return {
+            "basis": BASIS_DIFFERENTIAL,
+            "resident": False,
+            "in_use": False,
+            "state": ON_CPU_BY_PLAN,
+            "vram_delta_bytes": delta,
+            "detail": fit_reason or (
+                "The GPU plan placed this model on the CPU, so no GPU memory "
+                "was expected."
+            ),
+        }
+    threshold = int(MINIMUM_ACCELERATED_BYTES) if fit_mode == "partial" else max(
         int(MINIMUM_ACCELERATED_BYTES),
         int(max(0, model_bytes) * GPU_RESIDENCY_MIN_FRACTION),
     )
@@ -166,6 +213,8 @@ def gpu_residency_verdict(
     return {
         "basis": BASIS_DIFFERENTIAL,
         "resident": resident,
+        "in_use": resident,
+        "state": ACCELERATED if resident else NOT_OFFLOADED,
         "vram_delta_bytes": delta,
         "detail": detail,
     }
@@ -193,14 +242,31 @@ class ExecutorGpuDeployMixin:
 
         The same capability gate the recommendation uses
         (:func:`vaelor.gpu_model_choice.discover_gpu_rocm_serving`): a gfx1151
-        GPU, the fork binary and the gfx1151 ROCm runtime all present. False
-        everywhere else, so a box without the fork keeps the stock-compose
-        AI-Chat path unchanged. The deploy router reads this to send a non-FP4
-        ``ai-chat`` model to the real GPU rather than the unverified stock image.
+        GPU and a usable Docker, the self-contained ROCm serving container's
+        prerequisites (the dead host fork no longer gates it). False everywhere
+        else, so a box that cannot serve keeps the stock-compose AI-Chat path;
+        the router reads this to send a non-FP4 ``ai-chat`` model to the GPU.
         """
         return bool(
             discover_gpu_rocm_serving(self._model_hardware_budget()).get("available")
         )
+
+    def _require_gpu_rocm_serving(self) -> None:
+        """Refuse a GPU-only deploy on a machine the capability gate turns away.
+
+        ACC-061: the FP4 route asked nothing before launching, while every other
+        GPU AI-Chat model passes :meth:`_gpu_rocm_chat_available`. The FP4 27B
+        loads nowhere but the fork on a gfx1151 GPU, so a machine without that
+        capability is told why - the gate's own sentence - before any server is
+        stopped, rather than meeting a failed launch on hardware that cannot
+        run it. The yes/no is :meth:`_gpu_rocm_chat_available`'s, the one
+        answer every GPU route reads; the sentence is read only to refuse.
+        """
+        if self._gpu_rocm_chat_available():
+            return
+        verdict = discover_gpu_rocm_serving(self._model_hardware_budget())
+        raise RuntimeError(str(verdict.get("reason") or (
+            "This machine cannot serve the ROCmFP4 GPU model.")))
 
     def _gpu_fork_or_fallback(
         self, payload: Dict[str, Any], model: Path
@@ -298,6 +364,18 @@ class ExecutorGpuDeployMixin:
         supervisor = GpuRocmSupervisor(GpuBridgeLauncher(HardwareBridgeClient()))
         self._gpu_supervisor_cache = supervisor
         return supervisor
+
+    def _healthy_binding_result(self, port: int) -> Dict[str, Any]:
+        """For an already-healthy model: no-op when the proxy is converged, else FORCE it.
+
+        FINDING A. When the proxy is not converged (:meth:`_llm_binding_converged`) -
+        a Disable/rotate the apply job missed, or a proxy that crashed while the model
+        stayed up - :meth:`apply_llm_server` starts/stops/re-keys it to match, so the
+        exposure converges within one reconcile.
+        """
+        if self._llm_binding_converged(port):
+            return {"served": False, "reason": "already-healthy", "port": port}
+        return {"served": True, "converged": True, **self.apply_llm_server()}
 
     def _gpu_chat_model_path(self) -> Optional[Path]:
         """Where the GPU AI-Chat model is on disk, if it is downloaded.
@@ -422,9 +500,17 @@ class ExecutorGpuDeployMixin:
         # the SAME fork with a generic runtime whose offload follows the
         # unified-memory fit decision, degrading to a CPU fall-back honestly.
         choice = self._gpu_chat_runtime_for(model)
-        runtime = choice["runtime"]
+        # The model is ALWAYS served loopback-only and keyless, whatever the LLM
+        # Server state: LAN exposure is the separate auth proxy, not an engine bind
+        # (the fork does not enforce a key). So the launch runtime is the pristine
+        # catalog recipe - a COPY so the shared catalog dict is never mutated.
+        runtime = dict(choice["runtime"])
         supervisor = self._gpu_rocm_supervisor()
-        port = supervisor.allocate_port(int(payload.get("port") or 0))
+        # W6-D2 reverse (LESSONS 6): never a port an installed app publishes,
+        # running or stopped; an explicit one an app holds is refused by name.
+        port = supervisor.allocate_port(pick_model_port(
+            int(payload.get("port") or 0), self.workloads_root,
+            lambda exclude=frozenset(): supervisor.allocate_port(0, exclude)))
         self._checkpoint(45, "Starting the GPU model server", "starting")
         # Stop any prior GPU model this executor is still supervising BEFORE the
         # baseline read, so ``before_bytes`` reflects no managed GPU model
@@ -455,12 +541,16 @@ class ExecutorGpuDeployMixin:
             announce=lambda detail: self._checkpoint(75, detail, "starting"),
         )
         endpoint = served["endpoint"]
-        candidate_id = "cred_managed_local_{}".format(
-            hashlib.sha256(
-                "gpu:{}:{}:{}".format(model, port, time.time_ns()).encode()
-            ).hexdigest()[:12]
-        )
+        # VD-202: marked as AI Chat's model, so the Assistant's lease refuses it.
+        candidate_id = AI_CHAT_MODEL_PREFIX + hashlib.sha256(
+            "gpu:{}:{}:{}".format(model, port, time.time_ns()).encode()
+        ).hexdigest()[:12]
         broker = CredentialBrokerClient()
+        # The CLIENT credential base_url is the model's loopback endpoint
+        # (``http://127.0.0.1:<port>/v1``), and its api_key is ALWAYS empty: the
+        # model is unauthenticated on loopback, so internal AI Chat needs no key.
+        # The LAN key lives only in the auth proxy's config, never in this
+        # credential - a rotate re-keys the proxy without touching AI Chat.
         profile = json.dumps(
             {"base_url": endpoint, "model": "", "api_key": ""},
             separators=(",", ":"),
@@ -476,8 +566,11 @@ class ExecutorGpuDeployMixin:
         # BaseException: a KeyboardInterrupt/SystemExit must still stop the process.
         credential_created = False
         try:
-            residency = self._gpu_residency_after_load(before_bytes, model)
-            if residency["resident"] is False:
+            residency = self._gpu_residency_after_load(
+                before_bytes, model, fit_mode=str(choice["mode"]),
+                fit_reason=str(choice.get("reason") or ""),
+            )
+            if residency["state"] == NOT_OFFLOADED:
                 # Surfaced prominently rather than hard-failing: a CPU fallback
                 # still answers, and the owner needs to be told the tier is
                 # degraded, not left with a green deploy over a slow server.
@@ -513,6 +606,13 @@ class ExecutorGpuDeployMixin:
                 except Exception:
                     pass
             raise
+        # The model is now serving loopback. Bring the auth proxy to the persisted
+        # LLM Server state in front of it (start the keyed gate if enabled, stop it
+        # if disabled) and record the converged binding (FINDING A), so the
+        # failure-watch reconcile does not needlessly re-apply a fresh deploy that
+        # arrived with the LLM Server enabled. Best-effort: a proxy hiccup never
+        # fails a healthy model deploy (the model stays loopback-safe).
+        self._converge_llm_proxy(port)
         self._checkpoint(95, "GPU model server is healthy", "starting")
         return {
             "path": str(model),
@@ -547,7 +647,8 @@ class ExecutorGpuDeployMixin:
         }
 
     def _gpu_residency_after_load(
-        self, before_bytes: Optional[int], model: Path
+        self, before_bytes: Optional[int], model: Path, *, fit_mode: str = "gpu",
+        fit_reason: str = "",
     ) -> Dict[str, Any]:
         """The residency verdict, reading GPU memory now the server is up.
 
@@ -563,7 +664,10 @@ class ExecutorGpuDeployMixin:
             # An unreadable size falls the threshold back to the accelerated-bytes
             # floor rather than to zero, so the check stays meaningful.
             model_bytes = 0
-        return gpu_residency_verdict(before_bytes, after_bytes, model_bytes)
+        return gpu_residency_verdict(
+            before_bytes, after_bytes, model_bytes, fit_mode=fit_mode,
+            fit_reason=fit_reason,
+        )
 
     def ensure_gpu_chat_served(
         self, *, sleep: Callable[[float], None] = time.sleep
@@ -573,20 +677,24 @@ class ExecutorGpuDeployMixin:
         The GPU counterpart of :meth:`ensure_npu_assistant_served`, run OFF the
         job loop's critical path for the same reason: a 27B FP4 load is
         health-gated for minutes, and blocking the executor on that would stall
-        the first job after a reboot. The GPU server is a plain host process; a
-        reboot kills it and nothing else brings it back, so the AI-Chat tier is
-        DOWN after every reboot until this reconcile - or a manual deploy - runs.
+        the first job after a reboot. A reboot kills the GPU server and nothing
+        else brings it back, so the AI-Chat tier is DOWN after every reboot until
+        this reconcile - or a manual deploy - runs.
 
-        Idempotent, gated, and NON-FATAL, the same contract as the NPU reconcile:
+        Idempotent, gated, LOCKED and NON-FATAL:
 
-        * Gated - it acts only when ``ai-chat`` is an independent managed-local
-          GPU tier. A hosted ai-chat (no loopback), or a single-model box where
-          ``ai-chat`` and ``deployment-agent`` share one endpoint (a Pi, whose
-          NPU/llama.cpp reconcile owns that server), both no-op. The
-          endpoint-distinctness test is the same key
-          :mod:`vaelor.managed_local_credentials` uses.
+        * Gated - it acts only on a ``managed-local`` serving target
+          (:func:`~vaelor.gpu_serving_target.resolve_gpu_serving_target`). A
+          hosted ai-chat, a single-model box sharing one endpoint with the
+          Assistant, and a ``cluster`` target (Mode B, where vLLM holds the GPU)
+          all no-op. **Mode B is why this gate must be the shared one**:
+          relaunching llama.cpp under a cluster lease would put two engines on
+          one GPU, the failure the mode switch exists to prevent.
         * Idempotent - a server already answering on the stored port is left
           untouched (relaunching would evict a loaded 27B to no purpose).
+        * Locked - the pass holds :data:`~vaelor.gpu_cluster_mode.GPU_SERVING_LOCK`
+          (D5), so a relaunch in flight and a deploy's ``enter`` cannot
+          interleave: ``enter`` waits, then reads a GPU this pass is done with.
         * Non-fatal - nothing escapes; any failure returns ``None`` so the
           reconcile can never keep the executor from processing jobs.
 
@@ -598,75 +706,8 @@ class ExecutorGpuDeployMixin:
         """
         _ = sleep
         try:
-            broker = self.credential_broker
-            try:
-                chat = broker.resolve_active("ai-chat")
-            except CredentialError:
-                # No ai-chat assignment: an NPU-only box or a fresh appliance.
-                return None
-            if not str(chat.get("credential_id", "")).startswith(PREFIX):
-                # A hosted/user ai-chat lease: nothing local to run.
-                return None
-            port = _loopback_port(str(chat.get("base_url") or ""))
-            if port is None:
-                return None
-            # Only the INDEPENDENT GPU tier is supervised here. On a single-model
-            # box ai-chat and deployment-agent are the same managed endpoint, and
-            # the NPU/llama.cpp reconcile owns it - relaunching a GPU server on
-            # that port would evict the Assistant. A distinct endpoint is what
-            # makes this the independent GPU model (VD-085 key).
-            chat_endpoint = _endpoint_of(chat)
-            try:
-                agent = broker.resolve_active("deployment-agent")
-                if _endpoint_of(agent) == chat_endpoint:
-                    return None
-            except CredentialError:
-                # No deployment-agent at all: ai-chat is the only managed tier,
-                # so it is not shared with the Assistant - carry on.
-                pass
-            supervisor = self._gpu_rocm_supervisor()
-            # #247m Finding 2: dispatch by the ACTIVE lease's mechanism, not by
-            # assuming the fork. If ai-chat was switched to a stock GGUF, its
-            # server is the `model-chat` compose project on this port; bring THAT
-            # back rather than relaunching the fork 27B under the stock lease.
-            # The fork branch below is byte-for-byte unchanged, so the reference
-            # state (the 27B IS ai-chat) reconciles exactly as it did before.
-            stock_project = self._gpu_chat_compose_project_for(port)
-            if stock_project is not None:
-                if supervisor.healthy(port):
-                    return {"served": False, "reason": "already-healthy", "port": port}
-                self._compose(
-                    stock_project, "up", "-d", "--remove-orphans", timeout=180
-                )
-                return {"served": True, "mechanism": "compose", "port": port}
-            model_path = self._gpu_chat_model_path()
-            if model_path is None:
-                # No recommended FP4 model on disk (a Pi, or a box that only ever
-                # downloaded a generic GPU chat model). It may still be a user-
-                # chosen GENERIC lease, which the branch below resolves from the
-                # durable credential label and re-serves.
-                return self._reconcile_generic_gpu_chat(chat, port, supervisor)
-            # Relaunch the FP4 27B when the active ai-chat lease is actually that
-            # model. A user-chosen GENERIC GPU model wears a credential label
-            # bearing its OWN stem; that lease is dispatched to
-            # ``_reconcile_generic_gpu_chat`` (which resolves the model from the
-            # label and re-serves it) rather than clobbered by relaunching the
-            # recommended 27B under it. The FP4 lease's label matches by
-            # construction, so the reference state (the 27B IS ai-chat) reconciles
-            # byte-for-byte as before.
-            expected_label = MANAGED_LOCAL_CREDENTIAL_LABEL.format(
-                model_path.stem[:48]
-            )
-            if str(chat.get("label") or "") != expected_label:
-                return self._reconcile_generic_gpu_chat(chat, port, supervisor)
-            runtime = catalog_runtime(**_artifact_identity(model_path))
-            if supervisor.healthy(port):
-                # Already answering on the stored port: leave the loaded model be.
-                return {"served": False, "reason": "already-healthy", "port": port}
-            result = supervisor.restart_if_unhealthy(
-                str(model_path), port=port, runtime=runtime,
-            )
-            return {"served": True, **result}
+            with self._gpu_watch_lock():
+                return self._gpu_chat_pass()
         except Exception:
             # Never let a boot-time reconcile keep the executor from processing
             # jobs, under ANY error - the same broad, non-BaseException catch the
@@ -674,8 +715,136 @@ class ExecutorGpuDeployMixin:
             # dict/int access on a malformed lease).
             return None
 
+    def _gpu_watch_lock(self):
+        """The process-wide GPU serving mutex, an injectable seam (D5).
+
+        One object, shared with the mode reconcile and the switch, so everything
+        that can start or stop a GPU engine is serialised. A test sets
+        ``_gpu_watch_lock_cache`` to drive the contention directly.
+        """
+        return getattr(self, "_gpu_watch_lock_cache", None) or GPU_SERVING_LOCK
+
+    def _cluster_mode_state(self):
+        """The persisted GPU serving mode, a lazily-cached injectable seam.
+
+        Read on every gate so a Mode B box is recognised as one; the read fails
+        safe to Mode A, so a box that has never clustered behaves as before.
+        """
+        existing = getattr(self, "_cluster_mode_store_cache", None)
+        if existing is None:
+            existing = ClusterModeStore()
+            self._cluster_mode_store_cache = existing
+        return existing.read()
+
+    def _refuse_deploy_under_cluster(self, sentence: str) -> None:
+        """The deploy-job door: raise ``sentence`` while the file reads Mode B.
+
+        VD-127's fourth verification found it open. A single-node ``ai-chat``
+        deploy stops the supervisor (a no-op in Mode B), loads llama.cpp onto
+        the GPU vLLM holds, and takes the ``ai-chat`` lease through the broker
+        directly - never through `chat_inference.activate`, so the picker's
+        refusal never saw it. The mode reconcile re-points the lease within
+        30 s but stops nothing it did not start, so the fork stayed resident
+        beside vLLM. `_deploy_model` asks this twice, one predicate and one
+        sentence per condition, both the gate module's: the moment it has
+        decided the surface, with ``AI_CHAT_HELD_BY_CLUSTER`` for ``ai-chat``,
+        BEFORE ``supervisor.stop()`` and before any compose work (the FP4 fork
+        route, the generic fork route and the compose fall-back all pass that
+        decision); and again the moment the accelerator plan is settled, with
+        ``GPU_HELD_BY_CLUSTER``, for any surface whose plan would put llama.cpp
+        on the GPU - the Assistant's compose deploy on a single-accelerator
+        gfx1151 box, which the surface gate passes by design. The sentence
+        reaches the job as its failure message through the executor's
+        ``RuntimeError`` arm.
+        """
+        if gpu_cluster_mode_active(self._cluster_mode_state()):
+            raise RuntimeError(sentence)
+
+    def _gpu_chat_pass(self) -> Optional[Dict[str, Any]]:
+        """One failure-watch pass, under the lock. See :meth:`ensure_gpu_chat_served`."""
+        mode_state = self._cluster_mode_state()
+        # Mode B is never a relaunch, whatever the lease says: the switch
+        # stopped llama.cpp so vLLM could have the aperture, and a managed-local
+        # lease re-assigned under it is the mode reconcile's to re-point, not
+        # this pass's to serve (VD-127). Read before the target, so the
+        # supervisor is not consulted at all.
+        if gpu_cluster_mode_active(mode_state):
+            return None
+        target = resolve_gpu_serving_target(self.credential_broker, mode_state)
+        relaunch = self.gpu_chat_relaunch(target)
+        # B1: a held way-back door is ruled on before anything is relaunched -
+        # closed now for an arm that never fronts the gate, closed at its bound
+        # for a relaunch that does not come (`gpu_loading_door`).
+        watch_door(self._loading_door(), self._llm_proxy(), relaunch,
+                   self._loading_door_now())
+        if relaunch == RELAUNCH_NONE:
+            return None
+        port = target.port
+        supervisor = self._gpu_rocm_supervisor()
+        # #247m Finding 2: dispatch by the ACTIVE lease's mechanism, not by
+        # assuming the fork. If ai-chat was switched to a stock GGUF, its server
+        # is the `model-chat` compose project on this port; bring THAT back
+        # rather than relaunching the fork 27B under the stock lease.
+        if relaunch == RELAUNCH_COMPOSE:
+            stock_project = self._gpu_chat_compose_project_for(port)
+            if supervisor.healthy(port):
+                return {"served": False, "reason": "already-healthy", "port": port}
+            self._compose(
+                stock_project, "up", "-d", "--remove-orphans", timeout=180
+            )
+            return {"served": True, "mechanism": "compose", "port": port}
+        if relaunch != RELAUNCH_FP4:
+            # A user-chosen GENERIC lease (resolved or not) re-serves from its
+            # durable credential label, never as the recommended 27B.
+            return self._reconcile_generic_gpu_chat(target.label, port, supervisor)
+        model_path = self._gpu_chat_model_path()
+        # The model is served loopback-only with the pristine catalog recipe: a
+        # reboot relaunch comes back exactly as deployed, and the LLM Server's
+        # LAN exposure is the separate auth proxy converged below.
+        runtime = catalog_runtime(**_artifact_identity(model_path))
+        if supervisor.healthy(port):
+            # Answering on the stored port: a no-op if the auth proxy already
+            # matches the persisted state, else FORCED to converge (FINDING A)
+            # rather than the old unconditional "already-healthy" skip.
+            return self._healthy_binding_result(port)
+        result = supervisor.restart_if_unhealthy(
+            str(model_path), port=port, runtime=runtime,
+        )
+        # A reboot killed the proxy too; (re)start it in front of the relaunched
+        # loopback model to match the persisted LLM Server state.
+        self._converge_llm_proxy(port)
+        return {"served": True, **result}
+
+    def gpu_chat_relaunch(self, target: Any = None) -> str:
+        """Which arm this watch's pass relaunches AI Chat's model through - the one answer.
+
+        `_gpu_chat_pass` dispatches on it, and the mode switch asks it on the
+        way back from cluster serving whether the LLM Server's "loading" door
+        will be replaced by a fronted model (B1, `gpu_loading_door`): only the
+        FP4 and the resolvable generic arms converge the gate. ``none`` when
+        the lease is not a managed-local GPU model; ``compose`` for a stock GGUF
+        (the ``model-chat`` project, which the gate does not front);
+        ``unresolved`` for a generic lease whose ``.gguf`` is not on disk.
+        """
+        if target is None:
+            target = resolve_gpu_serving_target(
+                self.credential_broker, self._cluster_mode_state())
+        if target.kind != KIND_MANAGED_LOCAL:
+            return RELAUNCH_NONE
+        if self._gpu_chat_compose_project_for(target.port) is not None:
+            return RELAUNCH_COMPOSE
+        model_path = self._gpu_chat_model_path()
+        # The FP4 27B only when the lease IS that model: a generic model wears
+        # a label bearing its own stem and is never relaunched as the 27B.
+        if model_path is not None and target.label == MANAGED_LOCAL_CREDENTIAL_LABEL.format(
+                model_path.stem[:48]):
+            return RELAUNCH_FP4
+        if self._managed_model_by_label(target.label) is not None:
+            return RELAUNCH_GENERIC
+        return RELAUNCH_UNRESOLVED
+
     def _reconcile_generic_gpu_chat(
-        self, chat: Dict[str, Any], port: int, supervisor: GpuRocmSupervisor
+        self, label: str, port: int, supervisor: GpuRocmSupervisor
     ) -> Dict[str, Any]:
         """Relaunch a user-chosen GENERIC GPU chat model after a reboot.
 
@@ -690,7 +859,7 @@ class ExecutorGpuDeployMixin:
         **The durable source is the lease itself, not a new state file.** A
         generic deploy writes the ai-chat credential with a label bearing the
         served model's file stem
-        (:data:`~vaelor.executor_model_deploy.MANAGED_LOCAL_CREDENTIAL_LABEL`), and
+        (:data:`~vaelor.managed_local_credentials.MANAGED_LOCAL_CREDENTIAL_LABEL`), and
         that label persists in the credential store across a reboot. The stem plus
         the managed models directory resolve the ``.gguf`` on disk
         (:meth:`_managed_model_by_label`), so the lease alone identifies the model
@@ -699,59 +868,27 @@ class ExecutorGpuDeployMixin:
         re-runs on the CURRENT hardware rather than being frozen at deploy time,
         and the model is served on the SAME fork the FP4 27B uses.
         """
-        model_path = self._managed_model_by_label(str(chat.get("label") or ""))
+        if supervisor.healthy(port):
+            # Answering on the stored port: a no-op when the auth proxy already
+            # matches the persisted state, else FORCED to converge (FINDING A).
+            # Asked BEFORE the file is resolved: a serving model's gate is
+            # re-keyed even when its file cannot be found, or a key revoked
+            # with no apply job queued stayed admitted here for ever.
+            return self._healthy_binding_result(port)
+        model_path = self._managed_model_by_label(label)
         if model_path is None:
             # The lease names a model that is not (unambiguously) on disk: no
             # pointless launch against a file that is not there.
             return {"served": False, "reason": "generic-model-unresolved", "port": port}
-        if supervisor.healthy(port):
-            # Already answering on the stored port: leave the loaded model be.
-            return {"served": False, "reason": "already-healthy", "port": port}
         runtime = self._gpu_chat_runtime_for(model_path)["runtime"]
         result = supervisor.restart_if_unhealthy(
             str(model_path), port=port, runtime=runtime,
         )
+        # A reboot killed the proxy too; (re)start it in front of the relaunched
+        # loopback model to match the persisted LLM Server state.
+        self._converge_llm_proxy(port)
         return {"served": True, **result}
 
     def _managed_model_by_label(self, label: str) -> Optional[Path]:
-        """The managed ``.gguf`` a managed-local credential LABEL names, or ``None``.
-
-        A managed-local deploy labels its credential
-        ``MANAGED_LOCAL_CREDENTIAL_LABEL.format(model.stem[:48])``, so the label
-        carries the served file's (48-char-truncated) stem - the one durable
-        identifier a generic fork lease keeps across a reboot, since its stored
-        profile is normalised to base_url/model/api_key with an empty model. This
-        reverses that: it scans the managed models directory for a ``.gguf`` whose
-        ``stem[:48]`` equals the label's stem.
-
-        ``None`` when the label is not a managed-local label, when no file matches
-        (the model was removed), or when MORE than one file matches - the same
-        ambiguity discipline :func:`vaelor.model_footprint.identify_by_file` keeps
-        (VD-065): a stem two files share resolves to nothing rather than a guess,
-        so the reconcile never relaunches the wrong model.
-
-        **The whole models directory is scanned, uncapped.** An earlier
-        ``[:200]`` slice on the UNORDERED ``rglob`` could miss the target model
-        non-deterministically on a box with more than 200 gguf files - after a
-        reboot the AI-Chat tier would then stay down. The scan is bounded by the
-        managed models directory, so it is a directory walk, not an unbounded one.
-
-        **Known bound (LOW/MEDIUM-6, left as-is):** the label carries only
-        ``stem[:48]``, so two models whose file stems agree in their first 48
-        characters collide and BOTH resolve to nothing (the len==1 guard). That
-        is the safe direction - a no-op reconcile, never the wrong model - and
-        widening the label format is riskier than the low-likelihood collision,
-        so the truncation stands.
-        """
-        prefix = MANAGED_LOCAL_CREDENTIAL_LABEL.format("")
-        if not label.startswith(prefix):
-            return None
-        stem = label[len(prefix):]
-        if not stem or not self.models_root.exists():
-            return None
-        matches = {
-            str(path.resolve())
-            for path in self.models_root.rglob("*.gguf")
-            if path.is_file() and path.stem[:48] == stem
-        }
-        return Path(matches.pop()) if len(matches) == 1 else None
+        """:func:`~vaelor.managed_local_credentials.managed_model_by_label` over this executor's models root."""
+        return managed_model_by_label(self.models_root, label)

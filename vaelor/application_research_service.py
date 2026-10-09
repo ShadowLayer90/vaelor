@@ -7,6 +7,11 @@ import platform
 from typing import Any, Callable, Dict, Iterable, List, Mapping
 from urllib.parse import urlsplit
 
+from .application_compose_evidence import (
+    ComposeEvidenceError,
+    ComposeService,
+    parse_compose,
+)
 from .application_research import ApplicationResearchBroker, ApplicationResearchError
 from .application_research_prompt import interpret_research_evidence
 from .container_registry import (
@@ -16,6 +21,7 @@ from .container_registry import (
     ghcr_token_url,
     parse_image_reference,
     proven_image_from_manifest_list,
+    registry_candidate_urls,
 )
 from .research_provenance import FetchProvenance
 
@@ -26,6 +32,11 @@ _DOCKER_TAG_API = re.compile(
     r"(?P<namespace>[a-z0-9._-]+)/repositories/"
     r"(?P<repository>[a-z0-9._-]+)/tags/(?P<tag>[A-Za-z0-9._-]+)$"
 )
+
+# Hard ceiling on registry proof fetches a single compose can trigger (B2). The
+# parser already caps a compose at 12 services and dedupes image references, so
+# this is a defensive backstop, not the primary bound.
+_MAX_COMPOSE_IMAGE_PROOFS = 12
 
 _REVIEWED = {
     "uptime kuma": {
@@ -291,7 +302,16 @@ class ApplicationResearchService:
         results: List[Dict[str, Any]],
         synthesis: Mapping[str, Any] | None = None,
     ) -> Dict[str, Any]:
+        # A reviewed app arrives with a baked spec; an unreviewed one arrives as
+        # ``None`` and is the ONLY path allowed to grow a multi-service topology
+        # from a fetched compose file (the compose is untrusted web evidence, so
+        # a reviewed app must never inherit it over its pinned sources).
+        unreviewed = spec is None
         spec = spec or self._generic_spec(query, results, synthesis)
+        if unreviewed:
+            composed = self._compose_manifest(spec, results)
+            if composed is not None:
+                return composed
         allowed_repositories = spec.get("repositories") if spec else None
         # A directed registry lookup proves at most one image for the app: prefer
         # the Docker Hub tags-API proof, else the GHCR manifest-list proof (#247t).
@@ -322,13 +342,53 @@ class ApplicationResearchService:
             # "could be verified from the available sources" names verbatim so
             # the frontend can offer web-research/source recovery only for this
             # recoverable case and not for a genuine incompatibility (#247q).
-            reason = (
-                "No digest-pinned Linux {} image could be verified from the "
-                "available sources.".format(self.target_architecture)
-            )
+            reason = self._unverified_image_reason()
             architectures = architectures or [self.target_architecture]
             images = []
         service = images[0]["service"] if images else "app"
+        ports = [
+            {
+                "service": service,
+                "name": name,
+                "protocol": protocol,
+                "target": port,
+                "published": port,
+                "required": True,
+            }
+            for name, protocol, port, _purpose in spec.get("ports", [])
+        ] if images else []
+        volumes = [
+            {
+                "service": service,
+                "name": name,
+                "mount_path": target,
+                "mode": "rw",
+                "required": True,
+            }
+            for name, target in spec.get("volumes", [])
+        ] if images else []
+        return self._assemble_manifest(
+            spec, status, architectures, reason, images, ports, volumes, [], results,
+        )
+
+    def _assemble_manifest(
+        self,
+        spec: Dict[str, Any],
+        status: str,
+        architectures: List[str],
+        reason: str,
+        images: List[Dict[str, Any]],
+        ports: List[Dict[str, Any]],
+        volumes: List[Dict[str, Any]],
+        variables: List[Dict[str, Any]],
+        results: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Shape the one manifest dict every research path emits.
+
+        The single-image path and the multi-service compose path both funnel
+        their computed status, proven images, and settings through here so the
+        emitted schema (and its source attribution) has exactly one producer.
+        """
         return {
             "application": {
                 "id": spec["id"],
@@ -343,28 +403,9 @@ class ApplicationResearchService:
                 "reason": reason,
             },
             "images": images,
-            "ports": [
-                {
-                    "service": service,
-                    "name": name,
-                    "protocol": protocol,
-                    "target": port,
-                    "published": port,
-                    "required": True,
-                }
-                for name, protocol, port, _purpose in spec.get("ports", [])
-            ] if images else [],
-            "volumes": [
-                {
-                    "service": service,
-                    "name": name,
-                    "mount_path": target,
-                    "mode": "rw",
-                    "required": True,
-                }
-                for name, target in spec.get("volumes", [])
-            ] if images else [],
-            "variables": [],
+            "ports": ports,
+            "volumes": volumes,
+            "variables": variables,
             "resources": {
                 "memory_bytes": int(spec.get("memory_bytes", 536870912)),
                 "cpu_cores": 1,
@@ -416,6 +457,7 @@ class ApplicationResearchService:
         self,
         results: List[Dict[str, Any]],
         allowed_repositories: Iterable[str] | None = None,
+        service: str = "app",
     ) -> List[Dict[str, Any]]:
         repository_allowlist = (
             set(allowed_repositories) if allowed_repositories is not None else None
@@ -455,7 +497,7 @@ class ApplicationResearchService:
                     "Registry metadata did not match the reviewed application repository."
                 )
             return [{
-                "service": "app",
+                "service": service,
                 "repository": repository,
                 "digest": selected["digest"],
                 "architectures": [architecture],
@@ -492,7 +534,9 @@ class ApplicationResearchService:
             },
         ).to_dict()
 
-    def _ghcr_images(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _ghcr_images(
+        self, results: List[Dict[str, Any]], service: str = "app",
+    ) -> List[Dict[str, Any]]:
         """Extract proven images from any GHCR manifest-list result (#247t)."""
         images: List[Dict[str, Any]] = []
         for result in results:
@@ -506,7 +550,255 @@ class ApplicationResearchService:
                 self.target_architecture,
                 "ghcr.io/{}".format(match.group("path")),
                 source_url,
+                service,
             )
             if proven is not None:
                 images.append(proven)
         return images
+
+    # --- B2: fetched compose -> multi-service manifest -----------------------
+    # A compose file is UNTRUSTED web evidence. The trust boundary is unchanged:
+    # its image *tags* are never trusted for identity - every service image is
+    # re-proven by the same deterministic docker.io/ghcr.io digest proof the
+    # single-image path uses, and the manifest still flows through
+    # ``normalize_manifest`` -> ``attach_manifest`` -> approval. Any failure
+    # degrades to the single-image path with a truthful note; nothing here can
+    # fabricate a topology or present an unverified image as proven.
+
+    def _compose_manifest(
+        self, spec: Dict[str, Any], results: List[Dict[str, Any]],
+    ) -> Dict[str, Any] | None:
+        """Build a multi-service manifest from a fetched compose, or degrade.
+
+        Returns a fully-assembled manifest when a compose was parsed and every
+        service image was digest-proven; a single-image degrade manifest (with a
+        truthful note naming the unverified services) when a compose parsed but
+        some image could not be proven; and ``None`` when there is no compose
+        evidence or the parser refused it, so the caller keeps today's exact
+        single-image behaviour.
+        """
+        raw_text = self._compose_raw_text(results)
+        if raw_text is None:
+            return None
+        try:
+            compose = parse_compose(raw_text)
+        except ComposeEvidenceError:
+            # Adversarial or unparseable compose: degrade silently to the
+            # single-image path exactly as if no compose had been fetched.
+            return None
+        proofs = self._prove_compose_images(compose.image_refs)
+        unverified = [
+            service.name
+            for service in compose.services
+            if proofs.get(service.image_ref) is None
+        ]
+        if unverified:
+            return self._compose_degrade(spec, compose, proofs, unverified, results)
+        return self._compose_verified(spec, compose, proofs, results)
+
+    @staticmethod
+    def _compose_raw_text(results: List[Dict[str, Any]]) -> str | None:
+        """Return the first fetched compose file's raw text, if any (B1 stored
+        it under ``metadata['raw_text']`` on compose-like evidence)."""
+        for result in results:
+            metadata = result.get("metadata")
+            if isinstance(metadata, dict):
+                raw = metadata.get("raw_text")
+                if isinstance(raw, str) and raw.strip():
+                    return raw
+        return None
+
+    def _prove_compose_images(
+        self, image_refs: Iterable[str],
+    ) -> Dict[str, Dict[str, Any] | None]:
+        """Prove each UNIQUE compose image reference in a second fetch round.
+
+        Deduped by the parser, so each reference is fetched at most once; the
+        result caches the proven image (or ``None`` when the reference names an
+        unsupported registry or cannot be found) keyed by the reference string
+        so every service that shares an image inherits the one proof.
+        """
+        proofs: Dict[str, Dict[str, Any] | None] = {}
+        for ref_string in list(image_refs)[:_MAX_COMPOSE_IMAGE_PROOFS]:
+            if ref_string not in proofs:
+                proofs[ref_string] = self._prove_image_ref(ref_string)
+        return proofs
+
+    def _prove_image_ref(self, ref_string: str) -> Dict[str, Any] | None:
+        """Fetch and digest-prove one image reference, or ``None``.
+
+        The compose tag (and any ``@sha256`` it carried, already stripped by B1)
+        is NEVER trusted: ``parse_image_reference`` -> ``registry_candidate_urls``
+        yields the docker.io tag-API or ghcr.io manifest URL, which is fetched
+        through the same SSRF-safe broker the initial pass uses (GHCR via the
+        anonymous token+manifest flow), then read back into a digest-pinned image.
+        docker.io/ghcr.io only; every other registry yields no candidate URL and
+        so degrades to ``None``.
+        """
+        reference = parse_image_reference(ref_string)
+        if reference is None:
+            return None
+        urls = registry_candidate_urls([reference])
+        if not urls:
+            return None
+        url = urls[0]
+        try:
+            ghcr = GHCR_MANIFEST_API.fullmatch(url)
+            if ghcr:
+                result = self._resolve_ghcr(url, ghcr.group("path"))
+                images = self._ghcr_images([result])
+            else:
+                result = self.broker.research(url).to_dict()
+                images = self._images([result])
+        except ApplicationResearchError:
+            return None
+        return images[0] if images else None
+
+    def _compose_verified(
+        self,
+        spec: Dict[str, Any],
+        compose: Any,
+        proofs: Dict[str, Dict[str, Any] | None],
+        results: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Assemble the N-image manifest when every service image is proven."""
+        images: List[Dict[str, Any]] = []
+        ports: List[Dict[str, Any]] = []
+        volumes: List[Dict[str, Any]] = []
+        variables: List[Dict[str, Any]] = []
+        for service in compose.services:
+            proof = proofs[service.image_ref]
+            # Each image is re-labelled with its OWN compose service so two
+            # services never collide on ``service:"app"`` (which normalize_manifest
+            # rejects as a duplicate-service image); the digest/repository come
+            # only from the registry proof, never the compose.
+            images.append({**proof, "service": service.name})
+            ports.extend(self._compose_ports(service))
+            volumes.extend(self._compose_volumes(service))
+            variables.extend(self._compose_variables(service))
+        architectures = sorted({
+            architecture for image in images for architecture in image["architectures"]
+        })
+        arch = architectures[0] if architectures else self.target_architecture
+        reason = self._compose_reason(
+            "A digest-pinned Linux {} image was verified for each of the {} "
+            "compose services.".format(arch, len(compose.services)),
+            compose.notes,
+        )
+        return self._assemble_manifest(
+            spec, "verified", architectures, reason,
+            images, ports, volumes, variables, results,
+        )
+
+    def _compose_degrade(
+        self,
+        spec: Dict[str, Any],
+        compose: Any,
+        proofs: Dict[str, Dict[str, Any] | None],
+        unverified: List[str],
+        results: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Honestly degrade to a single-image manifest for the primary service.
+
+        A compose where any service image cannot be proven must NOT ship as a
+        half multi-service app. The primary (first) service's image is emitted
+        alone if it was proven; otherwise no image is emitted (status
+        ``unknown``), exactly as an unverifiable single-image app behaves today.
+        Either way an honest note names every unverified service so the operator
+        sees the app was not deployed as its full topology.
+        """
+        primary = compose.services[0]
+        proof = proofs.get(primary.image_ref)
+        note = "compose services not deployed (image unverified): {}".format(
+            ", ".join(unverified)
+        )
+        if proof is None:
+            reason = self._compose_reason(
+                self._unverified_image_reason(), [*compose.notes, note],
+            )
+            return self._assemble_manifest(
+                spec, "unknown", [self.target_architecture], reason,
+                [], [], [], [], results,
+            )
+        image = {**proof, "service": primary.name}
+        architectures = sorted(set(image["architectures"]))
+        reason = self._compose_reason(
+            "A digest-pinned Linux {} image was verified for the primary "
+            "service only.".format(architectures[0] if architectures else self.target_architecture),
+            [*compose.notes, note],
+        )
+        return self._assemble_manifest(
+            spec, "verified", architectures, reason,
+            [image],
+            self._compose_ports(primary),
+            self._compose_volumes(primary),
+            self._compose_variables(primary),
+            results,
+        )
+
+    @staticmethod
+    def _compose_ports(service: ComposeService) -> List[Dict[str, Any]]:
+        return [
+            {
+                "service": service.name,
+                "name": "{}-{}".format(port["protocol"], port["published"]),
+                "protocol": port["protocol"],
+                "target": port["target"],
+                "published": port["published"],
+                "required": True,
+            }
+            for port in service.ports
+        ]
+
+    @staticmethod
+    def _compose_volumes(service: ComposeService) -> List[Dict[str, Any]]:
+        return [
+            {
+                "service": service.name,
+                "name": volume["name"],
+                "mount_path": volume["target"],
+                "mode": volume["mode"],
+                "required": True,
+            }
+            for volume in service.volumes
+        ]
+
+    @staticmethod
+    def _compose_variables(service: ComposeService) -> List[Dict[str, Any]]:
+        variables: List[Dict[str, Any]] = []
+        for variable in service.variables:
+            normalized = {
+                "service": service.name,
+                "name": variable["name"],
+                "secret": bool(variable.get("secret", False)),
+                "required": bool(variable.get("required", False)),
+            }
+            if not normalized["secret"] and variable.get("default") is not None:
+                normalized["default"] = variable["default"]
+            variables.append(normalized)
+        return variables
+
+    def _unverified_image_reason(self) -> str:
+        """The one "no digest-pinned image proven" reason both the single-image
+        and compose-degrade paths emit.
+
+        #247q: the frontend keys web-research/source recovery off the exact
+        phrase "could be verified from the available sources", so the single-
+        image failure branch and the compose primary-unprovable degrade share
+        one producer and cannot drift the marker apart.
+        """
+        return (
+            "No digest-pinned Linux {} image could be verified from the "
+            "available sources.".format(self.target_architecture)
+        )
+
+    @staticmethod
+    def _compose_reason(headline: str, notes: Iterable[str]) -> str:
+        """Fold the parser's honest-degrade breadcrumbs into the one compat
+        reason the frontend renders, bounded to the manifest's 800-char limit."""
+        unique = list(dict.fromkeys(
+            " ".join(str(note).split()) for note in notes if str(note).strip()
+        ))
+        if unique:
+            headline = "{} Notes: {}".format(headline, "; ".join(unique))
+        return headline[:800]

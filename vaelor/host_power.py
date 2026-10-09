@@ -50,6 +50,11 @@ class PowerCommandError(RuntimeError):
             )
         )
 
+#: The one refusal for a power action outside POWER_COMMANDS. The route, the
+#: bridge client, the root bridge and the driver seam all import it from here
+#: (LESSONS 6: one sentence, one home).
+POWER_ACTION_REFUSAL = "Choose restart_service, reboot, or shutdown."
+
 #: Fixed argument vectors. No element is ever taken from a request.
 POWER_COMMANDS: Dict[str, tuple[str, ...]] = {
     "restart_service": ("restart", CONTROL_PLANE_UNIT),
@@ -153,7 +158,7 @@ class SystemdPowerActions:
 
     def command(self, action: str) -> list[str]:
         if action not in POWER_COMMANDS:
-            raise ValueError("Choose restart_service, reboot, or shutdown.")
+            raise ValueError(POWER_ACTION_REFUSAL)
         if not self._executable:
             raise RuntimeError("systemctl is not available on this host.")
         return [self._executable, *POWER_COMMANDS[action]]

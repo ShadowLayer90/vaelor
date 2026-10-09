@@ -31,6 +31,7 @@ from .model_sizing import (
     recommended_model_tier,
 )
 from .platforms.accelerators import accelerator_summary
+from .platforms.kfd_topology import with_gfx_target_version
 from .runtime_paths import data_path
 
 
@@ -57,8 +58,16 @@ def _linux_memory() -> tuple[int, int]:
     return values.get("MemTotal", 0), values.get("MemAvailable", 0)
 
 
-def hardware_inventory(model_root: str = data_path("models")) -> Dict[str, Any]:
-    """Return only the hardware facts needed to make a model recommendation."""
+def hardware_inventory(
+    model_root: str = data_path("models"), sys_root: str = "/sys",
+) -> Dict[str, Any]:
+    """Return only the hardware facts needed to make a model recommendation.
+
+    Each AMD GPU record carries the GPU family the kernel's KFD topology
+    reports (`platforms.kfd_topology`), which the DRM card directory the
+    accelerator discovery reads does not hold. The cluster reads it off this
+    inventory for the controller exactly as a worker's probe reports it.
+    """
     memory_total, memory_available = _linux_memory()
     board = board_info()
     storage_path = Path(model_root)
@@ -68,7 +77,8 @@ def hardware_inventory(model_root: str = data_path("models")) -> Dict[str, Any]:
         storage_free = shutil.disk_usage(storage_path).free
     except OSError:
         storage_free = 0
-    summary = accelerator_summary()
+    summary = accelerator_summary(sys_root)
+    summary["accelerators"] = with_gfx_target_version(summary["accelerators"], sys_root)
     # Flash attention is the fact the KV planner reads and this inventory never
     # supplied. Without the key `plan_kv_cache` saw `None`, treated it as
     # "unavailable", and silently downgraded every requested `cache_type_v` to

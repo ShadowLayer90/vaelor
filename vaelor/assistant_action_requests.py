@@ -32,11 +32,16 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from . import assistant_console_places as places
+
 # Verbs that express intent to change something, as opposed to asking about it.
 _CHANGE_VERB = (
     r"(?:turn|set|make|change|switch|adjust|dim|brighten|enable|disable|"
     r"put|update|apply|configure|start|stop|restart|reboot|install|remove|"
-    r"delete|rename|increase|decrease|raise|lower)"
+    r"delete|rename|increase|decrease|raise|lower|"
+    # Review round 4: "shut the LLM Server down", "kill it" and "rotate its
+    # key" reached a model that could say it had acted.
+    r"shut|kill|rotate)"
 )
 
 # A message may carry several instructions, so it is split into clauses before
@@ -121,18 +126,48 @@ _COLOUR_PATTERN = re.compile(
 # describe it. The route is part of the area definition so that naming a
 # destination and being able to reach it can never drift apart.
 _AREAS: Tuple[Tuple[str, str, str, str, str, Tuple[str, ...]], ...] = (
+    # Review round 3 (F1): changes to the console's own features. They come
+    # first, so "switch AI Chat to model X" is not read as the app inventory.
+    # Nothing here is changed by the Assistant; `FEATURE_AREAS` are declined
+    # before any model is asked, so no model reply can claim it was done.
+    (
+        "llm-server",
+        places.ENDPOINTS_PLACE,
+        places.ENDPOINTS_ROUTE,
+        places.ENDPOINTS_CONTROL,
+        "the " + places.LLM_SERVER,
+        (places.LLM_SERVER.lower(), "llm-server"),
+    ),
+    (
+        "ai-chat-model",
+        places.AI_CHAT,
+        "#/ai-chat",
+        places.AI_CHAT,
+        places.AI_CHAT,
+        # Setting AI Chat up is the planner's (`feature_change_decline`).
+        (places.AI_CHAT.lower(),),
+    ),
+    (
+        "assistant-model",
+        places.ASSISTANT_SETUP,
+        "#/assistant",
+        places.ASSISTANT_SETUP,
+        "the Assistant's model",
+        # Its model, not the Assistant: "set up the Assistant" keeps the setup plan.
+        ("assistant to", "assistant's model", "assistant model", "assistant use"),
+    ),
     (
         "lighting",
-        "System > Case lighting",
+        places.LIGHTING_PLACE,
         "#/system",
-        "Case lighting",
+        places.LIGHTING_PANEL,
         "case lighting",
         ("light", "lights", "lighting", "rgb", "led", "leds", "colour", "color",
          "brightness", "rainbow"),
     ),
     (
         "cooling",
-        "System > Cooling",
+        places.COOLING_PLACE,
         "#/system",
         "Cooling",
         "cooling and fans",
@@ -140,30 +175,64 @@ _AREAS: Tuple[Tuple[str, str, str, str, str, Tuple[str, ...]], ...] = (
     ),
     (
         "display",
-        "System > Hardware & services",
+        places.HARDWARE_PLACE,
         "#/system",
-        "Hardware & services",
+        places.HARDWARE_PANEL,
         "the front display",
         ("oled", "display", "screen"),
     ),
     (
         "workloads",
-        "Workloads",
+        places.APPS,
         "#/workloads",
-        "Workloads",
+        places.APPS,
         "installed apps",
         ("app", "apps", "container", "containers", "docker", "stack",
          "compose", "model", "models"),
     ),
     (
         "updates",
-        "System > Hardware & services",
+        places.HARDWARE_PLACE,
         "#/system",
-        "Hardware & services",
+        places.HARDWARE_PANEL,
         "system updates",
         ("update", "updates", "upgrade", "package", "packages"),
     ),
 )
+
+
+#: The areas that are console features rather than this machine's hardware or
+#: apps: a change to one is declined in plain words before a model is asked.
+FEATURE_AREAS = frozenset({"llm-server", "ai-chat-model", "assistant-model"})
+
+
+def feature_change_decline(message: str) -> Optional[Dict[str, Any]]:
+    """The decline for a change to a console feature, or ``None`` (review round 3, F1).
+
+    "Turn off the LLM Server" reached the model, which could reply "Done - I
+    have turned off the LLM Server" (LESSONS 1, 14). The Assistant changes none
+    of these; it says so and names where the change is made.
+    """
+    from .assistant_policy import is_deployment_request
+
+    # Setting up or installing a model is the planner's: it prepares a reviewed plan.
+    if is_deployment_request(message):
+        return None
+    # "Use qwen for AI Chat": "use" opens the instruction. It is not a change
+    # verb everywhere - "can I use AI Chat offline" asks what is possible.
+    words = str(message or "").lower().split()
+    if (words[:1] == ["use"] or words[:2] == ["please", "use"]) and places.AI_CHAT.lower() in " ".join(words):
+        message = "set " + " ".join(words[1 if words[0] == "use" else 2:])
+    declined = [action for action in detect_action_requests(message) if action["area"] in FEATURE_AREAS]
+    if not declined:
+        return None
+    return {
+        "answer": " ".join([decline_sentence(action) for action in declined] + ["Nothing was changed."]),
+        "evidence": [{"source": "assistant.policy",
+                      "summary": "A change to a console feature was asked for; nothing was changed."}],
+        "suggested_actions": [change_action(action) for action in declined],
+        "proposed_job": None,
+    }
 
 
 # A follow-up rarely names its subject again: "change them to blue instead",
@@ -184,7 +253,7 @@ def _area_for(clause: str) -> Optional[Tuple[str, str, str, str, str]]:
     if _PRONOUN_SUBJECT.search(lowered) and (
         _COLOUR_PATTERN.search(lowered) or _LIGHTING_VALUE.search(lowered)
     ):
-        return "lighting", "System > Case lighting", "#/system", "Case lighting", "case lighting"
+        return "lighting", places.LIGHTING_PLACE, "#/system", places.LIGHTING_PANEL, "case lighting"
     return None
 
 
@@ -324,6 +393,8 @@ def outstanding_actions(
             answer.get("application_intent") or "",
         ) if value
     ).strip()
+    # Review round 3 (F1): a request this reply already declined is not declined twice.
+    actions = [action for action in actions if decline_sentence(action) not in str(answer.get("answer", ""))]
     if not proposal_text:
         return list(actions)
     covered = areas_named_in(proposal_text)
@@ -333,6 +404,11 @@ def outstanding_actions(
         # self-contradiction.
         covered = {actions[0]["area"]}
     return [action for action in actions if action["area"] not in covered]
+
+
+def change_action(action: Dict[str, str]) -> str:
+    """The next step for a declined change: where to make it."""
+    return "Open {} to change {}.".format(action["screen"], action["subject"])
 
 
 def decline_sentence(action: Dict[str, str]) -> str:

@@ -39,6 +39,7 @@ from .appliance_upgrade import (
     ApplianceUpgradeClient,
     UpgradeApplyPlans,
 )
+from .build_provenance import installed_build
 from .release_source import StubReleaseSource, upgrade_eligibility
 from .runtime_paths import state_path
 
@@ -81,7 +82,16 @@ class ExecutorApplianceUpgradeMixin:
             raise ValueError(
                 "The confirmed target no longer matches the offered release."
             )
-        eligibility = upgrade_eligibility(CURRENT_VERSION, manifest)
+        # The same decision the panel showed (W4d-D8): judged against the
+        # installed build, so a job can never install what the panel refused.
+        reader = getattr(self, "installed_build", None)
+        eligibility = upgrade_eligibility(
+            CURRENT_VERSION, manifest,
+            reader() if callable(reader) else installed_build(),
+            signature_required=bool(
+                getattr(self._release_source(), "signatures_required", False)
+            ),
+        )
         if not eligibility["eligible"]:
             raise ValueError(eligibility["reason"])
 

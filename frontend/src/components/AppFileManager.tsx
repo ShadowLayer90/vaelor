@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest, downloadApiRequest } from "../lib/api";
-import { formatQuantity } from "../lib/format";
+import { bytesIn, formatQuantity } from "../lib/format";
 import type { Role } from "../types";
-import { ConfirmDialog } from "./ConfirmDialog";
-import { Icon } from "./Icon";
-import { Button, Input, Notice, OperationFeedback, type OperationState } from "./ui";
+import "../styles/apps-manage.css";
+import "../styles/apps-manage-tools.css";
+import { AppsDialog, AppsInset } from "./appsKit";
+import { Icon, ICON_SIZE } from "./Icon";
+import { Button, Input, LoadingLines, type OperationState } from "./ui";
+import { TabNotice } from "./WorkloadConfigurationTabs";
 
 /** One entry in a directory listing: `d` = folder, `f` = file. */
 interface FsEntry {
@@ -20,7 +23,7 @@ interface FsListing {
 }
 
 /** Server-enforced per-file upload cap; pre-checked here for a friendlier error. */
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = bytesIn(100, "MiB");
 
 /** Join a directory to a child name without minting a double slash at the root. */
 function joinPath(base: string, name: string): string {
@@ -68,6 +71,9 @@ export function AppFileManager({
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState("");
   const [pendingDelete, setPendingDelete] = useState<FsEntry | null>(null);
+  // A failed delete is said inside its dialog (the ManageFiles board), which stays open.
+  const [deleteError, setDeleteError] = useState("");
+  const cancelDeleteRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const setFeedback = (message: string, state: OperationState = "success") => {
@@ -158,6 +164,7 @@ export function AppFileManager({
     const entry = pendingDelete;
     setBusy(true);
     setFeedback("");
+    setDeleteError("");
     try {
       await apiRequest(
         `/managed/apps/${appId}/fs/delete`,
@@ -168,8 +175,7 @@ export function AppFileManager({
       setFeedback(`${entry.type === "d" ? "Folder" : "File"} "${entry.name}" deleted.`);
       await list(path);
     } catch (caught) {
-      setFeedback(caught instanceof Error ? caught.message : "That item could not be deleted.", "error");
-      setPendingDelete(null);
+      setDeleteError(caught instanceof Error && caught.message ? caught.message : "That item could not be deleted.");
     } finally {
       setBusy(false);
     }
@@ -236,49 +242,44 @@ export function AppFileManager({
 
   const noStorage = !loading && !error && roots.length === 0;
 
+  const closeDelete = () => { if (!busy) { setPendingDelete(null); setDeleteError(""); } };
+
   return (
-    <section className="app-file-manager" aria-labelledby="app-file-manager-title">
-      <div className="tool-explainer">
-        <Icon name="database" />
-        <span>
-          <strong id="app-file-manager-title">Files</strong>
-          <small>Browse this app&apos;s stored files. Upload, download, create folders, and delete items. Deleting is permanent.</small>
-        </span>
-      </div>
+    <section className="manage-tool" aria-labelledby="manage-files-title">
+      <AppsInset
+        detail="Browse this app's stored files. Upload, download, create folders, and delete items. Deleting is permanent."
+        icon="database"
+        title={<span id="manage-files-title">Files</span>}
+      />
 
       {!isAdmin ? (
-        <div className="app-file-manager__empty" role="status">
-          <Icon name="lock" size={30} />
-          <p>Administrator access is required to manage this app&apos;s files.</p>
-        </div>
+        <AppsInset detail="Administrator access is required to manage this app's files." icon="lock" />
       ) : (
       <>
       {error && (
-        <Notice severity="danger">
+        <div className="manage-banner manage-banner--danger" role="alert">
           <span>{error}</span>
           <Button onClick={() => void list(path || undefined)}>Try again</Button>
-        </Notice>
+        </div>
       )}
 
-      {loading && roots.length === 0 && !error && <p className="app-file-manager__note" role="status">Loading files…</p>}
+      {loading && roots.length === 0 && !error && <div className="manage-tool__loading"><p className="manage-tool__quiet" role="status">Loading files…</p><LoadingLines label="Loading files" lines={1} /></div>}
 
       {noStorage ? (
-        <div className="app-file-manager__empty" role="status">
-          <Icon name="folder" size={30} />
-          <p>This app has no browsable storage.</p>
-        </div>
+        <p className="manage-tool__quiet" role="status">This app has no browsable storage.</p>
       ) : roots.length > 0 && (
         <>
           {roots.length > 1 && (
-            <div className="app-file-manager__roots" role="tablist" aria-label="Storage locations">
+            <div className="manage-roots" role="tablist" aria-label="Storage locations">
               {roots.map((candidate) => (
                 <Button
-                  key={candidate}
-                  role="tab"
                   aria-selected={candidate === root}
-                  variant={candidate === root ? "primary" : "quiet"}
+                  className={candidate === root ? "manage-roots__option is-on" : "manage-roots__option"}
                   disabled={busy}
+                  key={candidate}
                   onClick={() => navigateTo(candidate)}
+                  role="tab"
+                  variant="quiet"
                 >
                   {candidate}
                 </Button>
@@ -286,15 +287,15 @@ export function AppFileManager({
             </div>
           )}
 
-          <div className="app-file-manager__toolbar">
-            <nav className="app-file-manager__breadcrumb" aria-label="Current folder">
-              <Button variant="quiet" disabled={busy} onClick={() => navigateTo(root)}>{root || "/"}</Button>
+          <div className="manage-files__toolbar">
+            <nav className="manage-files__breadcrumb" aria-label="Current folder">
+              <Button variant="quiet" disabled={busy || segments.length === 0} aria-current={segments.length === 0 ? "page" : undefined} onClick={() => navigateTo(root)}>{root || "/"}</Button>
               {segments.map((segment, index) => {
                 const target = joinPath(root, segments.slice(0, index + 1).join("/"));
                 const isCurrent = index === segments.length - 1;
                 return (
-                  <span className="app-file-manager__crumb" key={target}>
-                    <Icon name="chevron" size={14} />
+                  <span className="manage-files__crumb" key={target}>
+                    <Icon name="chevron" size={ICON_SIZE.inline} />
                     <Button
                       variant="quiet"
                       disabled={busy || isCurrent}
@@ -307,7 +308,7 @@ export function AppFileManager({
                 );
               })}
             </nav>
-            <div className="app-file-manager__actions">
+            <div className="manage-files__actions">
               <Button
                 disabled={busy}
                 onClick={() => { setCreatingFolder((value) => !value); setFolderName(""); }}
@@ -334,7 +335,7 @@ export function AppFileManager({
           </div>
 
           {creatingFolder && (
-            <div className="app-file-manager__new-folder">
+            <div className="manage-files__new-folder">
               <Input
                 label="New folder name"
                 value={folderName}
@@ -351,37 +352,35 @@ export function AppFileManager({
             </div>
           )}
 
-          <ul className="app-file-manager__list" aria-busy={loading}>
+          <ul className="manage-files__list" aria-busy={loading}>
             {loading ? (
-              <li className="app-file-manager__note">Loading files…</li>
+              <li className="manage-files__note">Loading files…</li>
             ) : sorted.length === 0 ? (
-              <li className="app-file-manager__note">This folder is empty.</li>
+              <li className="manage-files__note">This folder is empty.</li>
             ) : (
               sorted.map((entry) => (
-                <li className="app-file-manager__row" key={`${entry.type}:${entry.name}`} data-type={entry.type}>
-                  {entry.type === "d" ? (
-                    <Button className="app-file-manager__name" variant="quiet" disabled={busy} onClick={() => openFolder(entry.name)}>
-                      <Icon name="folder" size={18} />
-                      <span className="app-file-manager__label">{entry.name}</span>
-                    </Button>
-                  ) : (
-                    <Button className="app-file-manager__name" variant="quiet" disabled={busy} onClick={() => void download(entry)}>
-                      <Icon name="file" size={18} />
-                      <span className="app-file-manager__label">{entry.name}</span>
-                      <span className="app-file-manager__size">{formatQuantity(entry.size, "used")}</span>
-                    </Button>
-                  )}
-                  <div className="app-file-manager__row-actions">
+                <li className="manage-files__row" key={`${entry.type}:${entry.name}`} data-type={entry.type}>
+                  <Button
+                    className="manage-files__name"
+                    disabled={busy}
+                    onClick={() => (entry.type === "d" ? openFolder(entry.name) : void download(entry))}
+                    variant="quiet"
+                  >
+                    <Icon name={entry.type === "d" ? "folder" : "file"} size={ICON_SIZE.inline} />
+                    <span className="manage-files__label">{entry.name}</span>
+                  </Button>
+                  {entry.type === "f" && <span className="manage-files__size">{formatQuantity(entry.size, "used")}</span>}
+                  <div className="manage-files__row-actions">
                     {entry.type === "f" && (
                       <Button variant="quiet" disabled={busy} aria-label={`Download ${entry.name}`} onClick={() => void download(entry)}>
-                        <Icon name="download" size={16} />
+                        Download
                       </Button>
                     )}
                     <Button
                       variant="danger"
                       disabled={busy}
                       aria-label={`Delete ${entry.name}`}
-                      onClick={() => setPendingDelete(entry)}
+                      onClick={() => { setDeleteError(""); setPendingDelete(entry); }}
                     >
                       Delete
                     </Button>
@@ -393,21 +392,31 @@ export function AppFileManager({
         </>
       )}
 
-      {notice && <OperationFeedback className="managed-operation-feedback" message={notice} state={noticeState} />}
+      <TabNotice message={notice ? { text: notice, state: noticeState } : null} />
 
-      <ConfirmDialog
-        open={Boolean(pendingDelete)}
-        title={pendingDelete ? `Delete ${pendingDelete.name}?` : ""}
-        description={
-          pendingDelete?.type === "d"
+      {pendingDelete && (
+        <AppsDialog
+          busy={busy}
+          className="manage-delete-dialog"
+          error={deleteError || undefined}
+          eyebrow="Can't be undone"
+          eyebrowTone="danger"
+          footer={<>
+            <Button disabled={busy} onClick={closeDelete} ref={cancelDeleteRef}>Cancel</Button>
+            <Button busy={busy} className="manage-solid-danger" onClick={() => void confirmDelete()} variant="danger">Delete permanently</Button>
+          </>}
+          initialFocusRef={cancelDeleteRef}
+          onClose={closeDelete}
+          role="alertdialog"
+          size="narrow"
+          title={`Delete ${pendingDelete.name}?`}
+          titleId="app-file-delete-title"
+        >
+          <p>{pendingDelete.type === "d"
             ? `The folder "${pendingDelete.name}" and everything inside it will be permanently deleted. This cannot be undone.`
-            : `"${pendingDelete?.name ?? ""}" will be permanently deleted. This cannot be undone.`
-        }
-        confirmLabel="Delete permanently"
-        busy={busy}
-        onCancel={() => { if (!busy) setPendingDelete(null); }}
-        onConfirm={() => void confirmDelete()}
-      />
+            : `"${pendingDelete.name}" will be permanently deleted. This cannot be undone.`}</p>
+        </AppsDialog>
+      )}
       </>
       )}
     </section>

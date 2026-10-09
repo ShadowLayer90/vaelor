@@ -1,6 +1,6 @@
 import type { Device } from "../types";
 import type { MachineProfile } from "../lib/machine";
-import { Icon, type IconName } from "./Icon";
+import { Icon, ICON_SIZE, type IconName } from "./Icon";
 import type { StorageSummary } from "./Sidebar";
 
 /**
@@ -120,7 +120,7 @@ export function OverviewHardwareChips({
       )}
       {hardwareChips({ device, machine, storage }).map((chip) => (
         <span key={chip.label} title={chip.title}>
-          <Icon name={chip.icon} size={13} />{chip.label}
+          <Icon name={chip.icon} size={ICON_SIZE.inline} />{chip.label}
         </span>
       ))}
       {/*

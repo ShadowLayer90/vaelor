@@ -209,9 +209,12 @@ def register_assistant_routes(context: ApiContext) -> None:
         registry = callbacks.get("assistant_tools")
         tools = list(registry.catalog()) if registry is not None else []
         available_scopes = {item["scope"] for item in tools}
+        requested_surface = request.args.get("surface", "assistant")
+        if requested_surface not in ("assistant", "inference"):
+            requested_surface = "assistant"
         model = assistant_model_status(callbacks, g.auth_session.username)
         profiles = []
-        for profile in task_store.profiles(g.auth_session.username):
+        for profile in task_store.profiles(g.auth_session.username, surface=requested_surface):
             required = set(profile["scopes"])
             profiles.append({
                 **profile,
@@ -328,11 +331,9 @@ def register_assistant_routes(context: ApiContext) -> None:
     def custom_agent_delete(agent_id):
         store = callbacks.get("custom_agents")
         task_store = callbacks.get("agent_tasks")
-        active = [
-            item for item in task_store.list(actor=g.auth_session.username, limit=200)
-            if item["profile"] == agent_id
-            and item["state"] not in {"completed", "failed", "cancelled", "archived"}
-        ]
+        active = task_store.list(
+            actor=g.auth_session.username, limit=1, profile=agent_id, open_only=True,
+        )
         if active:
             return _payload(
                 error={"code": "custom_agent_in_use", "message": "Disable or finish this agent's active tasks before deleting it."},
@@ -382,11 +383,10 @@ def register_assistant_routes(context: ApiContext) -> None:
             )
         actor = None if g.auth_session.role == "administrator" else g.auth_session.username
         archived = request.args.get("archived", "").lower() in {"1", "true", "yes"}
-        tasks = task_store.list(actor=actor, limit=request.args.get("limit", 100))
-        return _payload([
-            task for task in tasks
-            if (task.get("state") == "archived") == archived
-        ])
+        # Filter archived vs recent in the store, before its limit (ACC-134).
+        return _payload(task_store.list(
+            actor=actor, limit=request.args.get("limit", 100), archived=archived,
+        ))
 
     @blueprint.post("/assistant/tasks/archive-finished")
     @require_auth("operator", csrf=True)
@@ -820,21 +820,37 @@ def register_assistant_routes(context: ApiContext) -> None:
         )
         return _payload(result)
 
+    def _enrolled_worker_ids():
+        # Node EXISTENCE is the route's check (create_trigger owns only the
+        # source/node rule). Read from the same cluster store the Fleet views use.
+        manager = callbacks.get("cluster_manager")
+        try:
+            return {str(r.get("id", "")) for r in manager.store.list_nodes() if r.get("id")}
+        except (AttributeError, OSError, TypeError, ValueError):
+            return set()
+
     @blueprint.post("/assistant/triggers")
     @require_auth("administrator", csrf=True)
     def assistant_trigger_create():
         store = callbacks.get("automations")
         body = request.get_json(silent=True) or {}
+        node = str(body.get("node", "") or "").strip()
+        # "" is the controller (back-compatible). A named node must be a real
+        # enrolled worker: rejecting an unknown id, or a client spoofing
+        # "controller"/another appliance's name, keeps a rule off a machine that
+        # would never report it.
+        if node and node not in _enrolled_worker_ids():
+            return _payload(error={"code": "trigger_rejected", "message": "Choose the controller or an enrolled worker."}, status=400)
         try:
             trigger = store.create_trigger(
                 g.auth_session.username, body.get("name", ""), body.get("prompt", ""),
                 body.get("profile", "system"), body.get("source", ""),
                 body.get("operator", ">="), body.get("threshold"),
-                body.get("cooldown_seconds", 1800),
+                body.get("cooldown_seconds", 1800), node=node,
             )
         except (AttributeError, AutomationError) as error:
             return _payload(error={"code": "trigger_rejected", "message": str(error)}, status=400)
-        security.audit(g.auth_session.username, "assistant.trigger.create", "success", target=trigger["id"], remote_addr=request.remote_addr or "", details={"source": trigger["source"], "threshold": trigger["threshold"]})
+        security.audit(g.auth_session.username, "assistant.trigger.create", "success", target=trigger["id"], remote_addr=request.remote_addr or "", details={"name": trigger.get("name", ""), "source": trigger["source"], "threshold": trigger["threshold"], "node": trigger["node"] or "controller"})
         return _payload(trigger, status=201)
 
     @blueprint.patch("/assistant/triggers/<trigger_id>")
@@ -858,6 +874,8 @@ def register_assistant_routes(context: ApiContext) -> None:
     def assistant_trigger_delete(trigger_id):
         store = callbacks.get("automations")
         try:
+            # W6-D1: the rule's name is kept in its audit row, so a deleted one is still named.
+            name = (store.get_trigger(trigger_id, g.auth_session.username) or {}).get("name", "")
             result = store.delete_trigger(trigger_id, g.auth_session.username)
         except (AttributeError, AutomationError) as error:
             return _payload(
@@ -866,7 +884,7 @@ def register_assistant_routes(context: ApiContext) -> None:
             )
         security.audit(
             g.auth_session.username, "assistant.trigger.delete", "success",
-            target=trigger_id, remote_addr=request.remote_addr or "",
+            target=trigger_id, remote_addr=request.remote_addr or "", details={"name": name},
         )
         return _payload(result)
 

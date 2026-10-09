@@ -1,0 +1,479 @@
+/*
+ * The Assistant page and the Memory page (VD-200: the Assistant board and
+ * every Assist* board, plus MemoryPage). The page's frame and the building
+ * blocks its three tabs share: the tab strip with the tab's own pill and
+ * action at its right end, section labels, inner boxes, key/value grids, the
+ * popover menu, the dialog's head/body/foot and the side drawer. Each tab's
+ * own layout lives in assistant-ask.css, assistant-routines.css,
+ * assistant-history.css and memory-page.css.
+ *
+ * Every value here is a token from DESIGN_TOKENS.md, through tokens-auth.css.
+ * The `.as-` prefix keeps these clear of the pre-redesign Assistant styles,
+ * which still match the old class names.
+ */
+
+.as-page {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.as-page > *,
+.as-panel > * {
+  min-width: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+/* Ask is a conversation, drawn narrower than the other tabs (the boards' 1,040 px). */
+.as-page[data-tab="ask"] {
+  max-width: 1040px;
+}
+
+.as-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* The tab strip; the shown tab's pill and action are in the console's top bar. */
+.as-tabsbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px 16px;
+  border-bottom: 1px solid var(--border-row);
+}
+
+.as-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.as-tabs .as-tab.ui-button {
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 14px;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  font-size: var(--font-size-ui);
+  font-weight: 400;
+  box-shadow: none;
+  transform: none;
+}
+
+.as-tabs .as-tab.ui-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: none;
+  border-color: transparent;
+  border-bottom-color: var(--border-strong);
+}
+
+.as-tabs .as-tab.as-tab--active.ui-button,
+.as-tabs .as-tab.as-tab--active.ui-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.as-tabs .as-tab.ui-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* Buttons on these pages are the board's 36 px pills; a phone keeps 44. */
+.as-page .ui-button,
+.memory-page .ui-button,
+.as-dialog .ui-button,
+.as-drawer .as-dialog__head .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+.as-page .ui-button--primary,
+.memory-page .ui-button--primary,
+.as-dialog .ui-button--primary {
+  font-weight: 600;
+}
+
+/* The board's outline Delete (a solid red is for the confirm dialog only). */
+.ui-button.as-btn-danger {
+  color: var(--danger-text);
+  background: var(--bg-button);
+  border-color: var(--danger-border);
+}
+
+.ui-button.as-btn-danger:hover:not(:disabled) {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+/* The board's ghost button: a word that acts, with no outline. */
+.ui-button.as-btn-ghost {
+  color: var(--text-secondary);
+  background: none;
+  border-color: transparent;
+}
+
+/* Selected (a pressed toggle such as an open Past chats): the accent's ground. */
+.ui-button.as-btn-on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* Words and labels */
+.as-label {
+  color: var(--text-faint-label);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.as-muted {
+  color: var(--text-muted);
+}
+
+.as-small {
+  font-size: var(--font-size-ui-xs);
+}
+
+.as-mono {
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* An inner box: a hairline, no fill, inside a card or a dialog. */
+.as-box {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-row);
+  border-radius: 10px;
+}
+
+/* Key/value grid: hairline gaps, dark cells, mono values. */
+.as-kv {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--border-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.as-kv > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--bg-kv);
+  overflow-wrap: anywhere;
+}
+
+.as-kv dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.as-kv dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+}
+
+/* An outline chip that is a door or a toggle (the capability chips, "Go to"). */
+.as-chip {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  color: var(--text-secondary);
+  background: none;
+  border: 1px solid var(--border-row-active);
+  border-radius: var(--radius-pill);
+  font: inherit;
+  font-size: var(--font-size-ui-xs);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.as-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.as-chip[aria-expanded="true"],
+.as-chip.is-on {
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.as-chip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* A popover menu (More, Past chats): opens under its button. */
+.as-popover {
+  position: relative;
+  display: inline-flex;
+}
+
+.as-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--layer-raised);
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+}
+
+.as-menu .ui-button-wrap,
+.as-menu .ui-button {
+  width: 100%;
+}
+
+.as-menu .ui-button {
+  justify-content: flex-start;
+  min-height: 36px;
+  padding: 0 12px;
+  color: var(--text-primary);
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  font-size: var(--font-size-ui-sm);
+  text-align: left;
+}
+
+.as-menu .ui-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: transparent;
+}
+
+.as-menu .ui-button.as-menu__danger {
+  color: var(--danger-text);
+}
+
+.as-menu hr {
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--border-card);
+}
+
+/* A dialog drawn to the boards: head, body and foot split by hairlines. Put
+   these inside ModalShell (className="as-dialog") or a dialog of its own. */
+.as-dialog.modal-shell__dialog {
+  padding: 0;
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+}
+
+.as-dialog__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border-card);
+}
+
+/* A dialog's title at the size every other dialog's is (system.css's
+   `.sys-dialog__titles h2`): the rem size it had scaled with the desktop's
+   81.25% root to 14.625 px (polish audit, cause 13). */
+.as-dialog__head h2,
+.as-dialog__head h3 {
+  margin: 6px 0 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.as-dialog__head p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.as-dialog__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 22px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui);
+  line-height: 1.6;
+}
+
+.as-dialog__body p {
+  margin: 0;
+}
+
+.as-dialog__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 22px;
+  border-top: 1px solid var(--border-card);
+}
+
+/* The side drawer (Change intelligence): over the page from the right. */
+.as-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-modal);
+  display: flex;
+  justify-content: flex-end;
+  background: var(--overlay);
+}
+
+.as-drawer {
+  width: min(100%, 800px);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-default);
+  box-shadow: var(--shadow-modal);
+  overscroll-behavior: contain;
+}
+
+.as-drawer:focus {
+  outline: none;
+}
+
+.as-drawer__body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr));
+  align-items: start;
+  gap: 16px;
+  padding: 18px 22px;
+}
+
+.as-drawer__column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Two columns: the work, and what sits beside it; one column on a narrow screen. */
+.as-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.as-split > * {
+  min-width: 0;
+}
+
+.as-grid2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 14px;
+}
+
+/* Page n of m, Previous and Next. */
+.as-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  border-top: 1px solid var(--border-list);
+}
+
+.as-pager__buttons {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 1200px) {
+  .as-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .as-page .ui-button,
+  .memory-page .ui-button,
+  .as-dialog .ui-button,
+  .as-drawer .as-dialog__head .ui-button,
+  .as-chip {
+    min-height: 44px;
+  }
+
+  .as-menu .ui-button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 720px) {
+
+  .as-dialog__head,
+  .as-dialog__body,
+  .as-dialog__foot,
+  .as-drawer__body {
+    padding-inline: 16px;
+  }
+
+  .as-dialog__foot .ui-button-wrap {
+    flex: 1 1 auto;
+  }
+
+  .as-dialog__foot .ui-button {
+    width: 100%;
+  }
+
+  .as-drawer {
+    width: 100%;
+    border-left: 0;
+  }
+}
+
+@media (forced-colors: active) {
+  .as-tabs .as-tab.as-tab--active.ui-button {
+    border-bottom-color: Highlight;
+  }
+
+  .as-chip,
+  .as-box,
+  .as-menu {
+    border: 1px solid CanvasText;
+  }
+}

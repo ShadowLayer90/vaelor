@@ -1,0 +1,174 @@
+/*
+ * The two global notices (VD-200, the GlobalNotices board): the newer-build
+ * reload notice above whatever page is open, and the error fallbacks - one
+ * page in its own place, or the whole console on its own.
+ */
+
+.gn-reload.ui-notice {
+  align-items: center;
+  padding: 14px 18px;
+  border-radius: var(--radius-lg);
+}
+
+.gn-reload .app-reload-notice__row {
+  width: 100%;
+  gap: 12px;
+}
+
+.gn-reload__icon {
+  flex: 0 0 auto;
+}
+
+.gn-reload__text {
+  flex: 1 1 auto;
+  font-size: var(--font-size-ui-sm);
+}
+
+.gn-reload .ui-button {
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+}
+
+/* One page failed: the card sits where the page was. */
+.gn-error-wrap {
+  padding: 4px 0;
+}
+
+.gn-error-wrap--app {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6) var(--space-4);
+  background: var(--bg-canvas);
+}
+
+.workspace-error.gn-error {
+  max-width: 740px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 8px 0;
+  padding: 28px;
+  background: var(--surface-card);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card-edge);
+}
+
+.workspace-error.gn-error--app {
+  width: min(100%, 560px);
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+.gn-error__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: var(--font-size-ui-lg);
+}
+
+.gn-error__mark {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bg-canvas);
+  background: var(--accent);
+  border-radius: 7px;
+}
+
+/* ProductMark's small drawing is on an 18-unit grid: at 18 px its strokes stay 1.5 px. */
+.gn-error__mark svg {
+  width: 18px;
+  height: 18px;
+}
+
+.gn-error__eyebrow {
+  color: var(--danger-text);
+  font-size: var(--font-size-ui-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.gn-error h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.gn-error p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui);
+  line-height: 1.6;
+}
+
+.gn-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.gn-error__actions .ui-button {
+  min-height: 36px;
+  gap: 8px;
+  padding: 0 14px;
+  font-size: var(--font-size-ui-sm);
+}
+
+.gn-error__actions .ui-button--quiet {
+  color: var(--text-primary);
+  background: none;
+  border-color: transparent;
+}
+
+.workspace-error.gn-error details {
+  padding-top: 14px;
+  border-top: 1px solid var(--border-row);
+}
+
+.workspace-error.gn-error summary {
+  min-height: var(--target-min);
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+}
+
+.workspace-error.gn-error code {
+  margin-top: 10px;
+  padding: 10px 14px;
+  color: var(--danger-text);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  background: var(--bg-control);
+  border: 1px solid var(--border-row);
+  border-radius: var(--radius-md);
+}
+
+.gn-error__note {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .gn-reload .ui-button,
+  .gn-error__actions .ui-button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 720px) {
+  .workspace-error.gn-error {
+    padding: 22px var(--space-4);
+  }
+}

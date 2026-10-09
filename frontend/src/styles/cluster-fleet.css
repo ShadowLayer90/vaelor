@@ -1,0 +1,626 @@
+/*
+ * Cluster > Fleet (VD-200, the ClusterFleet and ClusterFleetDetail boards):
+ * the four stat tiles, the machine cards with their four readings, and a card
+ * opened in place. Tokens only; the card, tile, meter and pill come from the
+ * shared primitives and cluster.css.
+ */
+
+.cf-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* Four stat tiles. */
+.cf-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 14px;
+  /* Cards in one row share one height, so their footers and actions line up
+     (polish cause 7; LESSONS 6). The card is a flex column whose body grows. */
+  align-items: stretch;
+  min-width: 0;
+}
+
+.cf-tiles .ui-stat-tile__foot .ui-meter__label {
+  margin-top: 10px;
+}
+
+.cf-tile-note {
+  display: block;
+  margin-top: 4px;
+}
+
+/* An old Throughput figure: the wrapper leaves the grid alone, the digits go grey. */
+.cf-tile-wrap--old {
+  display: contents;
+}
+
+.cf-tile-wrap--old .ui-stat-tile__value,
+.cf-tile-old {
+  color: var(--text-unread);
+}
+
+/* "Machines · 2 enrolled · 1 awaiting join" */
+.cf-machines-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-lg);
+  font-weight: 500;
+}
+
+.cf-machines-title span {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 400;
+}
+
+.cf-empty {
+  margin: 0;
+  padding: 16px 18px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* The machine cards: two up, an opened card takes the whole row. */
+.cf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr));
+  gap: 14px;
+  /* Cards in one row share one height, so their footers and actions line up
+     (polish cause 7; LESSONS 6). The card is a flex column whose body grows. */
+  align-items: stretch;
+  min-width: 0;
+}
+
+.cf-card.is-open {
+  grid-column: 1 / -1;
+}
+
+.cf-card .cl-card__body.ui-card__body--flush {
+  overflow: visible;
+}
+
+/* A section of a collapsed card: a hairline above, the board's row padding. */
+.cf-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-list);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cf-section:first-child {
+  border-top: 0;
+}
+
+.cf-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cf-text {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.cf-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+/* The four readings: Processor, Memory, Unified memory, CPU temp. */
+.cf-readings {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  padding: 16px 18px;
+}
+
+.cf-readings--three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.cf-reading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cf-reading__label,
+.cf-reading__foot {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.35;
+}
+
+.cf-reading__value {
+  color: var(--text-primary);
+  font-size: 21px;
+  font-weight: 300;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* No fresh reading: said in words, grey, and never a bar. */
+.cf-reading__value--unread {
+  color: var(--text-unread);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.cf-meter {
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  background: var(--meter-track);
+  border-radius: var(--radius-pill);
+}
+
+.cf-meter > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+.cf-meter--warn > i {
+  background: var(--warning);
+}
+
+/* A machine the cluster cannot read: the lead line and why (ClusterStates). */
+.cf-lead {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui);
+}
+
+.cf-lead strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Workloads: one bordered row each. */
+.cf-workloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cf-workload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-kv);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+}
+
+.cf-workload__name {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.cf-workload__detail {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.cf-workload .cl-ico {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: none;
+}
+
+/* The foot row that opens the card in place. */
+.ui-button.cf-open {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 48px;
+  padding: 14px 18px;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--font-size-ui-sm);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.ui-button.cf-open > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ui-button.cf-open:hover {
+  color: var(--text-primary);
+  background: var(--bg-row-hover);
+}
+
+.ui-button.cf-open:focus-visible,
+.ui-button.cf-close:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.ui-button.cf-open svg {
+  flex: 0 0 auto;
+}
+
+.ui-button.cf-close svg {
+  transform: rotate(90deg);
+}
+
+/* Close details, in an opened card's header. */
+.ui-button.cf-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--font-size-ui-sm);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-pill);
+}
+
+.ui-button.cf-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.cf-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Actions: Drain / Recheck / the telemetry sentence / Remove. */
+.cf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cf-actions__note {
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.cf-actions__spacer {
+  flex: 1 1 auto;
+}
+
+.cf-actions-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-list);
+}
+
+.cf-actions-block .recheck-outcome {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+/* The opened card. */
+.cf-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.cf-detail__split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr));
+  gap: 20px;
+  align-items: start;
+  min-width: 0;
+}
+
+/* Telemetry tiles in the opened card. */
+.cf-telemetry {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cf-telemetry__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+
+.cf-telemetry__window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cf-telemetry__stale {
+  margin: 0;
+  color: var(--warning-text);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cf-telemetry__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr));
+  gap: 10px;
+  /* Cards in one row share one height, so their footers and actions line up
+     (polish cause 7; LESSONS 6). The card is a flex column whose body grows. */
+  align-items: stretch;
+}
+
+.cf-telemetry__tiles .ui-stat-tile {
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.cf-telemetry__tiles .ui-stat-tile__value {
+  font-size: var(--font-size-stat-sm);
+}
+
+.cf-telemetry__tiles .ui-stat-tile__value > span {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.cf-telemetry__tiles .ui-stat-tile__value--unread {
+  min-height: 0;
+  font-size: var(--font-size-ui-sm);
+}
+
+.cf-telemetry__tiles .ui-trend {
+  height: 22px;
+}
+
+/* An old reading keeps its trend, faded, and never a current figure. */
+.cf-telemetry__tiles--stale .ui-stat-tile__value,
+.cf-telemetry__tiles--stale .ui-trend {
+  color: var(--text-unread);
+  opacity: 0.55;
+}
+
+/* Worker software: the summary on a card, the full reading when open. */
+.cf-software {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cf-software__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.cf-software__title {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.cf-software__sentence {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.cf-software__stale {
+  color: var(--warning-text);
+}
+
+.cf-software__update {
+  margin: 0;
+  color: var(--info-text);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cf-software__components {
+  margin: 4px 0 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.cf-software__component {
+  display: grid;
+  grid-template-columns: minmax(0, 190px) minmax(0, 1fr);
+  gap: 4px 14px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.cf-software__component:first-child {
+  border-top: 0;
+}
+
+.cf-software__component dt {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.cf-software__measured {
+  color: var(--text-muted);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cf-software__component dd {
+  margin: 0;
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.45;
+}
+
+.cf-software__status--matches {
+  color: var(--success-text);
+}
+
+.cf-software__status--differs {
+  color: var(--warning-text);
+}
+
+.cf-software__status--unread,
+.cf-software__status--not-applicable {
+  color: var(--text-muted);
+}
+
+.cf-software__codes summary {
+  min-height: 24px;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+  cursor: pointer;
+}
+
+.cf-software__codes dl {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+
+.cf-software__codes dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 200px) minmax(0, 1fr);
+  gap: 4px 12px;
+}
+
+.cf-software__codes dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.cf-software__codes dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.cf-software__convert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 4px;
+}
+
+.cf-software__convert .ui-button-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.cf-software__convert .ui-button {
+  width: auto;
+}
+
+.cf-software__convert .ui-button__disabled-reason {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+@media (max-width: 720px) {
+  .cf-software__component {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .cf-software__component dd {
+    grid-column: 1 / -1;
+  }
+
+  .cf-software__codes dl > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A phone: two readings a row, and 44 px targets. */
+@media (max-width: 720px) {
+  .cf-readings,
+  .cf-readings--three {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px), (pointer: coarse) {
+  .ui-button.cf-close {
+    min-height: 44px;
+  }
+
+  .cf-software__codes summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+}
+
+/* These are Button primitives drawn as the board draws them: the wrapper
+   spans the row, and the primitive's own weight and radius give way. */
+.ui-button-wrap:has(> .ui-button.cf-open),
+.ui-button-wrap:has(> .ui-button.cf-close) {
+  display: grid;
+}
+
+.ui-button.cf-open,
+.ui-button.cf-close {
+  min-width: 0;
+  font-weight: 400;
+}
+
+.ui-button.cf-open,
+.ui-button.cf-open:hover:not(:disabled) {
+  border-radius: 0;
+  border-color: transparent;
+  border-top: 1px solid var(--border-list);
+}
+
+.ui-button.cf-close:hover:not(:disabled) {
+  border-color: transparent;
+}

@@ -24,6 +24,7 @@ from .connector_policy import (
     validate_instance,
 )
 from .credential_broker import CredentialError
+from .credential_use import note_credential_use
 from .runtime_paths import state_path
 
 
@@ -293,6 +294,8 @@ class ConnectorRuntime:
         finally:
             headers.pop("Authorization", None)
             headers.pop("X-API-Key", None)
+        if connector["auth"] != "none":
+            note_credential_use(lease, broker=self.credential_broker)
         if operation["method"] == "HEAD" and not raw:
             decoded: Any = {}
         else:

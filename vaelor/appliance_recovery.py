@@ -78,11 +78,39 @@ RETAINED_CATEGORIES = [
     "hardware-safe cooling, lighting, display, and selected-enclosure configuration",
 ]
 
+# The ONE description of the OS stack a bare-OS Remove Vaelor takes off the box.
+# It is shown in the console before the typed confirm (through the API field
+# below), it is the third bullet of UNINSTALL_REMOVES, and it is what the
+# maintainer script's --help text must agree with - a parity test in
+# tests/test_installer_provisioning.py extracts these nouns and finds each in
+# that usage text. Written here once; the Administration page renders it from the
+# API rather than retyping it, so the copy cannot go stale against what the
+# button does (S1 / cleanup item 9q: the pre-M5 copy named only Docker, InfluxDB,
+# ROCm, amd-smi and novnc, but the bare-OS mode also removes containerd with
+# every container image on the box, the browser-desktop packages, and the docker
+# group).
+UNINSTALL_OS_STACK_NOUNS = (
+    "Docker",
+    "containerd",
+    "container image",
+    "InfluxDB",
+    "/opt/rocm",
+    "amd-smi",
+    "novnc",
+    "browser desktop",
+    "docker group",
+)
+UNINSTALL_OS_SCOPE_SENTENCE = (
+    "the OS stack Vaelor installed - Docker and containerd with every container "
+    "image on the box, InfluxDB, the ROCm gfx1151 packages and /opt/rocm, "
+    "amd-smi, novnc and the browser desktop packages, and the docker group"
+)
+
 # The scope of a full REMOVE VAELOR teardown, shown before the typed confirm.
 UNINSTALL_REMOVES = [
     "the entire Vaelor control plane, executor, brokers, services, and /opt/vaelor",
     "all dashboard accounts, credentials, AI keys, models, chats, and managed app data",
-    "the OS stack Vaelor installed - Docker, InfluxDB, the ROCm gfx1151 packages and /opt/rocm, amd-smi, and novnc",
+    UNINSTALL_OS_SCOPE_SENTENCE,
     "the AMD apt source and keyring, and Vaelor's users, groups, and system units",
 ]
 UNINSTALL_RETAINS = [
@@ -253,6 +281,10 @@ class UninstallPlans:
             "confirmation": UNINSTALL_CONFIRMATION,
             "removes": UNINSTALL_REMOVES,
             "retains": UNINSTALL_RETAINS,
+            # One prose line naming the OS stack a bare-OS teardown removes, so
+            # the Administration page renders it rather than keeping its own copy
+            # (S1). It is the same sentence as the third `removes` bullet.
+            "scope_summary": UNINSTALL_OS_SCOPE_SENTENCE,
             "last_result": result if isinstance(result, dict) else None,
         }
 

@@ -69,6 +69,25 @@ RUNNING_NOT_THERMAL = (
     r"(?:hot|hotter|warm|warmer|cool|cooler|cold|colder)\b)"
 )
 
+#: The words that ask which model is running. Read by the gather table below
+#: and by the answer topic that reads ``inference.status`` (review S6).
+MODEL_PHRASES: Tuple[str, ...] = (
+    "model", "models", "llm", "loaded", "which model", "loaded model",
+)
+
+#: The words that ask how long this machine has been up. Read by the model's
+#: fact filter (`provider_runtime`) and by the uptime answer (review S5).
+UPTIME_PHRASES: Tuple[str, ...] = ("uptime", "up since", "been up", "boot time")
+
+#: Every machine at once - read by the gather table and by the name resolver
+#: (`assistant_machine_names`), so the two cannot disagree (VD-205 item 2).
+MACHINE_SET_PHRASES: Tuple[str, ...] = (
+    "every machine", "each machine", "all machines", "every node", "each node", "all nodes",
+)
+
+#: The serving speed, which the cluster digest carries (VD-205 item 4, review B7).
+SPEED_PHRASES: Tuple[str, ...] = ("tokens per second", "token throughput", "throughput")
+
 #: What an owner says, and the reading it asks for.
 #:
 #: Phrases are matched with word boundaries by both readers. The gatherer
@@ -115,9 +134,8 @@ TOOL_PHRASES: Dict[str, Tuple[str, ...]] = {
         "npu", "neural", "xdna", "ipu", "inference accelerator", "tops",
         "accelerator", "slow", "sluggish", "bottleneck",
     ),
-    "inference.status": (
-        "model", "models", "llm", "inference", "context window", "loaded",
-        "which model", "loaded model", "token", "tokens", "generation",
+    "inference.status": MODEL_PHRASES + (
+        "inference", "context window", "token", "tokens", "generation",
         "slow", "sluggish",
     ),
     # The progressive and past forms were in the *answer* table and not here,
@@ -152,6 +170,22 @@ TOOL_PHRASES: Dict[str, Tuple[str, ...]] = {
         "warning", "warnings", "alert", "alerts", "alarm", "alarms",
         "error", "errors", "fault", "faults", "attention",
         "anything wrong", "is anything wrong", "all clear", "all good",
+        # Review B4: "is it healthy" asks for the verdict, and the verdict
+        # branch now reads this tool rather than the cooling reading.
+        "healthy",
+    ),
+    # VD-205 item 1: the cluster digest, for a question about the cluster,
+    # a worker or every machine. A machine's own name gathers it too, through
+    # the route (`assistant_machine_names`), since names are the owner's.
+    "cluster.digest": (
+        "cluster", "fleet", "worker", "workers", "nodes", "replica", "replicas",
+        "which machine", "hottest machine",
+    ) + MACHINE_SET_PHRASES + SPEED_PHRASES,
+    # Review S7: "are there any errors in the logs" had no gather word, so the
+    # journal was never read and the health verdict answered a different
+    # question. Bare "log" is left out: "log in" is not a request for a log.
+    "logs.service": (
+        "logs", "journal", "log file", "log files", "log lines", "log entries",
     ),
     "storage.status": (
         "storage", "disk", "disks", "drive", "drives", "nvme", "sd card",
@@ -165,7 +199,7 @@ TOOL_PHRASES: Dict[str, Tuple[str, ...]] = {
     # "What is my IP address?" and "What is this machine's hostname?" selected
     # identity and telemetry only - neither of which carries either - so the
     # question reached a model with no network reading in front of it while
-    # `network.status` held 192.168.0.50. Only "ethernet or wifi" phrasing
+    # `network.status` held 192.0.2.50. Only "ethernet or wifi" phrasing
     # ever reached this tool, which is the vocabulary of someone who already
     # knows how the answer is stored.
     "network.status": (

@@ -25,10 +25,16 @@ Three rules run through all of it:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from typing import Any, Callable, Dict, List, Optional
 
 from .health_evaluation import evaluate_health
-from .telemetry_store import TelemetryStoreError
+from .assistant_worker_gpu import power_sensor, worker_gpu_readings
+from .platforms.gpu_telemetry import hwmon_power_is_gpu_power
+from .platforms.gpu_temperature import gpu_temperature_reading, limits_from_driver
+from .platforms.graphics_software import integrated_amd_gpu
 from .platforms.accelerators import (
     NPU_ACTIVITY_FIELD,
     NPU_CLOCK_FIELD,
@@ -201,11 +207,14 @@ def appliance_health(callbacks: Dict[str, Any]) -> Dict[str, Any]:
         readings = (current_data() if current_data else {}) or {}
     except (AttributeError, OSError, TypeError, ValueError):
         readings = {}
+    limits: Dict[str, Any] = {}
     try:
-        policy = platform_driver(callbacks).thermal_policy() or {}
+        driver = platform_driver(callbacks)
+        policy = driver.thermal_policy() or {}
+        limits = limits_from_driver(driver)
     except (AttributeError, KeyError, OSError, TypeError, ValueError):
         policy = {}
-    return evaluate_health(readings, policy)
+    return evaluate_health(readings, policy, limits)
 
 
 def _driver(callbacks: Dict[str, Any]):
@@ -263,14 +272,46 @@ def _sensors(record: Dict[str, Any], fields) -> tuple:
     return present, absent
 
 
-def _adapter(record: Dict[str, Any]) -> Dict[str, Any]:
+def _owner_readings(record: Dict[str, Any], live: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """This adapter's power and temperature as the telemetry owner decides them (review B4).
+
+    ``live`` is the controller's own telemetry sample for the PRIMARY adapter
+    (`platforms.gpu_telemetry.accelerator_telemetry`, through ``current_data``):
+    its ``gpu_power_watts`` is the graphics engine's own draw on an integrated
+    part and absent when that was not read, and its temperature is the one
+    `gpu_temperature_reading` chooses, with the sensor named. The hwmon
+    ``power_watts`` in the discovery record is the whole package on an
+    integrated part (VD-040) and is never used there. Another adapter, with no
+    sample of its own, is read from its record under the same two rules.
+    """
+    if live is not None:
+        power = live.get("gpu_power_watts")
+        temperature, sensor = gpu_temperature_reading(live, edge_label=record.get("temperature_label"))
+    else:
+        own_power = not integrated_amd_gpu(record) and hwmon_power_is_gpu_power(record)
+        power = record.get("power_watts") if own_power else None
+        temperature, sensor = gpu_temperature_reading(
+            {"gpu_temperature_c": record.get("temperature_c")}, edge_label=record.get("temperature_label"),
+        )
+    return {
+        "busy_percent": record.get("busy_percent"), "clock_mhz": record.get("clock_mhz"),
+        "power_watts": power if isinstance(power, (int, float)) and not isinstance(power, bool) else None,
+        # What measured the power, so an answer names it (ACC-201).
+        # What measured the power THIS adapter is given; none when it has none (review 3, M16).
+        "power_sensor": power_sensor(record, live) if isinstance(power, (int, float)) and not isinstance(power, bool) else None,
+        "temperature_c": temperature, "temperature_sensor": sensor,
+    }
+
+
+def _adapter(record: Dict[str, Any], live: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     unified = bool(record.get("unified_memory"))
     vram_total = record.get("vram_total_bytes")
     vram_used = record.get("vram_used_bytes")
     gtt_total = record.get("gtt_total_bytes")
     gtt_used = record.get("gtt_used_bytes")
+    owned = _owner_readings(record, live)
     readings, absent = _sensors(
-        record, ("busy_percent", "temperature_c", "power_watts", "clock_mhz")
+        owned, ("busy_percent", "temperature_c", "power_watts", "clock_mhz")
     )
     vram_percent = _percent(vram_used, vram_total)
     gtt_percent = _percent(gtt_used, gtt_total)
@@ -286,8 +327,11 @@ def _adapter(record: Dict[str, Any]) -> Dict[str, Any]:
         "link_speed": record.get("link_speed"),
         "utilisation_percent": readings.get("busy_percent"),
         "temperature_c": readings.get("temperature_c"),
+        # Which sensor the temperature is from ("graphics engine", "edge", ...).
+        "temperature_sensor": owned["temperature_sensor"],
         "temperature_label": record.get("temperature_label"),
         "power_watts": readings.get("power_watts"),
+        "power_sensor": owned["power_sensor"],
         "clock_mhz": readings.get("clock_mhz"),
         "memory": {
             "unified_memory": unified,
@@ -301,7 +345,7 @@ def _adapter(record: Dict[str, Any]) -> Dict[str, Any]:
             "note": UNIFIED_MEMORY_NOTE if unified else DEDICATED_MEMORY_NOTE,
         },
         "unavailable_readings": absent,
-        "source": "kernel sysfs (amdgpu/drm and hwmon)",
+        "source": "kernel sysfs (amdgpu/drm and hwmon); power and temperature from Vaelor's telemetry",
     }
 
 
@@ -325,6 +369,8 @@ def gpu_status(callbacks: Dict[str, Any]) -> Dict[str, Any]:
                 or "No compute GPU was found on this machine."
             ),
             "adapters": [],
+            # VD-205 item 5: a controller with no GPU still has workers that do.
+            "cluster_machines": worker_gpu_readings(callbacks),
             "rocm_version": graphics.get("rocm_version"),
             "rocm_note": graphics.get("rocm_note", ""),
             "guidance": (
@@ -333,10 +379,18 @@ def gpu_status(callbacks: Dict[str, Any]) -> Dict[str, Any]:
                 "itself."
             ),
         }
+    current_data = callbacks.get("current_data")
+    try:
+        live = dict((current_data() if current_data else {}) or {})
+    except (AttributeError, OSError, TypeError, ValueError):
+        live = {}
     return {
         "detected": True,
         "reason": "",
-        "adapters": [_adapter(record) for record in records],
+        # The primary adapter is the one the telemetry owner reads (review B4).
+        "adapters": [_adapter(record, live if index == 0 else None) for index, record in enumerate(records)],
+        # The cluster's workers, from their telemetry rows (ACC-201).
+        "cluster_machines": worker_gpu_readings(callbacks),
         "rocm_version": graphics.get("rocm_version"),
         "rocm_source": graphics.get("rocm_source", ""),
         "rocm_note": graphics.get("rocm_note", ""),
@@ -550,38 +604,80 @@ def _engine(agent, mode: str, identifier: str, role: str) -> Dict[str, Any]:
     }
 
 
+LOGGER = logging.getLogger(__name__)
+
+#: The id ``inference.status`` gives the Assistant's own on-device engine. The
+#: reply judge (`assistant_local_answer.internal_names_only`) reads it here.
+LOCAL_ENGINE_ID = "assistant-local"
+
+
 def inference_status(callbacks: Dict[str, Any]) -> Dict[str, Any]:
     """Which model is loaded on which engine, and whether it answers."""
+    local_models = _start_local_models(callbacks)
     agent = callbacks.get("deployment_agent")
     engines: List[Dict[str, Any]] = []
     if agent is not None:
         engines.append(_engine(
-            agent, "local", "assistant-local",
+            agent, "local", LOCAL_ENGINE_ID,
             "Appliance assistant, deployment assistant and agent runs, local model.",
         ))
-        engines.append(_engine(
-            agent, "provider", "assistant-provider",
-            "Appliance assistant, deployment assistant and agent runs, connected provider.",
-        ))
+        # Review S6 (VD-049): no "assistant-provider" engine. It resolved to
+        # the same lease as the local one and advertised a provider the
+        # Assistant cannot use.
+    from .chat_connections import connection_locality
+
     chat = callbacks.get("chat_inference")
     chat_connections: List[Dict[str, Any]] = []
     chat_reason = ""
+    # Whether the model AI Chat is assigned to runs on this machine: False with
+    # no chat client (nothing assigned), None when the list could not be read.
+    assigned_local: Optional[bool] = False
     if chat is None:
         chat_reason = "The AI Chat inference client is not configured on this appliance."
     else:
         try:
-            chat_connections = [
-                {
+            # AI Chat's choices, never the Assistant's NPU model (VD-210).
+            records = list(chat.choices() or [])
+            # Field names as the credential broker's listing spells them
+            # (ACC-102): the pinned model is `selected_model` and the purposes
+            # a connection serves are `active_for`. Reading `model` and
+            # `active` - which the listing never carries - reported every
+            # connection as modelless and inactive, and the memory sweep's
+            # idle check (ACC-109) read the same wrong fields.
+            chat_connections = []
+            for item in records:
+                # None when the record does not carry its address: where the
+                # model runs is then not known, never guessed remote (ACC-113).
+                local = connection_locality(item).get("local")
+                chat_connections.append({
                     "id": item.get("id"),
                     "label": item.get("label"),
                     "provider": item.get("provider"),
-                    "model": item.get("model"),
-                    "active": bool(item.get("active")),
-                }
-                for item in (chat.connections() or [])[:10]
-            ]
+                    "model": str(item.get("selected_model") or "") or None,
+                    "model_note": "" if item.get("selected_model") else (
+                        "No model is pinned on this connection, so AI Chat "
+                        "uses the model the reader picks, or else the first "
+                        "one the server offers."
+                    ),
+                    "active": "ai-chat" in (item.get("active_for") or []),
+                    "local": None if local is None else bool(local),
+                })
+            # Scanned over every record before the list is cut to ten, so an
+            # assigned connection past the tenth still counts. True if an
+            # assigned connection runs here; None if one's locality is not
+            # known (unknown is not "elsewhere"); False only when every
+            # assigned connection is known to run elsewhere.
+            assigned = [item["local"] for item in chat_connections if item["active"]]
+            if any(value is True for value in assigned):
+                assigned_local = True
+            elif any(value is None for value in assigned):
+                assigned_local = None
+            else:
+                assigned_local = False
+            chat_connections = chat_connections[:10]
         except (AttributeError, OSError, TypeError, ValueError) as error:
             chat_reason = " ".join(str(error).split())[:200]
+            assigned_local = None
     return {
         "engines": engines,
         "engines_unavailable_reason": (
@@ -592,33 +688,114 @@ def inference_status(callbacks: Dict[str, Any]) -> Dict[str, Any]:
             "role": "AI Chat",
             "connections": chat_connections,
             "reason": chat_reason,
+            "assigned_local": assigned_local,
         },
-        "local_models": _local_models(callbacks),
+        "local_models": local_models(),
     }
 
 
-def _local_models(callbacks: Dict[str, Any]) -> Dict[str, Any]:
-    inventory = callbacks.get("workload_inventory")
-    if inventory is None or not hasattr(inventory, "snapshot"):
-        return {
-            "available": False,
-            "reason": "The workload inventory is unavailable on this appliance.",
-            "models": [],
-        }
+def read_workload_inventory(inventory: Any) -> Any:
+    """What the wired workload inventory holds, or ``None`` when it cannot be read.
+
+    One reader for `workloads.inventory` and `inference.status` (VD-205). The
+    second asked only for ``snapshot()``, which the class `ControlPlaneRuntime`
+    wires in - `WorkloadInventory`, read through ``list_all()`` - never had,
+    so on every appliance it said the inventory was unavailable while the
+    first tool listed the same models.
+    """
+    if hasattr(inventory, "snapshot"):
+        return inventory.snapshot()
+    if hasattr(inventory, "list_all"):
+        return inventory.list_all()
+    if callable(inventory):
+        return inventory()
+    return None
+
+
+#: How long `inference.status` waits for the stored-model list (review S1).
+#: The list needs Docker and the model folders; the engines and AI Chat lines
+#: need neither, so a wedged dockerd costs this list, never the whole tool
+#: (whose own limit is 10 seconds).
+LOCAL_MODELS_TIMEOUT_SECONDS = 4
+
+
+def _local_models_reading(inventory: Any) -> Dict[str, Any]:
+    """The ``local_models`` entry, read now. One Docker read where the inventory offers it."""
     try:
-        snapshot = inventory.snapshot() or {}
+        if hasattr(inventory, "stored_models"):
+            snapshot: Any = {"models": inventory.stored_models()}
+        else:
+            snapshot = read_workload_inventory(inventory)
     except (AttributeError, OSError, TypeError, ValueError) as error:
         return {
             "available": False,
             "reason": " ".join(str(error).split())[:200],
             "models": [],
         }
+    if not isinstance(snapshot, dict):
+        return {
+            "available": False,
+            "reason": (
+                "The workload inventory wired into this control plane gave {} "
+                "rather than an inventory. That is a fault in this control plane, "
+                "not a statement about the models stored here."
+            ).format(type(snapshot).__name__),
+            "models": [],
+        }
     models = snapshot.get("models")
+    models = list(models) if isinstance(models, list) else []
     return {
         "available": True,
         "reason": "",
-        "models": list(models)[:20] if isinstance(models, list) else [],
+        # How many there are, so a reader of the first 20 can say "and N more".
+        "count": len(models),
+        "models": models[:20],
     }
+
+
+def _start_local_models(callbacks: Dict[str, Any]) -> Callable[[], Dict[str, Any]]:
+    """Begin reading the stored models beside the rest of `inference.status`; return the collector."""
+    inventory = callbacks.get("workload_inventory")
+    if inventory is None:
+        unwired = {
+            "available": False,
+            "reason": (
+                "No workload inventory is wired into this control plane, so the "
+                "models stored here cannot be listed. That is a wiring fault, not "
+                "a property of the appliance."
+            ),
+            "models": [],
+        }
+        return lambda: unwired
+    deadline = time.monotonic() + LOCAL_MODELS_TIMEOUT_SECONDS
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vaelor-local-models")
+    future = executor.submit(_local_models_reading, inventory)
+    executor.shutdown(wait=False)
+
+    def collect() -> Dict[str, Any]:
+        try:
+            return future.result(timeout=max(0.0, deadline - time.monotonic()))
+        except FutureTimeout:
+            return {
+                "available": False,
+                "reason": (
+                    "The models stored here were not read: the workload inventory "
+                    "did not answer within {} seconds."
+                ).format(LOCAL_MODELS_TIMEOUT_SECONDS),
+                "models": [],
+            }
+        except Exception:  # a fault in this code, not the machine (LESSONS 24)
+            LOGGER.exception("Reading the stored models for inference.status failed")
+            return {
+                "available": False,
+                "reason": (
+                    "The models stored here could not be read because of a fault "
+                    "in this control plane; the log has the details."
+                ),
+                "models": [],
+            }
+
+    return collect
 
 
 def configuration_summary(callbacks: Dict[str, Any]) -> Dict[str, Any]:
@@ -691,211 +868,9 @@ def service_logs(callbacks: Dict[str, Any], arguments: Dict[str, Any]) -> Dict[s
     }
 
 
-#: How much of a store failure's explanation reaches the model.
-#:
-#: It was 200, and the live reason for a failed retention start is longer than
-#: that. The owner saw `...so it did not start and it is unknown whet` - cut
-#: mid-word, and the clause cut away was the only actionable one, "the hardware
-#: bridge may not have bound its socket". A cap is still wanted, because a
-#: driver's error text can run to kilobytes and every character is prompt.
-#: Raising it is half the repair; the store layer also now leads its sentences
-#: with the part an operator can act on.
-MAX_REASON_CHARACTERS = 500
-
-
-def _readable_reason(text: str) -> str:
-    """Collapse whitespace and trim to the cap on a word boundary."""
-    collapsed = " ".join(str(text).split())
-    if len(collapsed) <= MAX_REASON_CHARACTERS:
-        return collapsed
-    cut = collapsed[:MAX_REASON_CHARACTERS]
-    boundary = cut.rfind(" ")
-    if boundary > 0:
-        cut = cut[:boundary]
-    return cut + " ..."
-
-
-#: The duration units `metrics.history`'s `window` argument accepts, in seconds.
-#: Seconds through days; nothing coarser, because the store keeps seven days and
-#: `telemetry_history_range` clamps a longer window to that anyway.
-_WINDOW_UNITS = {
-    "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
-    "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
-    "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
-    "d": 86400, "day": 86400, "days": 86400,
-}
-
-
-def _parse_window(value: Any) -> Optional[int]:
-    """Seconds for a window like ``"24h"`` or ``"7d"``, or None if unreadable.
-
-    A number and a unit, in that order: ``90m``, ``24h``, ``7d``. The unit is
-    required - a bare ``24`` could be seconds, minutes or hours and guessing is
-    how a "last 24 hours" question becomes a 24-second read. Returns None rather
-    than a default so the caller can reject a malformed window with a reason
-    instead of silently answering a different question than the one asked.
-    """
-    if not isinstance(value, str):
-        return None
-    text = value.strip().lower().replace(" ", "")
-    if not text:
-        return None
-    digits = 0
-    while digits < len(text) and text[digits].isdigit():
-        digits += 1
-    if digits == 0 or digits == len(text):
-        return None
-    unit = _WINDOW_UNITS.get(text[digits:])
-    if unit is None:
-        return None
-    amount = int(text[:digits])
-    if amount <= 0:
-        return None
-    return amount * unit
-
-
-def _metrics_trend(callbacks: Dict[str, Any], window: str) -> Dict[str, Any]:
-    """The ranged branch of `metrics.history`: a downsampled trend over a window.
-
-    Kept beside `metrics_history` and sharing its honest-failure discipline: a
-    malformed window is rejected with a reason, a missing callback is named a
-    wiring fault rather than an appliance setting, and a store that is off or
-    unreadable returns the store layer's own sentence rather than crashing.
-    """
-    seconds = _parse_window(window)
-    if seconds is None:
-        return {
-            "available": False,
-            "reason": (
-                "The requested window {!r} is not a duration I can read. Use a "
-                "number and a unit, for example '24h' for the last day or '7d' "
-                "for the last week."
-            ).format(window),
-            "samples": [],
-        }
-    ranged = callbacks.get("telemetry_history_range")
-    if ranged is None:
-        return {
-            "available": False,
-            "reason": (
-                "This control plane has no time-ranged telemetry callback wired "
-                "into it, so a window cannot be read. That is a wiring fault "
-                "rather than an appliance setting."
-            ),
-            "samples": [],
-        }
-    try:
-        result = ranged(seconds)
-    except TelemetryStoreError as error:
-        return {
-            "available": False,
-            "reason": _readable_reason(error),
-            "samples": [],
-        }
-    buckets = list(result.get("buckets") or [])
-    window_seconds = int(result.get("window_seconds", seconds))
-    bucket_seconds = int(result.get("bucket_seconds", 0))
-    return {
-        "available": True,
-        # An empty result from a working store is the case that must say so, for
-        # the reason the count path says it: silence reads to a model as "no
-        # record of last night", the complaint VD-095 was raised about.
-        "reason": "" if buckets else (
-            "The telemetry store is readable but holds no samples in that "
-            "window yet. Retention records from the moment it starts, so a "
-            "window reaching before that holds nothing to compare against."
-        ),
-        "window_seconds": window_seconds,
-        "bucket_seconds": bucket_seconds,
-        # Exposed under `samples` as well as `buckets` so the same trend
-        # machinery that reads the count path reads a window unchanged; each
-        # bucket is a downsampled sample, oldest to newest, carrying the same
-        # field names a raw sample does.
-        "samples": buckets,
-        "buckets": buckets,
-        "note": (
-            "Each row is a {}-second bucket, the mean of the samples in it, "
-            "ordered oldest to newest over the last {} seconds. Buckets are "
-            "downsampled: they show the shape of a trend, not every reading."
-        ).format(bucket_seconds, window_seconds),
-    }
-
-
-def metrics_history(callbacks: Dict[str, Any], arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Recent telemetry samples, so a trend can be read instead of one instant.
-
-    Two ways to ask. Without `window`, the newest `limit` rows by count (the
-    original behaviour, 1..120). With `window` - a duration like `"24h"` or
-    `"7d"` - a downsampled trend over that span of *time*, so "the last 24 hours"
-    or "the last 7 days" is answered by the store rather than by whatever the
-    last 120 one-second samples happen to cover.
-    """
-    window = arguments.get("window")
-    if isinstance(window, str) and window.strip():
-        return _metrics_trend(callbacks, window)
-    history = callbacks.get("telemetry_history")
-    if history is None:
-        return {
-            "available": False,
-            # This branch means no history callback was wired into this control
-            # plane at all - a build or wiring fault, not an appliance setting.
-            # It used to say "history is not retained on this appliance", word
-            # for word the sentence VD-095 was raised about, so a future wiring
-            # break would have reproduced the identical symptom and cost the
-            # same diagnosis a second time.
-            "reason": (
-                "This control plane has no telemetry history callback wired "
-                "into it, so no history can be read. That is a wiring fault "
-                "rather than an appliance setting."
-            ),
-            "samples": [],
-        }
-    limit = arguments.get("limit", 30)
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 120:
-        limit = 30
-    try:
-        samples = history(limit)
-    except TelemetryStoreError as error:
-        # One domain error, not a tuple of built-ins. The tuple that used to be
-        # here - (AttributeError, OSError, TypeError, ValueError) - could not
-        # catch `InfluxDBClientError`, which inherits straight from `Exception`,
-        # so the single failure this path actually produced was the one it could
-        # not report and this `reason` field was unreachable (VD-095 defect 4).
-        return {
-            "available": False,
-            "reason": _readable_reason(error),
-            "samples": [],
-        }
-    if not isinstance(samples, list):
-        # Coercing this to `[]` used to make it share the "readable but holds no
-        # samples yet" sentence below, which is false about a type fault: the
-        # store may be full. Say what actually happened.
-        return {
-            "available": False,
-            "reason": (
-                "The telemetry history callback returned {} rather than a list "
-                "of samples. That is a fault in this control plane, not a "
-                "statement about what the appliance recorded."
-            ).format(type(samples).__name__),
-            "samples": [],
-        }
-    samples = samples[-limit:]
-    return {
-        "available": True,
-        # An empty result from a working store is the case that has to say so.
-        # Silence here reads to a model as "the appliance has no record of last
-        # night", which is the complaint VD-095 was raised about - and it would
-        # arrive from a *successful* start, so nothing else in the payload
-        # contradicts it.
-        "reason": "" if samples else (
-            "The telemetry store is readable but holds no samples yet. "
-            "Retention records from the moment it starts, so a recent restart "
-            "leaves nothing to compare against until it has been running."
-        ),
-        "requested": limit,
-        "samples": samples,
-        "note": (
-            "Samples are ordered oldest to newest. A single reading cannot "
-            "distinguish a spike from a sustained load; these can."
-        ),
-    }
+# `metrics.history` and its window parsing live in `assistant_history_tools`
+# (split at the line ceiling, adversarial review should-fix 8); the names stay
+# importable from here for the readers that already import them.
+from .assistant_history_tools import (  # noqa: E402,F401 - re-exported
+    MAX_REASON_CHARACTERS, _metrics_trend, _parse_window, _readable_reason, metrics_history,
+)

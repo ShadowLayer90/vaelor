@@ -5,7 +5,7 @@ specific than “the Pironman hardware can run on this OS”: some appliance
 operating systems support an enclosure but cannot provide a general-purpose
 Docker host, package manager, desktop, or local AI runtime.
 
-Last reviewed: 2026-09-03
+Last reviewed: 2026-10-09 (Vaelor 1.5)
 
 ## Support levels
 
@@ -25,8 +25,8 @@ The Overview page reports the detected OS and one of these levels. Feature avail
 | Ubuntu 64-bit (Desktop or Server) | Compatible | Full where fitted | Full | Full when RAM permits | Desktop edition only | Full |
 | Ubuntu 24.04 ARM64 generic host | Compatible | Capability discovery only | Full | Full when RAM permits | Desktop edition only | Full |
 | Ubuntu 24.04 AMD64 generic host | Compatible (package verified) | Capability discovery only | Full | CPU; accelerator discovered and sized, offload opt-in | Desktop edition only | Full |
-| Ubuntu 26.04 AMD64 workstation (HP Z2 Mini G1a) | Compatible (turnkey installer validated end to end on the appliance) | Absent with a reason | Full | On-device: Assistant on the NPU, AI Chat on the GPU, both fetched and provisioned by the installer | Desktop edition only | Full |
-| Ubuntu 26.04 AMD64 laptop (HP ZBook Ultra G1a) | Compatible (turnkey installer validated end to end on the appliance) | Battery/AC reported; enclosure controls absent with a reason | Full | On-device: Assistant on the NPU, AI Chat on the GPU, both fetched and provisioned by the installer | Desktop edition only | Full |
+| Ubuntu 26.04 AMD64 workstation (HP Z2 Mini G1a) | Compatible (turnkey installer validated end to end on the appliance; GPU cluster controller) | Absent with a reason | Full | On-device: Assistant on the NPU, AI Chat on the GPU, both fetched and provisioned by the installer; vLLM when clustered | Desktop edition only | Full |
+| Ubuntu 26.04 AMD64 laptop (HP ZBook Ultra G1a) | Compatible (turnkey installer validated end to end; GPU cluster worker) | Battery/AC reported; enclosure controls absent with a reason | Full | As a full appliance: Assistant on the NPU, AI Chat on the GPU. As a cluster worker: vLLM serving only, managed by the controller | Desktop edition only | Full (a worker is updated by its controller) |
 | Kali Linux 64-bit | Compatible | Full where fitted | Full | Full when RAM permits | When a supported desktop is installed | Full |
 | Homebridge on a supported Debian-family host | Limited | Full where fitted | Existing host workloads only | Hosted providers recommended | Host-dependent | Host-dependent |
 | Home Assistant OS | Limited | SunFounder add-on path | Not a general Docker host | Hosted provider only | Not available | Managed by Home Assistant |
@@ -57,9 +57,17 @@ The Overview page reports the detected OS and one of these levels. Feature avail
   On it the single `install-vaelor.sh` run is validated end to end: it provisions
   the control plane, Docker, and InfluxDB, and — gated on the hardware it finds —
   the FastFlowLM NPU runtime with the on-device Assistant model (Qwen3.5-4B,
-  fetched from the release), plus the gfx1151 ROCm runtime and the GPU AI-Chat
-  engine. A clean install from a wiped disk and the in-console "Remove Vaelor"
-  teardown back to a bare OS were both verified on the appliance. This validates
+  fetched from the release), plus the gfx1151 ROCm runtime and the container
+  images the GPU AI-Chat model and the LAN LLM Server serve from. A clean install
+  from a wiped disk and the in-console "Remove Vaelor" teardown back to a bare OS
+  were both verified on the appliance. The bare-OS teardown removes Docker and
+  containerd with both image stores (`/var/lib/docker` and
+  `/var/lib/containerd` - on Docker 29 the latter is where the images live, and
+  the first cold teardown left 44 GB there), InfluxDB, the ROCm packages,
+  amd-smi, novnc and the browser-desktop packages; it purges only the OS
+  packages Vaelor recorded installing (so a Docker, InfluxDB or amd-smi that was
+  already present is left alone) and keeps the shared OS tools and anything the
+  installer did not add (`deploy/README.md` lists both sides). This validates
   that machine; it does not promote every Ubuntu 26.04 build to Verified.
 - The **HP ZBook Ultra G1a (Strix Halo)** is the same silicon in a laptop: the
   identical `AMD Ryzen AI Max` SoC (Radeon 8060S iGPU, gfx1151, PCI `0x1002:0x1586`)
@@ -75,11 +83,30 @@ The Overview page reports the detected OS and one of these levels. Feature avail
   a bare host needs `git` installed (`sudo apt install -y git`) before the
   documented `git clone` step. This validates that machine; it does not promote
   every Ubuntu 26.04 build to Verified.
+- **The GPU serving step changed after the two runs above were recorded**:
+  serving moved into containers, so the installer no longer fetches a bare
+  `llama-server` build and pre-pulls the serving images instead. The gfx1151
+  ROCm runtime is still installed, for host telemetry (AMD's ROCm build of
+  `amd-smi` is the one that publishes this part's APU metrics) and the reported
+  ROCm version, not for serving. **A cold clean install of both machines on
+  2026-09-06** — each torn down with the documented bare-OS uninstall and
+  reinstalled by the documented first-time steps — validated that change: twelve
+  services active and enabled, the serving images present at their pinned
+  digests, the NPU model fetched from the release, and the console answering —
+  and, on the Z2 Mini, again after a reboot.
+- **Vaelor 1.5** reached the Z2 Mini by upgrading it in place, with a model
+  serving across the Z2 Mini and the ZBook throughout. The ZBook now runs as a
+  **cluster worker** that the Z2 Mini provisions and updates, rather than as a
+  full appliance. A cold install of the published 1.5 release is the next
+  validation run; until it is recorded here, the 2026-09-06 run above is the
+  most recent cold install.
 - The commissioned Ubuntu 26.04 Raspberry Pi completed the versioned
   Pironman-to-Vaelor 2.0.4 migration on 2026-07-30. Ten Vaelor services,
   HTTPS health, encrypted credentials, legacy aliases, and the existing Qwen
   model were verified after migration. This validates that appliance; it does
   not promote every future Ubuntu 26.04 build to the Verified support level.
+  **The Raspberry Pi was not re-tested on hardware for Vaelor 1.5**; no Pi
+  run is recorded for this release.
 - Raspberry Pi OS Lite and Ubuntu Server do not include a graphical desktop. KVM remains available when capture hardware is fitted; browser RDP/VNC requires a desktop service.
 - A NAS is a workload configuration, not a separate released Pironman enclosure
   profile. Pironman 5 and Max models can host OpenMediaVault or another NAS
@@ -147,6 +174,162 @@ Model-fit sizing uses the accelerator's VRAM carve-out plus, on a unified part,
 its GTT aperture — clamped by what the host can spare, because GTT is system
 RAM. The CPU-only ladder still stops at 8B, because CPU generation above that
 is too slow to be a usable assistant.
+
+On a unified part the size of that aperture is a machine setting: the
+kernel gives the GPU about half of visible memory, and an administrator may
+raise it per machine, in whole GiB, up to the ceiling the fit prints. The
+setting exists only where discovery finds the kernel limit and a GPU that
+shares system memory; a discrete card, a Raspberry Pi and a machine whose
+kernel does not report the limit have none and say why. A new size counts
+from the machine's next restart, which only its owner starts. Rebuilding the
+boot image needs `update-initramfs` (Debian and Ubuntu); a machine without it
+is refused before anything is written.
+
+### GPU serving prerequisites
+
+GPU serving runs in containers, so the host needs no ROCm of its own — each
+image carries the ROCm it was built against. What it does need:
+
+- **Docker running**, with its content store initialised. The installer proves
+  this before it finishes rather than assuming a started daemon is a ready one.
+- **`/dev/kfd` and `/dev/dri`**, passed into the container by the root hardware
+  bridge. The `render` and `video` group ids are resolved numerically at launch
+  and never assumed — a container has no host group database, so a name would
+  not resolve inside it.
+- **A gfx1151 accelerator.** The capability gate opens on a gfx1151 GPU plus a
+  usable Docker, and on nothing else: a host binary or a host ROCm library is
+  reported for information only and its absence changes no verdict.
+
+The images the installer pre-pulls (skip with `--skip-image-pull`). Sizes are
+measured on the appliance; each reference is pinned by digest in the module that
+launches it, so the box that installs and the box that redeploys a year later
+run the same engine:
+
+| Image | Registry | Approximate size | Pulled on | Serves |
+| --- | --- | --- | --- | --- |
+| `docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-10.0` | Docker Hub | 1.4 GB | a gfx1151/gfx1150 GPU | stock GGUF models (llama.cpp) |
+| `ghcr.io/julianmb/q38rocm:latest` | GitHub Container Registry | 3.3 GB | a gfx1151/gfx1150 GPU | the FP4 27B (a llama.cpp fork) |
+| `nginx:stable-alpine` | Docker Hub | 0.03 GB | any box with Docker | the LAN LLM Server auth proxy, and the cluster's balancer and gates |
+| `arizephoenix/phoenix:version-20.9.0` | Docker Hub | 1.5 GB | any box with Docker | the loopback-only request-trace collector |
+
+The two GPU images are gfx1151 builds, so the pre-pull reads the host's own
+`gfx_target_version` from the KFD topology — the same signal the node inventory
+carries — and skips them, saying so, on any other AMD part. It also skips them,
+saying so, when the Docker data root has less free space than the missing images
+plus 2 GB of headroom for unpacking.
+
+### Clustering prerequisites
+
+Serving one model across more than one GPU machine is a separate mode, enabled
+from the console after install. **Install Vaelor on the controller only.** Every
+other machine joins as a **GPU worker** from Cluster › Add machine and is
+provisioned and kept current by the controller; it runs no console and no
+Assistant of its own. The full installer refuses to run on a machine that is a
+worker (`--leave-worker-role` takes the worker software off when its controller
+is gone for good). A machine that already carries the full appliance can be
+enrolled, and its card says so; it is not converted to the slim worker install
+in place in this release.
+
+A machine joining as a worker needs:
+
+- **The same platform as the controller.** Clusters are architecture-homogeneous,
+  and GPU serving is verified only on gfx1151 (Strix Halo). A worker of another
+  architecture is drained and removed rather than kept.
+- **An SSH login that is a sudoer.** The controller writes systemd units, installs
+  packages, and runs containers on the worker as root over that login. The sudo
+  password never reaches the worker's files or programs.
+- **Docker.** The enrolment flow installs it if it is missing.
+- **What the controller installs:** a telemetry agent (a pinned Telegraf build the
+  controller's installer staged), a GPU sampler, and AMD's `amd-smi` at a pinned
+  version from AMD's repository — not the full ROCm stack. When AMD no longer
+  publishes that version, the newest available one is installed and the console
+  says which version runs. The controller re-checks a worker's software every 15
+  minutes and after its own update brings each worker to its version.
+- **`/dev/kfd` and `/dev/dri`,** as above.
+- **Registry reachability for the vLLM image, on every GPU machine, at deploy
+  time.** The image is pulled per machine as part of the deploy, not at install,
+  and a machine that cannot reach the registry fails the deploy up front:
+
+  | vLLM image | Registry | Approximate size |
+  | --- | --- | --- |
+  | vLLM 0.27 on ROCm 10 (`rocm/vllm`, the default) | Docker Hub | 27 GB |
+  | vLLM 0.22 (`ryai-vllm`, the earlier image, still selectable) | `oci-registry.ryai.dev` | 26 GB |
+
+  The image pull reports one coarse step, not progress; the byte-accurate progress
+  a cluster deploy shows is the model **weights** download, a separate step with
+  its own byte counter. A deployment keeps the image it was deployed on.
+- **A usable cluster interface.** A machine's cluster interface is the link that
+  carries the address the cluster reaches it on, fixed at enrolment. A machine
+  with no such link is recorded with the reason and refused by the GPU deploy,
+  not by enrolment.
+- **The controller's certificate with its addresses.** Worker telemetry verifies
+  the controller's certificate; a controller first installed before 1.5 needs a
+  new certificate (see the 1.5 notes in `CHANGELOG.md`).
+
+**Splitting one model across machines** additionally needs a **dedicated link**
+between them — such as a Thunderbolt cable — chosen in Cluster › Setup, and
+**nftables (`nft`) on every machine of the split**. A split with no link chosen,
+or with a machine's main LAN card chosen, is refused in plain words. Splitting is
+pipeline-parallel by default; tensor-parallel is an owner's choice and recommends
+the fastest link the machines share. *Splitting was proven on two machines before
+the link fence below was added; the fenced version and the tensor-parallel option
+have not yet been re-run live on two machines.* Running one copy of the model on each machine needs no
+dedicated link.
+
+### Ports
+
+| Port | Bind | What |
+| --- | --- | --- |
+| 34001 | LAN | the console and `/api/v2`, over HTTPS; workers also send telemetry here, keyed |
+| 8080–8099 | loopback | the single-node model server (AI Chat) |
+| 11434 | LAN | the LLM Server auth proxy, `Bearer`-keyed |
+| 8000–8079 | loopback on every machine | the cluster vLLM API; a worker's is reached only through a keyed gate on its cluster address |
+| 6006 | loopback | the Arize Phoenix trace collector (reach it over SSH) |
+| 6379–6381, 10001, 26000–26299 | the dedicated cluster link | a split's Ray, RCCL and Gloo traffic, fenced as described below |
+
+**The cluster vLLM API binds loopback on every machine.** A controller-led
+deployment is fronted by the LLM Server auth proxy. A worker's replica, and a
+deployment led by a worker, are fronted by a keyed nginx gate on that worker's
+cluster address, and the model answers only callers holding the cluster key. A
+worker-led split deployed by a build older than 1.5 stays LAN-open until it is
+Loaded again, and the console labels it so.
+
+**A model split across machines needs a dedicated cluster link and nftables.**
+Without the measures below, anyone who can reach a split's Ray ports can run code as
+root on every machine of the split. A split is therefore served only over a dedicated
+link between its machines, and only where every machine has nftables. On that link a
+Vaelor-owned firewall table lets only the split's machines in; Ray's own ports (6379-6381,
+10001, 26000-26299) answer nobody else on any other interface; and Ray requires the
+deployment's own token, changed at every Load. RCCL, Gloo and the TCPStore have no
+authentication of their own; the fence is their guard. No Vaelor service port is in the
+fenced band.
+
+Apart from that Vaelor-owned table for a split, the installer configures **no
+firewall** — it adds no `ufw`, `iptables`, `nftables` or `firewalld` rule and removes
+none, so a host firewall stays entirely the operator's. If one is enabled on a GPU
+cluster member, the cluster traffic between the machines must be permitted or the
+collective hangs rather than failing cleanly.
+
+## Untested platforms
+
+Vaelor has been run on AMD Strix Halo machines (the HP Z2 Mini G1a and HP ZBook
+Ultra G1a) and on the Raspberry Pi. **No NVIDIA, Intel, other AMD GPU, or
+CPU-only x86 machine has been tested.** On such a machine:
+
+- GPU model serving and GPU clustering are not offered; the GPU serving gate opens
+  only on a gfx1151 GPU with a usable Docker. AI Chat can still use a server on
+  your network or a hosted service.
+- Accelerator identity and telemetry are reported where the kernel exposes them
+  without vendor tools, and anything that cannot be read is reported as absent,
+  with a reason. Some verdicts are known to be worded for AMD hardware: for
+  example, an NVIDIA or Intel GPU may be described as not found, and a GPU whose
+  memory could not be read may be described as having dedicated memory.
+- The installer fetches AMD's NPU runtime (FastFlowLM) and the NPU Assistant
+  model whenever any neural-accelerator device is present, including a non-AMD
+  one, where they will not run. Pass `--without-npu-model` to skip the model
+  download on such a machine.
+
+Reports from other hardware are welcome; see `SUPPORT.md`.
 
 ## Pironman enclosure matrix
 

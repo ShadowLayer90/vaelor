@@ -17,6 +17,8 @@ architecture is named as nothing rather than as the likelier guess.
 
 from __future__ import annotations
 
+from .assistant_console_places import INSTALL_PLACE
+
 import re
 from typing import Any, Dict, Optional
 
@@ -97,7 +99,7 @@ def deployment_capability_answer(
             },
         ],
         "suggested_actions": [
-            "Open Workloads > Install to choose a reviewed one-click app.",
+            "Open " + INSTALL_PLACE + " to choose a reviewed one-click app.",
             "Use Import a Docker stack to review another {}Compose workload "
             "before approval.".format("{} ".format(silicon) if silicon else ""),
         ],

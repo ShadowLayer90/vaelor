@@ -26,6 +26,8 @@ from __future__ import annotations
 import re
 from typing import Dict, Optional, Tuple
 
+from .assistant_console_places import HARDWARE_PLACE
+
 # Ordered most specific first. Every recovery names a Vaelor screen; none of
 # them names a command, a unit file, a socket path, or a log tool.
 _RULES: Tuple[Tuple[re.Pattern[str], str, str, str], ...] = (
@@ -39,7 +41,7 @@ _RULES: Tuple[Tuple[re.Pattern[str], str, str, str], ...] = (
         "Vaelor is not allowed to use the container engine on this appliance.",
         "Docker is installed, but the Vaelor service account has not been "
         "granted access to it.",
-        "Open System > Hardware & services and run the Docker readiness check, "
+        "Open " + HARDWARE_PLACE + " and run the Docker readiness check, "
         "then retry this operation.",
     ),
     (
@@ -53,7 +55,7 @@ _RULES: Tuple[Tuple[re.Pattern[str], str, str, str], ...] = (
         ),
         "Vaelor could not reach the container engine on this appliance.",
         "Docker is installed, but its background service is not running.",
-        "Open System > Hardware & services, start Docker, and retry this "
+        "Open " + HARDWARE_PLACE + ", start Docker, and retry this "
         "operation once it reports ready.",
     ),
     (
@@ -69,7 +71,7 @@ _RULES: Tuple[Tuple[re.Pattern[str], str, str, str], ...] = (
         "A background service this operation needs did not start.",
         "The service stopped immediately after Vaelor started it, so the "
         "operation could not continue.",
-        "Open System > Hardware & services to check service health, then retry. "
+        "Open " + HARDWARE_PLACE + " to check service health, then retry. "
         "If it keeps stopping, restore a checkpoint or reinstall the affected "
         "feature from the same screen.",
     ),

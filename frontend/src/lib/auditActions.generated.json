@@ -1,0 +1,792 @@
+{
+  "actions": [
+    "admin.agent_api_token.create",
+    "admin.agent_api_token.delete",
+    "admin.agent_api_token.revoke",
+    "admin.session.revoke",
+    "admin.user.create",
+    "admin.user.delete",
+    "admin.user.update",
+    "agent.plan",
+    "ai_chat.agent.proposal",
+    "ai_chat.collection.create",
+    "ai_chat.collection.delete",
+    "ai_chat.connection.activate",
+    "ai_chat.conversation.delete",
+    "ai_chat.conversation.fork",
+    "ai_chat.document.delete",
+    "ai_chat.document.ingest",
+    "ai_chat.message",
+    "ai_chat.message.regenerate",
+    "app.config.update",
+    "app.console.exec",
+    "app.credentials.read",
+    "app.diagnostic",
+    "app.file.update",
+    "app.fs.delete",
+    "app.fs.download",
+    "app.fs.mkdir",
+    "app.fs.upload",
+    "app.remote_desktop.session",
+    "appliance.backup.offsite",
+    "appliance.backup.offsite_push",
+    "appliance.backup.passphrase",
+    "appliance.backup.restore_stage",
+    "appliance.backup.run",
+    "appliance.backup.schedule",
+    "appliance.factory_reset.approve",
+    "appliance.factory_reset.cancel",
+    "appliance.factory_reset.stage",
+    "appliance.portable_state.approve",
+    "appliance.portable_state.cancel",
+    "appliance.portable_state.export",
+    "appliance.portable_state.stage",
+    "appliance.remove_vaelor.approve",
+    "appliance.remove_vaelor.cancel",
+    "appliance.remove_vaelor.stage",
+    "application.draft.approve",
+    "application.draft.configure",
+    "application.draft.create",
+    "application.draft.discard",
+    "application.draft.research",
+    "application.draft.research.capable",
+    "application.draft.validate",
+    "assistant.agent.create",
+    "assistant.agent.delete",
+    "assistant.agent.rollback",
+    "assistant.agent.update",
+    "assistant.agent_operation.approve",
+    "assistant.agent_write.approve",
+    "assistant.alert_channel.create",
+    "assistant.alert_channel.delete",
+    "assistant.alert_channel.test",
+    "assistant.alert_channel.update",
+    "assistant.automation.create",
+    "assistant.automation.delete",
+    "assistant.automation.update",
+    "assistant.chat",
+    "assistant.connector.approve",
+    "assistant.connector.execute",
+    "assistant.connector.revoke",
+    "assistant.connector.test",
+    "assistant.conversation.delete",
+    "assistant.conversation.update",
+    "assistant.delegate",
+    "assistant.memory.create",
+    "assistant.memory.delete",
+    "assistant.memory.update",
+    "assistant.model.calibrate",
+    "assistant.preference.update",
+    "assistant.skill.delete",
+    "assistant.skill.propose",
+    "assistant.skill.review",
+    "assistant.skill.update",
+    "assistant.task.approval",
+    "assistant.task.binding.replace",
+    "assistant.task.comment",
+    "assistant.task.create",
+    "assistant.task.handoff",
+    "assistant.task.retry",
+    "assistant.task.transition",
+    "assistant.tasks.archive_finished",
+    "assistant.tool.run",
+    "assistant.trigger.create",
+    "assistant.trigger.delete",
+    "assistant.trigger.update",
+    "auth.bootstrap",
+    "auth.login",
+    "auth.logout",
+    "auth.mfa",
+    "auth.totp.disable",
+    "auth.totp.enable",
+    "auth.totp.setup",
+    "checkpoint.delete",
+    "checkpoint.restore.request",
+    "checkpoint.verify",
+    "cluster.backup.delete",
+    "cluster.link.set",
+    "cluster.node.architecture-eviction",
+    "cluster.node.enroll",
+    "cluster.node.remove",
+    "cluster.performance.profile",
+    "cluster.retained_volume.delete",
+    "cluster.service.diagnostic",
+    "cluster.serving.rotate-key",
+    "cluster.ssh.inspect",
+    "cluster.telemetry.install",
+    "cluster.telemetry.reconcile",
+    "cluster.telemetry.remove",
+    "credential.activate",
+    "credential.delete",
+    "credential.model.select",
+    "credential.rotate",
+    "credential.store",
+    "credential.test",
+    "device.model.choose",
+    "endpoint.key.mint",
+    "endpoint.key.revoke",
+    "endpoint.key.rotate",
+    "fan.case.update",
+    "fan.cpu.update",
+    "host.rdp.disable",
+    "host.rdp.enable",
+    "host.remote_desktop.session",
+    "host.remote_desktop.session_end",
+    "integrations.connection.create",
+    "integrations.connection.revoke",
+    "integrations.connection.test",
+    "integrations.grant.create",
+    "integrations.grant.revoke",
+    "job.cancel",
+    "job.create",
+    "job.retry",
+    "kvm.control.acquire",
+    "kvm.control.release",
+    "lighting.update",
+    "llm_server.disable",
+    "llm_server.enable",
+    "llm_server.rotate_key",
+    "mcp.catalog.health",
+    "mcp.catalog.register",
+    "mcp.catalog.remove",
+    "mcp.catalog.update",
+    "mcp.external.run",
+    "mcp.grant.attach",
+    "mcp.grant.revoke",
+    "mcp.request",
+    "model.install_release",
+    "operation.cancel",
+    "operation.dismiss",
+    "operation.retry",
+    "phoenix.disable",
+    "phoenix.enable",
+    "power.reboot",
+    "power.restart_service",
+    "power.shutdown",
+    "skills.attach",
+    "skills.detach",
+    "skills.library.import_github",
+    "skills.library.register",
+    "skills.library.remove",
+    "skills.library.update",
+    "system.display.update",
+    "system.network.test",
+    "upgrade.create",
+    "web-research.plan",
+    "web-research.queue",
+    "workload_act.agent.grant",
+    "workload_act.agent.revoke",
+    "workload_act.operator.grant",
+    "workload_act.operator.revoke"
+  ],
+  "outcomes": {
+    "admin.agent_api_token.create": [
+      "success"
+    ],
+    "admin.agent_api_token.delete": [
+      "success"
+    ],
+    "admin.agent_api_token.revoke": [
+      "success"
+    ],
+    "admin.session.revoke": [
+      "success"
+    ],
+    "admin.user.create": [
+      "success"
+    ],
+    "admin.user.delete": [
+      "success"
+    ],
+    "admin.user.update": [
+      "success"
+    ],
+    "agent.plan": [
+      "success"
+    ],
+    "ai_chat.agent.proposal": [
+      "success"
+    ],
+    "ai_chat.collection.create": [
+      "success"
+    ],
+    "ai_chat.collection.delete": [
+      "success"
+    ],
+    "ai_chat.connection.activate": [
+      "success"
+    ],
+    "ai_chat.conversation.delete": [
+      "success"
+    ],
+    "ai_chat.conversation.fork": [
+      "success"
+    ],
+    "ai_chat.document.delete": [
+      "success"
+    ],
+    "ai_chat.document.ingest": [
+      "success"
+    ],
+    "ai_chat.message": [
+      "failure",
+      "success"
+    ],
+    "ai_chat.message.regenerate": [
+      "success"
+    ],
+    "app.config.update": [
+      "success"
+    ],
+    "app.console.exec": [
+      "attempt",
+      "failure",
+      "success"
+    ],
+    "app.credentials.read": [
+      "success"
+    ],
+    "app.diagnostic": [
+      "success"
+    ],
+    "app.file.update": [
+      "success"
+    ],
+    "app.fs.delete": [
+      "attempt",
+      "failure",
+      "success"
+    ],
+    "app.fs.download": [
+      "success"
+    ],
+    "app.fs.mkdir": [
+      "attempt",
+      "failure",
+      "success"
+    ],
+    "app.fs.upload": [
+      "attempt",
+      "failure",
+      "success"
+    ],
+    "app.remote_desktop.session": [
+      "success"
+    ],
+    "appliance.backup.offsite": [
+      "success"
+    ],
+    "appliance.backup.offsite_push": [
+      "computed"
+    ],
+    "appliance.backup.passphrase": [
+      "success"
+    ],
+    "appliance.backup.restore_stage": [
+      "success"
+    ],
+    "appliance.backup.run": [
+      "computed"
+    ],
+    "appliance.backup.schedule": [
+      "success"
+    ],
+    "appliance.factory_reset.approve": [
+      "success"
+    ],
+    "appliance.factory_reset.cancel": [
+      "success"
+    ],
+    "appliance.factory_reset.stage": [
+      "success"
+    ],
+    "appliance.portable_state.approve": [
+      "success"
+    ],
+    "appliance.portable_state.cancel": [
+      "success"
+    ],
+    "appliance.portable_state.export": [
+      "success"
+    ],
+    "appliance.portable_state.stage": [
+      "success"
+    ],
+    "appliance.remove_vaelor.approve": [
+      "success"
+    ],
+    "appliance.remove_vaelor.cancel": [
+      "success"
+    ],
+    "appliance.remove_vaelor.stage": [
+      "success"
+    ],
+    "application.draft.approve": [
+      "failure",
+      "success"
+    ],
+    "application.draft.configure": [
+      "failure",
+      "success"
+    ],
+    "application.draft.create": [
+      "failure",
+      "success"
+    ],
+    "application.draft.discard": [
+      "failure",
+      "success"
+    ],
+    "application.draft.research": [
+      "failure",
+      "queued",
+      "success"
+    ],
+    "application.draft.research.capable": [
+      "failure",
+      "queued"
+    ],
+    "application.draft.validate": [
+      "failure",
+      "success"
+    ],
+    "assistant.agent.create": [
+      "success"
+    ],
+    "assistant.agent.delete": [
+      "success"
+    ],
+    "assistant.agent.rollback": [
+      "success"
+    ],
+    "assistant.agent.update": [
+      "success"
+    ],
+    "assistant.agent_operation.approve": [
+      "rejected",
+      "success"
+    ],
+    "assistant.agent_write.approve": [
+      "success"
+    ],
+    "assistant.alert_channel.create": [
+      "success"
+    ],
+    "assistant.alert_channel.delete": [
+      "success"
+    ],
+    "assistant.alert_channel.test": [
+      "failure",
+      "success"
+    ],
+    "assistant.alert_channel.update": [
+      "success"
+    ],
+    "assistant.automation.create": [
+      "success"
+    ],
+    "assistant.automation.delete": [
+      "success"
+    ],
+    "assistant.automation.update": [
+      "success"
+    ],
+    "assistant.chat": [
+      "failure",
+      "success"
+    ],
+    "assistant.connector.approve": [
+      "success"
+    ],
+    "assistant.connector.execute": [
+      "success"
+    ],
+    "assistant.connector.revoke": [
+      "success"
+    ],
+    "assistant.connector.test": [
+      "success"
+    ],
+    "assistant.conversation.delete": [
+      "success"
+    ],
+    "assistant.conversation.update": [
+      "success"
+    ],
+    "assistant.delegate": [
+      "success"
+    ],
+    "assistant.memory.create": [
+      "failure",
+      "success"
+    ],
+    "assistant.memory.delete": [
+      "success"
+    ],
+    "assistant.memory.update": [
+      "success"
+    ],
+    "assistant.model.calibrate": [
+      "success"
+    ],
+    "assistant.preference.update": [
+      "success"
+    ],
+    "assistant.skill.delete": [
+      "success"
+    ],
+    "assistant.skill.propose": [
+      "success"
+    ],
+    "assistant.skill.review": [
+      "success"
+    ],
+    "assistant.skill.update": [
+      "success"
+    ],
+    "assistant.task.approval": [
+      "success"
+    ],
+    "assistant.task.binding.replace": [
+      "success"
+    ],
+    "assistant.task.comment": [
+      "success"
+    ],
+    "assistant.task.create": [
+      "success"
+    ],
+    "assistant.task.handoff": [
+      "success"
+    ],
+    "assistant.task.retry": [
+      "success"
+    ],
+    "assistant.task.transition": [
+      "success"
+    ],
+    "assistant.tasks.archive_finished": [
+      "success"
+    ],
+    "assistant.tool.run": [
+      "rejected",
+      "success"
+    ],
+    "assistant.trigger.create": [
+      "success"
+    ],
+    "assistant.trigger.delete": [
+      "success"
+    ],
+    "assistant.trigger.update": [
+      "success"
+    ],
+    "auth.bootstrap": [
+      "success"
+    ],
+    "auth.login": [
+      "failure",
+      "success"
+    ],
+    "auth.logout": [
+      "success"
+    ],
+    "auth.mfa": [
+      "failure"
+    ],
+    "auth.totp.disable": [
+      "success"
+    ],
+    "auth.totp.enable": [
+      "success"
+    ],
+    "auth.totp.setup": [
+      "success"
+    ],
+    "checkpoint.delete": [
+      "success"
+    ],
+    "checkpoint.restore.request": [
+      "success"
+    ],
+    "checkpoint.verify": [
+      "success"
+    ],
+    "cluster.backup.delete": [
+      "success"
+    ],
+    "cluster.link.set": [
+      "failure",
+      "success"
+    ],
+    "cluster.node.architecture-eviction": [
+      "failure",
+      "success"
+    ],
+    "cluster.node.enroll": [
+      "failure",
+      "success"
+    ],
+    "cluster.node.remove": [
+      "success"
+    ],
+    "cluster.performance.profile": [
+      "failure",
+      "success"
+    ],
+    "cluster.retained_volume.delete": [
+      "success"
+    ],
+    "cluster.service.diagnostic": [
+      "success"
+    ],
+    "cluster.serving.rotate-key": [
+      "success"
+    ],
+    "cluster.ssh.inspect": [
+      "success"
+    ],
+    "cluster.telemetry.install": [
+      "failure",
+      "success"
+    ],
+    "cluster.telemetry.reconcile": [
+      "computed"
+    ],
+    "cluster.telemetry.remove": [
+      "failure"
+    ],
+    "credential.activate": [
+      "success"
+    ],
+    "credential.delete": [
+      "success"
+    ],
+    "credential.model.select": [
+      "success"
+    ],
+    "credential.rotate": [
+      "success"
+    ],
+    "credential.store": [
+      "failure",
+      "success"
+    ],
+    "credential.test": [
+      "failure",
+      "success"
+    ],
+    "device.model.choose": [
+      "success"
+    ],
+    "endpoint.key.mint": [
+      "failure",
+      "success"
+    ],
+    "endpoint.key.revoke": [
+      "failure",
+      "success"
+    ],
+    "endpoint.key.rotate": [
+      "failure",
+      "success"
+    ],
+    "fan.case.update": [
+      "success"
+    ],
+    "fan.cpu.update": [
+      "success"
+    ],
+    "host.rdp.disable": [
+      "success"
+    ],
+    "host.rdp.enable": [
+      "failure",
+      "success"
+    ],
+    "host.remote_desktop.session": [
+      "success"
+    ],
+    "host.remote_desktop.session_end": [
+      "success"
+    ],
+    "integrations.connection.create": [
+      "success"
+    ],
+    "integrations.connection.revoke": [
+      "success"
+    ],
+    "integrations.connection.test": [
+      "failure",
+      "success"
+    ],
+    "integrations.grant.create": [
+      "success"
+    ],
+    "integrations.grant.revoke": [
+      "success"
+    ],
+    "job.cancel": [
+      "success"
+    ],
+    "job.create": [
+      "success"
+    ],
+    "job.retry": [
+      "success"
+    ],
+    "kvm.control.acquire": [
+      "success"
+    ],
+    "kvm.control.release": [
+      "success"
+    ],
+    "lighting.update": [
+      "success"
+    ],
+    "llm_server.disable": [
+      "success"
+    ],
+    "llm_server.enable": [
+      "refused",
+      "success"
+    ],
+    "llm_server.rotate_key": [
+      "success"
+    ],
+    "mcp.catalog.health": [
+      "rejected",
+      "success"
+    ],
+    "mcp.catalog.register": [
+      "rejected",
+      "success"
+    ],
+    "mcp.catalog.remove": [
+      "rejected",
+      "success"
+    ],
+    "mcp.catalog.update": [
+      "rejected",
+      "success"
+    ],
+    "mcp.external.run": [
+      "rejected",
+      "success"
+    ],
+    "mcp.grant.attach": [
+      "rejected",
+      "success"
+    ],
+    "mcp.grant.revoke": [
+      "rejected",
+      "success"
+    ],
+    "mcp.request": [
+      "success"
+    ],
+    "model.install_release": [
+      "accepted"
+    ],
+    "operation.cancel": [
+      "failure",
+      "success"
+    ],
+    "operation.dismiss": [
+      "failure",
+      "success"
+    ],
+    "operation.retry": [
+      "failure",
+      "success"
+    ],
+    "phoenix.disable": [
+      "success"
+    ],
+    "phoenix.enable": [
+      "success"
+    ],
+    "power.reboot": [
+      "accepted",
+      "failure",
+      "success"
+    ],
+    "power.restart_service": [
+      "accepted",
+      "failure",
+      "success"
+    ],
+    "power.shutdown": [
+      "accepted",
+      "failure",
+      "success"
+    ],
+    "skills.attach": [
+      "rejected",
+      "success"
+    ],
+    "skills.detach": [
+      "rejected",
+      "success"
+    ],
+    "skills.library.import_github": [
+      "rejected",
+      "success"
+    ],
+    "skills.library.register": [
+      "rejected",
+      "success"
+    ],
+    "skills.library.remove": [
+      "rejected",
+      "success"
+    ],
+    "skills.library.update": [
+      "rejected",
+      "success"
+    ],
+    "system.display.update": [
+      "success"
+    ],
+    "system.network.test": [
+      "failure",
+      "success"
+    ],
+    "upgrade.create": [
+      "failure",
+      "success"
+    ],
+    "web-research.plan": [
+      "success"
+    ],
+    "web-research.queue": [
+      "queued"
+    ],
+    "workload_act.agent.grant": [
+      "success"
+    ],
+    "workload_act.agent.revoke": [
+      "noop",
+      "success"
+    ],
+    "workload_act.operator.grant": [
+      "success"
+    ],
+    "workload_act.operator.revoke": [
+      "noop",
+      "success"
+    ]
+  },
+  "unresolved": [],
+  "wrappers": [
+    "vaelor/api_application_routes.py:audit",
+    "vaelor/api_application_routes.py:failure",
+    "vaelor/api_credential_routes.py:apply_and_audit",
+    "vaelor/api_credential_routes.py:audit_key_change",
+    "vaelor/api_integration_routes.py:audit",
+    "vaelor/api_mcp_catalog_routes.py:_audit",
+    "vaelor/api_operation_routes.py:audit",
+    "vaelor/api_skills_routes.py:_audit",
+    "vaelor/api_upgrade_routes.py:audit"
+  ]
+}

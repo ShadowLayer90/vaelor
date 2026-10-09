@@ -37,27 +37,32 @@ class PooledRuntime:
         commit = str(artifact["commit"])
         if not re.fullmatch(r"[0-9a-f]{40}", commit):
             raise ValueError("The pooled runtime commit is invalid.")
-        staged = transport.put_runtime_artifact(
-            artifact["path"], "/tmp/vaelor-distributed-llama.tar.gz"
+        # Review A10: staged in a private random directory, not at a /tmp name
+        # another account on the worker could plant or swap before root's tar.
+        staged = transport.stage_private_artifact(
+            artifact["path"], "distributed-llama.tar.gz"
         )
-        digest = transport.run(["sha256sum", staged]).split()[0]
-        if digest != artifact["sha256"]:
-            raise RuntimeError("The worker received a damaged runtime artifact.")
         try:
-            transport.run(["id", "-u", SERVICE_USER])
-        except SshTransportError:
+            digest = transport.run(["sha256sum", staged]).split()[0]
+            if digest != artifact["sha256"]:
+                raise RuntimeError("The worker received a damaged runtime artifact.")
+            try:
+                transport.run(["id", "-u", SERVICE_USER])
+            except SshTransportError:
+                transport.run(
+                    [
+                        "useradd", "--system", "--home-dir", "/nonexistent",
+                        "--shell", "/usr/sbin/nologin", SERVICE_USER,
+                    ],
+                    sudo=True,
+                )
+            destination = f"{INSTALL_ROOT}/{commit}"
+            transport.run(["install", "-d", "-m", "0755", destination], sudo=True)
             transport.run(
-                [
-                    "useradd", "--system", "--home-dir", "/nonexistent",
-                    "--shell", "/usr/sbin/nologin", SERVICE_USER,
-                ],
-                sudo=True,
+                ["tar", "-xzf", staged, "-C", destination], sudo=True
             )
-        destination = f"{INSTALL_ROOT}/{commit}"
-        transport.run(["install", "-d", "-m", "0755", destination], sudo=True)
-        transport.run(
-            ["tar", "-xzf", staged, "-C", destination], sudo=True
-        )
+        finally:
+            transport.discard_private_artifact(staged)
         transport.run(
             [
                 "chmod", "0755", f"{destination}/dllama",

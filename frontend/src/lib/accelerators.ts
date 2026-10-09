@@ -45,6 +45,12 @@ export interface NeuralAcceleratorSummary {
   servingAssistant: boolean;
   /** The served model tag, when serving. Never invented. */
   servingModel: string | null;
+  /**
+   * The Assistant is deployed on this device but its model server did not
+   * answer the same probe the Assistant's status takes (ACC-100). `null` when
+   * it is serving or not deployed here.
+   */
+  assistantDown: { model: string | null; reason: string } | null;
 }
 
 export interface GraphicsInventory {
@@ -135,6 +141,13 @@ function readNeural(source: unknown): NeuralAcceleratorSummary | null {
     reason: text(entry.reason),
     servingAssistant: entry.serving_assistant === true,
     servingModel: text(entry.serving_model),
+    assistantDown: entry.assistant_down === true
+      ? {
+        model: text(entry.assistant_model),
+        reason: text(entry.assistant_down_reason)
+          ?? "The Assistant's model server on this neural processor is not answering.",
+      }
+      : null,
   };
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { apiRequest, ApiError } from "../lib/api";
 import { hashTargetsPage } from "../lib/navigation";
 import type { AiChatConversation } from "../components/aiChatTypes";
 
@@ -28,9 +29,15 @@ export function conversationIdFromHash(hash: string): string {
  *    id-less route keeps naming the open one instead of dropping it; a hash
  *    that no longer targets AI Chat is a real departure and is left to the
  *    shell, which unmounts this view.
+ *  - An id the list does not hold - the list is the newest hundred unarchived
+ *    chats - is read by id (ACC-108). An archived chat opens as itself and
+ *    `onArchived` lets the view show the Archive list; a chat that no longer
+ *    exists calls `onMissing`, so the dead id is never kept under a "New chat"
+ *    heading for the next send to fail against.
  */
 export function useAiChatRoute({
   conversationId, temporary, conversations, hasMessages, openConversation, onNotice,
+  onMissing, onArchived,
 }: {
   conversationId: string;
   temporary: boolean;
@@ -38,20 +45,41 @@ export function useAiChatRoute({
   hasMessages: boolean;
   openConversation: (item: AiChatConversation) => Promise<void>;
   onNotice: (message: string) => void;
+  onMissing: () => void;
+  onArchived: () => void;
 }) {
-  // `openConversation` and `onNotice` are fresh closures every render; holding
-  // them in refs lets the effects call the latest without re-subscribing.
+  // The callbacks are fresh closures every render; holding them in refs lets
+  // the effects call the latest without re-subscribing.
   const openRef = useRef(openConversation);
   const noticeRef = useRef(onNotice);
+  const missingRef = useRef(onMissing);
+  const archivedRef = useRef(onArchived);
   useEffect(() => { openRef.current = openConversation; });
   useEffect(() => { noticeRef.current = onNotice; });
+  useEffect(() => { missingRef.current = onMissing; });
+  useEffect(() => { archivedRef.current = onArchived; });
   // Only the first URL-named conversation is restored automatically; after that
   // the reader is driving.
   const restored = useRef(false);
 
+  const couldNotOpen = () => noticeRef.current("That conversation could not be opened.");
+
   const open = (id: string) => {
     const item = conversations.find((entry) => entry.id === id);
-    if (item) void openRef.current(item).catch(() => noticeRef.current("That conversation could not be opened."));
+    if (item) {
+      void openRef.current(item).catch(couldNotOpen);
+      return;
+    }
+    void apiRequest<AiChatConversation>(`/ai-chat/conversations/${encodeURIComponent(id)}`)
+      .then(async (found) => {
+        if (found.archived) archivedRef.current();
+        await openRef.current(found);
+      })
+      .catch((error) => {
+        if (error instanceof ApiError && (error.status === 404 || error.code === "chat_not_found")) {
+          missingRef.current();
+        } else couldNotOpen();
+      });
   };
 
   useEffect(() => {
@@ -61,7 +89,6 @@ export function useAiChatRoute({
 
   useEffect(() => {
     if (restored.current || temporary || !conversationId || hasMessages) return;
-    if (!conversations.some((entry) => entry.id === conversationId)) return;
     restored.current = true;
     open(conversationId);
     // `open` closes over the current list and callbacks; it is safe to call once.

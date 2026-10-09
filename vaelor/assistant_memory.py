@@ -358,6 +358,20 @@ class AssistantMemoryStore:
             "reconciled_at": row["reconciled_at"],
         }
 
+    def audit_names(self, actor: str, conversation_ids, memory_ids) -> Dict[str, str]:
+        """Titles in ``actor``'s scope, as listed (W7-1); memory ids only for a memory reader."""
+        found: Dict[str, str] = {}
+        with closing(self._connect()) as connection:
+            for query, ids, extra in (
+                ("SELECT title FROM assistant_conversations WHERE id=? AND actor=?", conversation_ids, (str(actor),)),
+                ("SELECT content FROM assistant_memories WHERE id=?", memory_ids, ()),
+            ):
+                for item in list(ids)[:200]:
+                    row = connection.execute(query, (item, *extra)).fetchone()
+                    if row is not None:
+                        found[item] = str(row[0])
+        return found
+
     def ensure_conversation(
         self, actor: str, conversation_id: Optional[str] = None, title: str = ""
     ) -> Dict[str, Any]:

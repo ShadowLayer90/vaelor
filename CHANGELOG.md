@@ -1,5 +1,240 @@
 # Change log
 
+## 1.5
+
+The first release since 1.0 Beta 2. Vaelor grows from one appliance into a
+small GPU cluster managed from the same console, AI Chat can reach hosted
+services, and the whole console has been redesigned. Everything below was built
+and tested, and most of it was run on an HP Z2 Mini G1a controller with an HP
+ZBook Ultra G1a worker; "Not verified in this release" at the end of this
+section lists what has not yet been run on that hardware.
+
+### Upgrading from 1.0 Beta 2
+
+- **Re-run the installer once** (`git pull` in the clone, then
+  `sudo ~/vaelor/deploy/install-vaelor.sh --unattended`) instead of using the
+  console update for this one upgrade. The installer now binds InfluxDB to
+  localhost (it previously listened on every interface with no
+  authentication), stages the worker telemetry agent, and pre-pulls the new
+  trace collector; the console update installs the new release but does not
+  do those three things.
+- **Certificate.** A box installed before 1.5 keeps its existing self-signed
+  certificate, which names the machine only in its common name. Workers need a
+  certificate that also lists the controller's addresses. Before adding a
+  worker, move `/opt/vaelor/tls/vaelor.crt` aside and re-run the installer to
+  generate a new one; your browser will ask you to accept it again.
+- The installer now downloads from the `v1.5` release by default
+  (`VAELOR_RELEASE_TAG` chooses another).
+
+### GPU clustering across machines
+
+- **Add a machine.** Join a second Strix Halo machine from Cluster › Add
+  machine over an SSH login with `sudo`. The cluster has its own section in
+  the console: Setup, Fleet, Deployments, Performance, Activity, and Agents &
+  tools.
+- **Serving moves to vLLM when you cluster.** A single machine serves with
+  llama.cpp; forming a GPU cluster switches serving to vLLM containers, and
+  taking the cluster down switches back. The two never run at once, because a
+  model loaded in one holds the memory the other needs.
+- **Two ways to use two machines.** *More people at once:* one copy of the
+  model on each machine behind a balancer the controller runs, with each
+  conversation kept on one copy and a request retried once on the other copy
+  if its machine stops answering. *A model bigger than one machine:* split one
+  model across machines (pipeline-parallel by default, with tensor-parallel as
+  an option that recommends the fastest shared link). A split needs a
+  dedicated link between the machines, such as a Thunderbolt cable, and
+  nftables on each; Vaelor fences that link so nothing else on your network
+  can reach its ports, and refuses a split over your shared network.
+- **A recommended cluster model.** Qwen3-30B-A3B-Instruct-2507 in 4-bit
+  weights, one copy per machine, on vLLM 0.27. The earlier vLLM 0.22 image
+  stays selectable, and a deployment keeps the image it was deployed on.
+  Models answer without thinking unless you turn it on.
+- **Fit before you serve.** The serve form previews whether a model fits each
+  machine, and shows the same refusal the deploy would give.
+- **Load, Unload, and scale to zero.** Unload a cluster model by hand, or let
+  it unload itself when idle; the next request wakes it. While a model is
+  unloaded the LLM Server port stays open and answers that the model is
+  unloaded. A failed deployment can be started again from its record with
+  Load, and an update re-renders a serving deployment whose settings changed.
+- **Machine settings.** Set how much system memory each machine's GPU may use
+  for models (applied after you confirm it, counted from a restart you start),
+  and choose which of the controller's links a split uses.
+- **A slim, controller-managed worker.** A worker runs no console and no
+  Assistant of its own. The controller installs what the worker needs (the
+  telemetry agent, a GPU sampler, and AMD's `amd-smi` at a pinned version),
+  checks it every 15 minutes, and after an update brings it to the
+  controller's version. Each worker's card shows a Worker software row. The
+  full installer refuses to run on a worker; `--leave-worker-role` takes the
+  worker software off when its controller is gone for good. A machine that
+  already carries the full appliance is shown as such; it is not converted in
+  place in this release.
+- **Removing machines.** A worker that can no longer be reached can be
+  removed by force after a typed confirmation, and the removal says what may
+  remain on it.
+- **Cluster apps.** Apps deployed to the cluster get placement, replicas, CPU
+  limits, label constraints, and a re-check of placement when reconfigured. A
+  researched multi-service app can be deployed to the cluster as one group.
+  App data volumes can be backed up, restored (the service is always scaled
+  back afterwards), and deleted from the console, and the data a removed app
+  leaves behind is listed and deletable by name.
+
+### LLM Server, API keys, and usage
+
+- **The LLM Server** publishes the model you serve — on one machine or on the
+  cluster — as an OpenAI-compatible API on port 11434 of your LAN, in Cluster ›
+  Deployments.
+- **Keys you control.** Mint several keys, each shown once; rotate or revoke
+  them; rotate the cluster's internal serving key in place. The console warns
+  that revoking the last key closes the port.
+- **Usage metering** per key and per deployment, counted by the model and the
+  LLM Server gate rather than trusted from a request header, with one "last
+  used" time per key.
+- Every key change and refusal is in the Security audit, written in words.
+
+### Agents, MCP tools, and skills
+
+- **MCP catalog.** Administrators curate the MCP servers agents may use; each
+  agent is granted specific tools, deny-by-default.
+- **Skills library.** Write skills with an instructions body, import them from
+  GitHub, and attach them to agents.
+- **Cluster agents.** Deploy an agent that runs on the cluster's model from an
+  easy gallery or an advanced form (backing model, MCP grants, skills, review).
+  A deployed agent is read-only, has its own inbound key and its own memory,
+  and follows its current keys and model. Tool calling is enabled on the
+  cluster's vLLM so agents can use their MCP tools.
+
+### Observability
+
+- **Fleet metrics.** Per-machine metrics with history for the controller and
+  every worker. Workers report through a lean telemetry agent the controller
+  installs, sending to a keyed endpoint over TLS pinned to the controller's
+  certificate.
+- **Alerts on workers.** An alert rule can watch a worker's CPU temperature
+  or memory against that machine's own readings.
+- **Performance dashboard.** A per-machine dashboard of measured values only:
+  request health for every way in (the inference gateway, the LLM Server, and
+  AI Chat), each judged on time to first word and writing speed; the serving
+  engine's own throughput and queue; live in-use memory; and on-demand
+  profiling (a CPU capture and a GPU snapshot), with the exact reason when a
+  profiler cannot run.
+- **Request tracing** to an Arize Phoenix collector the controller runs on
+  loopback only; the console says how to reach it over SSH.
+- **Activity and alerts** for the cluster in one feed. "Needs attention" means
+  the same thing everywhere: failed, waiting for approval, or paused, and not
+  since resolved.
+
+### AI Chat
+
+- **Hosted services.** Connect OpenAI, Anthropic (its own API), Google Gemini,
+  OpenRouter, or any HTTPS endpoint. Hosted connections are for AI Chat only
+  and are labelled as leaving the machine. They are reached through a pinned
+  HTTPS transport: public addresses only, the checked address is the one
+  connected to, no redirects, certificates verified, an overall deadline, and
+  keys redacted from every log and error.
+- **Thinking control.** Off, Low, Medium, or High, for every model that
+  supports it, starting at Off wherever a model allows it; the model's
+  thinking is shown as a collapsed summary.
+- **Your choice while the cluster serves.** When a cluster is formed it takes
+  AI Chat's model once; after that AI Chat can use any model — the cluster's,
+  this machine's, or a hosted one — without touching the cluster.
+- **Servers only when you add them.** Vaelor no longer looks for AI servers on
+  its own; a server or service appears only after an operator adds it.
+  Viewers never see a server address.
+- On a machine whose Assistant runs on the NPU, AI Chat no longer lists the
+  Assistant's NPU model. On a Raspberry Pi, where one model serves both, it
+  stays.
+
+### Assistant
+
+- **Knows the cluster.** The Assistant answers questions about every machine
+  in a cluster — what it serves, its health, per-machine history and events,
+  disks, network, and fans — from the telemetry Vaelor collects, and answers
+  "which model does AI Chat use?" and "is the LLM Server running?" from the
+  serving state itself.
+- **Keeps its own model.** The Assistant always uses the on-device model
+  Vaelor installs. It never moves to the cluster's model and never uses a
+  hosted service; custom-application research that needs a bigger model falls
+  back only to a model on this machine or the cluster.
+- **Never shows an empty or unreadable answer.** A reply from the on-device
+  model with no text the owner can read, or only labels and internal ids, is
+  retried once and then reported as no answer.
+- Research escalation to the larger model was fixed so it actually escalates.
+
+### Console redesign
+
+- Every page was rebuilt to a new design: navigation grouped as Overview
+  (Home, Cluster, System, Remote console), AI (Apps and AI, AI Chat,
+  Assistant), and Manage (Activity, Settings); a new icon set; search across
+  the console; no visible text smaller than 12 px.
+- A refused action is shown inside the dialog where you asked for it.
+- Update Vaelor moved to System › Hardware and services.
+- Home and System › Compute show the GPU and NPU on their own cards, with
+  honest states when a reading is missing.
+
+### Security
+
+- **Sign-in attempts are limited** per address and per account; an owner's
+  known address is not locked out.
+- **InfluxDB listens on localhost only** (see Upgrading).
+- **The appliance certificate lists the machine's names and addresses**, so
+  browsers and worker telemetry verify it.
+- The audit shows the real client address, never the TLS terminator's.
+- The remote-desktop service's state directories are owned by Vaelor, and the
+  privileged bridge never follows a path inside them.
+- A port held by something Vaelor manages is never handed to another app or
+  model, and ports bound only to loopback get no Open link.
+- The sudo password used to enrol a worker never reaches the worker's files or
+  programs, and worker files are staged only in a private directory that is
+  removed afterwards.
+
+### Install, update, and remove
+
+- The installer also pre-pulls the Arize Phoenix image (about 1.5 GB) and
+  stages the pinned telemetry agent for workers.
+- The installer and every update remove stale web-interface files left by an
+  earlier version.
+- "Up to date" and Reinstall are judged by the installed build, not only the
+  version number.
+- Remove Vaelor states exactly what it removes, including containerd's image
+  store, and removes only what the installer added.
+
+### Fixes and smaller changes
+
+- **Performance counts every way in.** The request latency and errors card,
+  its "why", and the Assistant's performance tool cover the LLM Server and AI
+  Chat as well as the inference gateway, each with its own verdict against the
+  budget.
+- Many fixes from repeated whole-console sweeps: status words that match the
+  backend, byte sizes shown with one unit per quantity, a saved app
+  configuration that says when it reaches the running app, Restart service
+  audited before it restarts and restarting once, and more.
+
+### API changes
+
+- `/api/v2/cluster/performance`: the keys `gateway`, `baseline_gateway`,
+  `gateway_detail`, and `gateway.scope` are renamed `requests`,
+  `baseline_requests`, `requests.doors[].coverage`, and
+  `requests.latency_basis`. The old names are still served in 1.5 and are
+  listed under `deprecated_keys`; they will be removed in a later release.
+
+### Not verified in this release
+
+- Splitting one model across machines has been proven on two machines, but the
+  link fence added since, and the tensor-parallel option, have not yet been
+  re-run live on two machines.
+- The GPU memory pool and cluster link settings have not yet been re-checked
+  live since they were finished.
+- The sign-in attempt limits are covered by tests but have not yet been
+  re-checked live on the appliance.
+- The worker software job was run live on an existing worker. Its `amd-smi`
+  install path, its behaviour beside a split deployment, and its failure paths
+  are covered by tests only.
+- GPU serving and clustering are verified only on the AMD Strix Halo GPU
+  (gfx1151). Other GPUs are reported, not served on.
+- The Raspberry Pi was not re-tested on hardware for this release.
+- Adding a brand-new worker with the slim install is covered by tests only; the
+  live runs updated an existing worker.
+
 ## 1.0 Beta 2
 
 The second public beta. Everything in Beta 1, plus a wave of work driven by live

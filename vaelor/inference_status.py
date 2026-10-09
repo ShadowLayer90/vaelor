@@ -19,8 +19,19 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
-from .accelerator_runtime import verify_accelerator_in_use
+from .accelerator_runtime import (
+    ACCELERATED,
+    BASIS_ABSOLUTE,
+    MIB,
+    NOT_ESTABLISHED,
+    NOTHING_SERVED,
+    MINIMUM_ACCELERATED_BYTES,
+    reported_gpu_memory_bytes,
+    verify_accelerator_in_use,
+)
 from .chat_connections import connection_locality
+from .cluster_placement import CONTROLLER_PLACEMENT_ID
+from .gpu_serving_target import UNLOAD_CAUSE_IDLE, UNLOAD_CAUSE_MANUAL
 from .inference_tuning import (
     RECOMMENDED_CONTEXT_TOKENS,
     loaded_model_settings,
@@ -114,11 +125,169 @@ def _tier_connection(
     return None
 
 
+#: What a vLLM deployment record's ``units["engine"]`` says. The word is
+#: `gpu_pool_units.VLLM_ENGINE`'s; spelled here rather than imported because
+#: that module's import chain is the executor's, not this read path's.
+_CLUSTER_ENGINE = "vllm"
+#: The record states in which a deployment still owns its nodes' GPUs:
+#: starting, serving, or unloaded by scale-to-zero (the mode file stays Mode B
+#: and the next request loads it back). Only ``failed`` releases them.
+_CLUSTER_PLACED_STATES = ("deploying", "healthy", "unloaded")
+#: The readable name of the cluster engine, for the owner-facing sentences.
+_CLUSTER_ENGINE_NAME = "vLLM"
+#: A reading attributed from the serving record rather than from a baseline:
+#: the record places a vLLM server on this machine, and the adapter's total is
+#: what it reports. Neither `differential` nor `absolute` describes that.
+BASIS_SERVING_RECORD = "serving-record"
+
+
+def cluster_on_this_adapter(
+    records: Optional[Sequence[Mapping[str, Any]]],
+) -> Optional[Mapping[str, Any]]:
+    """The GPU cluster deployment with a server on THIS machine, if any (ACC-114).
+
+    Read off the stored ``pooled_deployments`` records the cluster store
+    returns: a vLLM record whose ``node_ids`` include the controller runs a
+    server here (`gpu_pool_units.serving_units` derives the units the same
+    way), and while it is starting or serving that server - not llama.cpp,
+    which the mode switch stopped - is what holds this adapter's memory. An
+    unloaded record is returned too: the adapter still belongs to that
+    deployment, and describing it as llama.cpp's would be the ACC-114 defect
+    again in the scale-to-zero window.
+    """
+    for record in records or []:
+        units = record.get("units") if isinstance(record, Mapping) else None
+        if not isinstance(units, Mapping):
+            continue
+        if str(units.get("engine") or "") != _CLUSTER_ENGINE:
+            continue
+        if str(record.get("state") or "") not in _CLUSTER_PLACED_STATES:
+            continue
+        nodes = [str(node) for node in record.get("node_ids") or []]
+        if CONTROLLER_PLACEMENT_ID in nodes:
+            return record
+    return None
+
+
+#: The unloaded sentence's second half, by the cause the one unload-cause
+#: rule (`gpu_serving_target.unload_cause`, VD-136) gives; any other answer,
+#: "" (not known) included, promises no wake.
+_UNLOADED_BY_CAUSE = {
+    UNLOAD_CAUSE_IDLE: "was unloaded after sitting idle; it loads again on the next AI Chat request.",
+    UNLOAD_CAUSE_MANUAL: (
+        "was unloaded by hand and stays unloaded until it is loaded again from "
+        "Cluster > Deployments."
+    ),
+}
+
+
+def _cluster_acceleration(
+    record: Mapping[str, Any], accelerators: Sequence[Mapping[str, Any]],
+    unload_cause: str = "",
+) -> Dict[str, Any]:
+    """This adapter's reading while it serves a cluster deployment's replica.
+
+    Never framed as the single-machine engine: the llama.cpp library is not
+    loaded in this mode, and naming it here is what told the owner the wrong
+    engine held 26 GB of memory. ``unload_cause`` is the caller's answer from
+    the one unload-cause rule for an unloaded record; it is not derived here.
+    """
+    name = str(record.get("name") or "")
+    model = str(record.get("model_id") or "")
+    observed = reported_gpu_memory_bytes(accelerators)
+    serving = "This machine is part of the GPU cluster deployment \"{}\"{}".format(
+        name, " ({})".format(model) if model else "",
+    )
+    result: Dict[str, Any] = {
+        "backend": _CLUSTER_ENGINE,
+        "requested_backend": _CLUSTER_ENGINE,
+        "compute_library": "",
+        "gpu_memory_bytes": observed,
+        "baseline_bytes": None,
+        "basis": BASIS_SERVING_RECORD,
+        "cluster_deployment": name,
+        "in_use": None,
+        "state": NOT_ESTABLISHED,
+    }
+    if str(record.get("state") or "") == "unloaded":
+        label = "The GPU cluster deployment \"{}\"{}".format(
+            name, " ({})".format(model) if model else "",
+        )
+        cause_sentence = _UNLOADED_BY_CAUSE.get(unload_cause)
+        result.update({
+            "state": NOTHING_SERVED,
+            "detail": (
+                "{} {}".format(label, cause_sentence) if cause_sentence else
+                "{} is unloaded, so nothing is loaded on this graphics processor "
+                "right now.".format(label)
+            ),
+        })
+        return result
+    if str(record.get("state") or "") != "healthy":
+        result["detail"] = (
+            "{}, and its {} server on this graphics processor is still "
+            "starting.".format(serving, _CLUSTER_ENGINE_NAME)
+        )
+        return result
+    if observed is None:
+        result["detail"] = (
+            "{}, served here by {}. The graphics processor does not report how "
+            "much of its memory is in use, so that could not be "
+            "confirmed.".format(serving, _CLUSTER_ENGINE_NAME)
+        )
+        return result
+    # The memory guard: a healthy record over an adapter holding less than a
+    # loaded model means the replica is not running here. Residual: a healthy
+    # record over a dead replica container while something ELSE holds more
+    # than MINIMUM_ACCELERATED_BYTES still reads as the cluster's. Probing the
+    # record's endpoint would not settle it either - that is the balancer,
+    # which answers while any replica does - so only a per-node unit read
+    # (the executor's, not this read path's) could.
+    if observed < MINIMUM_ACCELERATED_BYTES:
+        result["detail"] = (
+            "{}, but the graphics processor is holding only {:.0f} MiB - less "
+            "than a loaded model - so its {} server does not appear to be "
+            "running here.".format(serving, observed / MIB, _CLUSTER_ENGINE_NAME)
+        )
+        return result
+    result.update({
+        "in_use": True,
+        "state": ACCELERATED,
+        "held_bytes": observed,
+        "detail": (
+            "{}. {}, the cluster engine, serves it from this graphics processor, "
+            "which is holding {:.0f} MiB. The single-machine engine is stopped "
+            "while the graphics processor is clustered."
+        ).format(serving, _CLUSTER_ENGINE_NAME, observed / MIB),
+    })
+    return result
+
+
+def _clustered_elsewhere() -> Dict[str, Any]:
+    """Mode B with no cluster server found on this machine.
+
+    The single-machine engine was stopped when the GPU was clustered, so the
+    adapter's memory is not llama.cpp's; which server holds it is not known.
+    """
+    return {
+        "backend": _CLUSTER_ENGINE,
+        "in_use": None,
+        "state": NOT_ESTABLISHED,
+        "basis": BASIS_SERVING_RECORD,
+        "detail": (
+            "This graphics processor is set aside for the GPU cluster, but no "
+            "cluster deployment was found running a server on this machine, so "
+            "what is using its memory is not established."
+        ),
+    }
+
+
 def _acceleration(
     kind: str,
     backend: str,
     accelerators: Sequence[Mapping[str, Any]],
     health: Mapping[str, Any],
+    configured: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """Whether the GPU engine is actually GPU-backed, when that is askable.
 
@@ -140,11 +309,21 @@ def _acceleration(
     """
     if kind != "gpu":
         return None
+    if not configured:
+        # No model server is configured for this engine at all. That is a
+        # plain fact about this machine, not an unanswered question.
+        return {
+            "backend": str(backend or ""),
+            "in_use": None,
+            "state": NOTHING_SERVED,
+            "basis": BASIS_ABSOLUTE,
+            "detail": "Vaelor is not serving an AI model on this graphics processor.",
+        }
     if not health.get("reachable"):
         return {
             "backend": str(backend or ""),
             "in_use": None,
-            "state": "unknown",
+            "state": NOT_ESTABLISHED,
             "detail": (
                 "No model server is answering on this engine, so whether the "
                 "GPU library loaded has not been established."
@@ -160,8 +339,20 @@ def inference_status(
     probe: Optional[Callable[[Mapping[str, Any]], Mapping[str, Any]]] = None,
     resident_bytes: Optional[Mapping[str, int]] = None,
     resolve_local: Optional[Callable[[], Optional[Mapping[str, Any]]]] = None,
+    cluster_deployments: Optional[Sequence[Mapping[str, Any]]] = None,
+    cluster_mode: bool = False,
+    cluster_unload_cause: str = "",
 ) -> Dict[str, Any]:
     """What each engine is holding, and what that leaves.
+
+    ``cluster_deployments`` are the stored GPU cluster records. When one of
+    them runs a server on this machine, the GPU engine is that deployment's
+    vLLM replica and is reported as such (`cluster_on_this_adapter`).
+    ``cluster_mode`` is the serving-mode file's answer (Mode B): with it set and
+    no record placing a server here, the GPU is not described as llama.cpp's,
+    because the switch stopped llama.cpp when it entered the mode.
+    ``cluster_unload_cause`` is `gpu_serving_target.deployment_unload_cause`'s
+    answer for that record when it is unloaded, supplied by the caller.
 
     ``probe`` is injected so this is testable without a network and so a
     caller that already has fresh probe results does not pay for them twice.
@@ -241,6 +432,7 @@ def inference_status(
     chat_tier_kind = (
         "gpu" if "gpu" in tier_kinds else ("cpu" if "cpu" in tier_kinds else "")
     )
+    cluster = cluster_on_this_adapter(cluster_deployments)
     engines: List[Dict[str, Any]] = []
     for tier in tiers.get("tiers", []):
         kind = str(tier.get("kind"))
@@ -287,11 +479,15 @@ def inference_status(
                 model = _model_display_name(str(offered[0]))
         held = _int(tier.get("resident_bytes"))
         health = _engine_health(tier, result)
+        on_cluster = kind == "gpu" and cluster is not None
+        if on_cluster:
+            model = str(cluster.get("model_id") or model)
         engines.append({
             "kind": kind,
             "role": tier.get("role"),
             "device": tier.get("device"),
-            "backend": tier.get("backend"),
+            "backend": _CLUSTER_ENGINE if on_cluster else tier.get("backend"),
+            "cluster_deployment": str(cluster.get("name") or "") if on_cluster else None,
             "available": bool(tier.get("available")),
             "unavailable_reason": tier.get("reason") or "",
             "model": model or None,
@@ -314,7 +510,14 @@ def inference_status(
             # Asking for the GPU is not the same as getting it. A llama.cpp
             # that cannot resolve its accelerator library loads the CPU
             # backend and serves normally, nine times slower, with no error.
-            "acceleration": _acceleration(kind, chosen_backend, accelerators, health),
+            "acceleration": (
+                _cluster_acceleration(cluster, accelerators, cluster_unload_cause) if on_cluster
+                else _clustered_elsewhere() if (kind == "gpu" and cluster_mode)
+                else _acceleration(
+                    kind, chosen_backend, accelerators, health,
+                    configured=connection is not None,
+                )
+            ),
             "connection_id": (
                 connection.get("id") or connection.get("credential_id")
                 if connection else None

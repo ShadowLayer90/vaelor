@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { apiRequest } from "../lib/api";
+import { ApiError, apiRequest } from "../lib/api";
 import { canonicalOperationState, jobIsReady, jobIsTerminal, jobNeedsAttention } from "../lib/jobPresentation";
+import { buildClusterJob } from "../lib/clusterJobs";
+import { researchedPlacementServices, type PlacementInput, type PlacementService } from "../lib/researchedApp";
 import type { Session } from "../types";
 import {
   ApplicationDeployment,
@@ -8,9 +10,15 @@ import {
   type ComposeDraft,
   type DeploymentConfiguration,
   type DeploymentProgress,
+  type ResearchModelTier,
   type ResearchReport,
 } from "./ApplicationDeployment";
+import { ClusterAppPlacementModal } from "./ClusterAppPlacementModal";
+import { AppsDialog, AppsInset } from "./appsKit";
+import { Button, Notice } from "./ui";
+import type { ActionPlan, FleetNode, FleetSummary } from "./fleetTypes";
 import { WebResearchSetup } from "./WebResearchSetup";
+import { bytesIn, typedFromBytes } from "../lib/format";
 
 interface ServerIntent {
   application_query: string;
@@ -28,9 +36,9 @@ interface ServerManifest {
   application: { id: string; name: string; summary: string; license?: string };
   compatibility: { status: "verified" | "conditional" | "unsupported" | "unknown"; architectures: string[]; reason: string };
   images: Array<{ service?: string; repository: string; digest: string; architectures: string[]; source_url: string }>;
-  ports: Array<{ name: string; protocol: "tcp" | "udp"; target: number; published: number; required: boolean }>;
-  volumes: Array<{ name: string; mount_path: string; required: boolean }>;
-  variables: Array<{ name: string; description: string; secret: boolean; required: boolean; default?: string }>;
+  ports: Array<{ service?: string; name: string; protocol: "tcp" | "udp"; target: number; published: number; required: boolean }>;
+  volumes: Array<{ service?: string; name: string; mount_path: string; required: boolean }>;
+  variables: Array<{ service?: string; name: string; description: string; secret: boolean; required: boolean; default?: string }>;
   resources: { memory_bytes: number; storage_bytes: number; cpu_cores: number };
   sources: Array<{ url: string; title: string; kind: string; sha256: string; verified: boolean }>;
 }
@@ -91,6 +99,11 @@ function pendingResearch(job: ServerJob, message?: string): ResearchReport {
     compatibility: "pending",
     compatibilitySummary: message || job.message || "Vaelor is researching this application.",
     images: [], ports: [], volumes: [], environment: [], sources: [],
+    // A hard research failure carries `capable_available` (and the tier that
+    // failed) on its job result, so the failure screen can offer or honestly
+    // disable "Try the larger model". Pending/running results carry none, so
+    // this spreads to nothing then.
+    ...tierFieldsFromResult(job.result),
     error: operation === "needs_approval" || terminalFailure ? (message || job.message) : undefined,
   };
 }
@@ -123,7 +136,28 @@ export function mapApplicationCompatibility(status: ServerManifest["compatibilit
   return status === "verified" ? "compatible" : status === "conditional" ? "conditional" : "unsupported";
 }
 
-function reportFromDraft(draft: ServerDraft): ResearchReport {
+const RESEARCH_TIERS = new Set<string>(["gpu/ai-chat", "npu/deployment-agent"]);
+
+/**
+ * The A tier fields ride on the research JOB result — they describe the pass
+ * that produced this manifest (which model, whether a graphics lease is live,
+ * whether the assistant queued an escalation), not durable draft state. Absent
+ * or legacy results claim no tier, so the wizard never asserts the graphics
+ * model when the assistant ran.
+ */
+function tierFieldsFromResult(result: ServerJob["result"] | undefined): Partial<ResearchReport> {
+  if (!result) return {};
+  const tier = result.model_tier_used;
+  return {
+    modelTier: typeof tier === "string" && RESEARCH_TIERS.has(tier) ? (tier as ResearchModelTier) : undefined,
+    capableAvailable: typeof result.capable_available === "boolean" ? result.capable_available : undefined,
+    capableUnavailableReason: typeof result.capable_unavailable_reason === "string" && result.capable_unavailable_reason
+      ? result.capable_unavailable_reason : undefined,
+    escalatedToCapable: typeof result.escalated_to_capable === "boolean" ? result.escalated_to_capable : undefined,
+  };
+}
+
+function reportFromDraft(draft: ServerDraft, jobResult?: ServerJob["result"]): ResearchReport {
   if (!draft.manifest) throw new Error("Application research completed without a verified manifest.");
   const manifest = draft.manifest;
   const status = manifest.compatibility.status;
@@ -137,22 +171,25 @@ function reportFromDraft(draft: ServerDraft): ResearchReport {
       digest: image.digest,
       architectures: image.architectures,
       verified: Boolean(image.source_url),
+      service: image.service,
     })),
-    ports: manifest.ports.map((port) => ({ container: port.target, protocol: port.protocol, purpose: port.name })),
+    ports: manifest.ports.map((port) => ({ container: port.target, protocol: port.protocol, purpose: port.name, service: port.service })),
     // The pinned-image service names the operator may attach an added port or a
     // privileged host mount to. The verified manifest stores one per image.
     services: Array.from(new Set(manifest.images.map((image) => image.service).filter((value): value is string => Boolean(value)))),
-    volumes: manifest.volumes.map((volume) => ({ target: volume.mount_path, purpose: volume.name, required: volume.required })),
+    volumes: manifest.volumes.map((volume) => ({ target: volume.mount_path, purpose: volume.name, required: volume.required, service: volume.service })),
     environment: manifest.variables.map((variable) => ({
       name: variable.name,
       description: variable.description,
       secret: variable.secret,
       required: variable.required,
       defaultValue: variable.default,
+      service: variable.service,
     })),
+    ...tierFieldsFromResult(jobResult),
     license: manifest.application.license,
-    minimumMemoryMb: Math.ceil(manifest.resources.memory_bytes / 1024 / 1024),
-    minimumStorageGb: Math.max(1, Math.ceil(manifest.resources.storage_bytes / 1024 / 1024 / 1024)),
+    minimumMemoryMb: typedFromBytes(manifest.resources.memory_bytes, "MiB", "ceil"),
+    minimumStorageGb: Math.max(1, typedFromBytes(manifest.resources.storage_bytes, "GB", "ceil")),
     sources: manifest.sources.map((source, index) => ({
       id: `${index}-${source.sha256}`,
       title: source.title,
@@ -218,6 +255,22 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
   const [draft, setDraft] = useState<ComposeDraft | null>(null);
   const [deployment, setDeployment] = useState<DeploymentProgress | null>(null);
   const [deploymentJobId, setDeploymentJobId] = useState("");
+  // D4d: the cluster bridge. `clusterWorkers` are the joined workers a cluster
+  // deploy may target; clustering is "active" when there is at least one. The
+  // placement modal, then the reviewed plan, then the queued job carry the SAME
+  // approved draft the single-node install would — the single-node path is never
+  // touched.
+  const [clusterWorkers, setClusterWorkers] = useState<FleetNode[]>([]);
+  // The head controller as an eligible pin target (or null). It carries no
+  // `swarm_node_id` label so it is never in `clusterWorkers`, yet the capacity
+  // ledger counts it and the deploy labels it on demand — so a stateful service
+  // must be pinnable to it. Read the same way the fleet card and serve form do.
+  const [clusterController, setClusterController] = useState<FleetNode | null>(null);
+  const [placementServices, setPlacementServices] = useState<PlacementService[] | null>(null);
+  const [clusterPlan, setClusterPlan] = useState<ActionPlan | null>(null);
+  const [clusterPlacements, setClusterPlacements] = useState<Record<string, PlacementInput> | null>(null);
+  const [clusterBusy, setClusterBusy] = useState(false);
+  const [clusterError, setClusterError] = useState("");
   const serverDraftRef = useRef<ServerDraft | null>(null);
   const researchDraftIdsRef = useRef<Record<string, string>>({});
   const researchJobIdRef = useRef("");
@@ -286,11 +339,11 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
       // the condition, not the job's state (mirrors the deployment-resume path).
       const reviewDraft = reviewDraftFromServer(restoredDraft);
       if (reviewDraft) {
-        setResearch(reportFromDraft(restoredDraft));
+        setResearch(reportFromDraft(restoredDraft, job.result));
         setDraft(reviewDraft);
         window.localStorage.removeItem(resumeKey);
       } else if (jobIsReady(job) && restoredDraft.manifest) {
-        setResearch(reportFromDraft(restoredDraft));
+        setResearch(reportFromDraft(restoredDraft, job.result));
         window.localStorage.removeItem(resumeKey);
       } else {
         setResearch(pendingResearch(job));
@@ -358,7 +411,7 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
       const result = await apiRequest<ServerDraft>(`/applications/drafts/${targetDraft.id}`);
       serverDraftRef.current = result;
       setServerDraft(result);
-      const completed = reportFromDraft(result);
+      const completed = reportFromDraft(result, researchJob.result);
       setResearch(completed);
       return completed;
     }
@@ -381,7 +434,7 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
     serverDraftRef.current = result;
     setServerDraft(result);
     window.localStorage.removeItem(resumeKey);
-    return reportFromDraft(result);
+    return reportFromDraft(result, job.result);
   }
   async function retryResearch(researchId: string) {
     const draftId = researchDraftIdsRef.current[researchId] || serverDraftRef.current?.id || serverDraft?.id;
@@ -396,6 +449,45 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
     const mapped = pendingResearch(child);
     setResearch(mapped);
     return mapped;
+  }
+
+  // A: manually re-run research on the capable graphics model. Enqueues ONE
+  // capable pass on the draft (the route dedupes an in-flight capable job) and
+  // returns a pending report the wizard polls through the SAME refreshResearch
+  // machinery - so the new job id must map to its draft. Honest degrade: a 409
+  // means the graphics lease dropped since the button was enabled, so we keep
+  // the assistant's result and flip `capableAvailable` off, which disables the
+  // control with its reason rather than surfacing a generic error.
+  async function escalateToCapable(researchId: string): Promise<ResearchReport> {
+    const draftId = researchDraftIdsRef.current[researchId] || serverDraftRef.current?.id || serverDraft?.id;
+    if (!draftId) {
+      throw new Error("The saved request is unavailable. Return to the request step and try again.");
+    }
+    try {
+      const { job } = await apiRequest<{ draft: ServerDraft; job: ServerJob }>(
+        `/applications/drafts/${draftId}/research/capable`,
+        { method: "POST", body: "{}" }, session.csrf_token,
+      );
+      researchDraftIdsRef.current[job.id] = draftId;
+      researchJobIdRef.current = job.id;
+      window.localStorage.setItem(resumeKey, JSON.stringify({ jobId: job.id, draftId }));
+      onJobQueued?.(job);
+      const mapped = pendingResearch(job);
+      setResearch(mapped);
+      return mapped;
+    } catch (error) {
+      if (error instanceof ApiError && research && (
+        error.code === "application_capable_model_unavailable" || error.code === "application_capable_needs_approval"
+      )) {
+        const degraded: ResearchReport = {
+          ...research, capableAvailable: false,
+          capableUnavailableReason: error.code === "application_capable_needs_approval" ? error.message : research.capableUnavailableReason,
+        };
+        setResearch(degraded);
+        return degraded;
+      }
+      throw error;
+    }
   }
 
   async function replaceActiveResearch() {
@@ -428,7 +520,14 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
   async function generateDraft(configuration: DeploymentConfiguration) {
     if (!serverDraft?.manifest) throw new Error("Complete verified research before configuring this application.");
     const manifest = serverDraft.manifest;
-    const ports = Object.fromEntries(manifest.ports.map((port) => [`${port.name}`, configuration.ports[`${port.target}/${port.protocol}`] ?? port.published]));
+    // The operator's edited published port is keyed the SAME service-aware way
+    // ApplicationDeployment's portConfigKey produces (service-scoped for a
+    // multi-service manifest, bare `target/protocol` for a single-service one),
+    // so two services sharing a container port never collide on override.
+    const ports = Object.fromEntries(manifest.ports.map((port) => {
+      const key = port.service ? `${port.service}:${port.target}/${port.protocol}` : `${port.target}/${port.protocol}`;
+      return [`${port.name}`, configuration.ports[key] ?? port.published];
+    }));
     const variables: Record<string, unknown> = { ...configuration.settings };
     for (const [name, credentialId] of Object.entries(configuration.secretReferences)) {
       if (credentialId) variables[name] = { credential_id: credentialId };
@@ -438,8 +537,8 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
         ports,
         variables,
         resources: {
-          memory_bytes: Math.round(configuration.memoryMb * 1024 * 1024),
-          storage_bytes: Math.round(configuration.storageGb * 1024 * 1024 * 1024),
+          memory_bytes: bytesIn(configuration.memoryMb, "MiB"),
+          storage_bytes: bytesIn(configuration.storageGb, "GB"),
         },
         replace_existing: configuration.replaceExisting,
         // Only sent when the operator added them. `build_compose` accepts these
@@ -490,14 +589,134 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
     return result.id;
   }
 
+  // D4d: read the fleet ONCE a reviewable draft exists — the only point the
+  // cluster affordance can be offered — to learn whether clustering is active.
+  // Gating on the draft keeps a fresh, empty wizard from making any request (a
+  // just-"describe a custom app" open must stay inert). The bridge stays hidden
+  // until a worker has joined, so a single-node appliance never sees a cluster
+  // affordance it cannot act on; a controller too old to serve the summary, or an
+  // uninitialised one, simply leaves the list empty.
+  const clusterProbedRef = useRef(false);
+  useEffect(() => {
+    if (!draft || clusterProbedRef.current) return;
+    clusterProbedRef.current = true;
+    let cancelled = false;
+    void apiRequest<FleetSummary>("/cluster")
+      .then((fleet) => {
+        if (cancelled) return;
+        setClusterWorkers((fleet.enrolled_nodes ?? []).filter(
+          (node) => node.labels?.swarm_node_id
+            && node.runtime?.availability?.toLowerCase() !== "drain",
+        ));
+        setClusterController(
+          fleet.controller?.placement?.eligible ? fleet.controller.placement : null,
+        );
+      })
+      .catch(() => { if (!cancelled) { setClusterWorkers([]); setClusterController(null); } });
+    return () => { cancelled = true; };
+  }, [draft]);
+
+  const clusteringActive = clusterWorkers.length >= 1;
+
+  // Open the placement step for the reviewed draft. Derives each manifest
+  // service's stateful flag and defaulted memory the SAME way the backend
+  // renderer does, so the choice offered matches the deploy.
+  function openClusterPlacement(_reviewed: ComposeDraft) {
+    setClusterError("");
+    setClusterPlan(null);
+    setClusterPlacements(null);
+    setPlacementServices(researchedPlacementServices(
+      serverDraft?.compose ?? null,
+      serverDraft?.manifest?.resources.memory_bytes ?? null,
+    ));
+  }
+
+  // Approve (validated -> approved) if needed, then preview the reviewed plan.
+  // Approving does not deploy anything — the single-node path also approves
+  // before it queues — and the plan/deploy consume the draft ONLY once approved.
+  async function previewClusterPlan(placements: Record<string, PlacementInput>) {
+    if (!serverDraft || !serverDraft.manifest_digest) {
+      setClusterError("The reviewed application draft is unavailable.");
+      return;
+    }
+    setClusterBusy(true);
+    setClusterError("");
+    try {
+      if (serverDraft.state === "validated") {
+        const approval = await apiRequest<ApprovalResult>(`/applications/drafts/${serverDraft.id}/approve`, {
+          method: "POST", body: JSON.stringify({ manifest_digest: serverDraft.manifest_digest }),
+        }, session.csrf_token);
+        serverDraftRef.current = approval.draft;
+        setServerDraft(approval.draft);
+      }
+      const plan = await apiRequest<ActionPlan>("/cluster/plan", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "deploy-researched-app",
+          draft_id: serverDraft.id,
+          manifest_digest: serverDraft.manifest_digest,
+          placements,
+        }),
+      }, session.csrf_token);
+      setClusterPlacements(placements);
+      setClusterPlan(plan);
+      setPlacementServices(null);
+    } catch (error) {
+      setClusterError(error instanceof Error ? error.message : "The cluster deployment plan is unavailable.");
+    } finally {
+      setClusterBusy(false);
+    }
+  }
+
+  // Queue the reviewed cluster deploy, tracked in the SAME deploy progress panel
+  // the single-node install uses.
+  async function deployToCluster() {
+    if (!serverDraft || !serverDraft.manifest_digest || !clusterPlacements) return;
+    const job = buildClusterJob({
+      action: "deploy-researched-app",
+      payload: {
+        draft_id: serverDraft.id,
+        manifest_digest: serverDraft.manifest_digest,
+        placements: clusterPlacements,
+      },
+    });
+    if (!job) return;
+    setClusterBusy(true);
+    setClusterError("");
+    try {
+      const queued = await apiRequest<ServerJob>("/jobs", { method: "POST", body: JSON.stringify(job) }, session.csrf_token);
+      const initialState: DeploymentProgress["state"] = jobIsReady(queued)
+        ? "healthy"
+        : canonicalOperationState(queued) === "failed" || canonicalOperationState(queued) === "rejected"
+          ? "failed"
+          : canonicalOperationState(queued) === "cancelled"
+            ? "cancelled"
+            : "running";
+      setDeployment({ state: initialState, progress: queued.progress, message: queued.message || "Cluster deployment queued." });
+      setDeploymentJobId(queued.id);
+      if (jobIsTerminal(queued)) window.localStorage.removeItem(deploymentResumeKey);
+      else window.localStorage.setItem(deploymentResumeKey, JSON.stringify({ jobId: queued.id, draftId: serverDraft.id }));
+      onJobQueued?.(queued);
+      setClusterPlan(null);
+      setClusterPlacements(null);
+    } catch (error) {
+      setClusterError(error instanceof Error ? error.message : "The cluster deployment could not be queued.");
+    } finally {
+      setClusterBusy(false);
+    }
+  }
+
   // A draft can be configured exactly once: `POST /configure` refuses a draft
   // that is past `configuration` or already carries a generated compose. Telling
   // the wizard this keeps it from presenting an editable Configure step (and its
   // dead-end "Generate" button) for a finalized draft, e.g. one reopened from the
   // resume banner. A draft not yet created is configurable by default.
+  const closeClusterPlan = () => { if (!clusterBusy) { setClusterPlan(null); setClusterPlacements(null); setClusterError(""); } };
+
   const configurable = !serverDraft || (serverDraft.state === "configuration" && !serverDraft.compose);
 
-  return <ApplicationDeployment
+  return <>
+    <ApplicationDeployment
     initialRequest={initialRequest || resumeResearch?.requestSummary || ""}
     intent={intent}
     research={research}
@@ -507,6 +726,8 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
     configurable={configurable}
     resumeResearch={resumeResearch}
     disabled={session.user.role !== "administrator"}
+    clusteringActive={clusteringActive}
+    onDeployToCluster={openClusterPlacement}
     onClose={onClose}
     onDirtyChange={onDirtyChange}
     onClassify={classify}
@@ -514,17 +735,77 @@ export function ApplicationDeploymentContainer({ session, onJobQueued, initialRe
     onRefreshResearch={refreshResearch}
     onCancelResearch={cancelResearch}
     onRetryResearch={retryResearch}
+    onEscalateToCapable={escalateToCapable}
     onReplaceActiveResearch={replaceActiveResearch}
-    researchRecovery={<WebResearchSetup
+    researchRecovery={<ResearchRecovery
       session={session}
-      onResearch={() => {
-        if (research) void retryResearch(research.id).catch(() => undefined);
-      }}
+      onRetry={research ? () => retryResearch(research.id) : undefined}
     />}
     onGenerateDraft={generateDraft}
     onStoreSecret={storeSecret}
     onApprove={approveDeployment}
     onCancelDeployment={cancelDeployment}
     onManage={onManaged}
-  />;
+  />
+
+    {placementServices && (
+      <ClusterAppPlacementModal
+        appName={intent?.application ?? serverDraft?.manifest?.application.name ?? "this application"}
+        services={placementServices}
+        joinedWorkers={clusterWorkers}
+        controllerNode={clusterController}
+        busy={clusterBusy}
+        error={clusterError}
+        onClose={() => { setPlacementServices(null); setClusterError(""); }}
+        onReview={(placements) => void previewClusterPlan(placements)}
+      />
+    )}
+
+    {clusterPlan && (
+      <AppsDialog
+        busy={clusterBusy}
+        error={clusterError || undefined}
+        eyebrow="Change plan"
+        footer={<>
+          <Button disabled={clusterBusy} onClick={closeClusterPlan} variant="quiet">Close</Button>
+          <Button busy={clusterBusy} onClick={() => void deployToCluster()} variant="primary">{clusterBusy ? "Queuing…" : "Approve and deploy to cluster"}</Button>
+        </>}
+        onClose={closeClusterPlan}
+        title={clusterPlan.title}
+        titleId="cluster-app-deploy-plan-title"
+      >
+        <ol className="apps-wizard__plan-steps">{clusterPlan.steps.map((step) => <li key={step}>{step}</li>)}</ol>
+        <AppsInset detail={clusterPlan.impact} title="Expected impact" />
+        {clusterPlan.terminology && <p className="apps-wizard__muted">{clusterPlan.terminology}</p>}
+      </AppsDialog>
+    )}
+
+  </>;
+}
+
+/**
+ * Web research setup offered where research failed for lack of it, and the
+ * re-run it starts. Why the re-run failed is said here, beside the button; it
+ * was swallowed (`.catch(() => undefined)`), so the owner pressed Research and
+ * nothing happened (VD-189, found by the dialog audit).
+ */
+export function ResearchRecovery({ session, onRetry }: {
+  session: Session;
+  onRetry?: () => Promise<unknown>;
+}) {
+  const [error, setError] = useState("");
+  return (
+    <>
+      <WebResearchSetup
+        session={session}
+        onResearch={() => {
+          if (!onRetry) return;
+          setError("");
+          void onRetry().catch((caught) => setError(
+            caught instanceof Error && caught.message ? caught.message : "Research could not be started again."));
+        }}
+      />
+      {error && <Notice severity="danger">{error}</Notice>}
+    </>
+  );
 }

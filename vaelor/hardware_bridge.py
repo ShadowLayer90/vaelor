@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import signal
-import socket
 import socketserver
 import sys
 import threading
@@ -14,22 +13,39 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from .runtime_paths import env_value
-
-
-SOCKET_PATH = env_value(
-    "VAELOR_HARDWARE_BRIDGE_SOCKET",
-    "PM_HARDWARE_BRIDGE_SOCKET",
-    "/run/vaelor/hardwared.sock",
+from .hardware_bridge_agents import AGENT_ACTIONS, AgentBridgeVerbs, dispatch_agent_action
+from .hardware_bridge_host_settings import (
+    HOST_SETTING_ACTIONS, HostSettingVerbs, dispatch_host_setting,
 )
+from .bridge_peers import BRIDGE_SOCKET_GROUP, admit, admitted_uids, socket_group
+from .state_root_layout import start_layout_unit
+from .hardware_bridge_profile import ServingProfileMixin
+from .host_power import POWER_ACTION_REFUSAL
+from .hardware_bridge_client import (  # noqa: F401 - the wire contract, re-exported
+    AF_UNIX,
+    MAX_REQUEST_BYTES,
+    RUN_ARGV_MAX_OUTPUT_BYTES,
+    RUN_ARGV_MAX_TIMEOUT_SECONDS,
+    RUN_ARGV_TIMEOUT_SECONDS,
+    SOCKET_PATH,
+    HardwareBridgeClient,
+    HardwareBridgeError,
+)
+from .hardware_bridge_commands import CONTROLLER_UNIT_VERBS, ControllerCommandsMixin
+
 PIRONMAN_CONFIG = Path("/opt/pironman5/config.json")
 PIRONMAN_VENV = Path("/opt/pironman5/venv")
-MAX_REQUEST_BYTES = 64 * 1024
-AF_UNIX = getattr(socket, "AF_UNIX", -1)
 
+#: What the three balancer verbs (VD-129) answer to a payload that is not an
+#: object - one sentence for the three, because they take one payload shape.
+_INVALID_BALANCER_REQUEST = "Invalid replica balancer request."
 
-class HardwareBridgeError(RuntimeError):
-    """Raised when the optional Pironman hardware bridge is unavailable."""
+#: What a caller is told when the root side hit an operating-system error: the
+#: detail - a path, an errno - is written to the journal instead.
+_OS_REFUSAL = (
+    "The hardware bridge could not complete that on this machine; its journal "
+    "has the detail."
+)
 
 
 def _json_safe(value: Any) -> Any:
@@ -52,203 +68,51 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
-class HardwareBridgeClient:
-    """Small fail-closed client used by the unprivileged control plane."""
+#: Guards the creation of a runtime's per-family locks (:meth:`_family_lock`).
+_FAMILY_LOCKS_GUARD = threading.Lock()
+#: How many family locks one runtime holds at most: ``construct``, ``phoenix``
+#: and one per replicated deployment's balancer, far more than a box runs.
+MAX_FAMILY_LOCKS = 128
 
-    def __init__(self, socket_path: str = SOCKET_PATH, timeout: float = 3.0):
-        self.socket_path = socket_path
-        self.timeout = timeout
 
-    @property
-    def available(self) -> bool:
-        return Path(self.socket_path).is_socket()
+class _HardwareRuntime(
+    ServingProfileMixin, ControllerCommandsMixin, AgentBridgeVerbs, HostSettingVerbs,
+):
+    """Own PMAuto without starting the legacy web dashboard.
 
-    def _request(self, action: str, payload: dict[str, Any] | None = None) -> Any:
-        request = {"action": action, "payload": payload or {}}
-        encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
-        if len(encoded) > MAX_REQUEST_BYTES:
-            raise HardwareBridgeError("Hardware request is too large.")
-        try:
-            with socket.socket(AF_UNIX, socket.SOCK_STREAM) as connection:
-                connection.settimeout(self.timeout)
-                connection.connect(self.socket_path)
-                connection.sendall(encoded)
-                response = b""
-                while not response.endswith(b"\n"):
-                    chunk = connection.recv(8192)
-                    if not chunk:
-                        break
-                    response += chunk
-                    if len(response) > MAX_REQUEST_BYTES:
-                        raise HardwareBridgeError("Hardware response is too large.")
-        except (OSError, TimeoutError) as error:
-            raise HardwareBridgeError("Pironman hardware service is unavailable.") from error
-        try:
-            decoded = json.loads(response.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise HardwareBridgeError("Pironman hardware service returned invalid data.") from error
-        if not decoded.get("ok"):
-            raise HardwareBridgeError(
-                str(decoded.get("error") or "Pironman hardware request failed.")
-            )
-        return decoded.get("data")
+    **Two kinds of lock (ACC-067).** ``self._lock`` is VD-001's: it serialises
+    the verbs that put a model on an accelerator (NPU, GPU) or change what
+    systemd runs, and the LLM Server gate that fronts them. Everything else a
+    verb touches - the lazy construction of a supervised process, the Phoenix
+    collector, one deployment's balancer - takes only its OWN family lock
+    (:meth:`_family_lock`). Restoring Phoenix or a balancer after a bridge
+    restart runs ``docker stop``/``run`` for seconds to minutes; under the
+    shared lock that froze every status read behind it, so callers timed out
+    after 3 s and the bridge wrote its answer into a closed socket.
+    """
 
-    def snapshot(self) -> dict[str, Any]:
-        value = self._request("snapshot")
-        return value if isinstance(value, dict) else {}
+    def _family_lock(self, family: str) -> threading.RLock:
+        """The lock one family of verbs serialises on, created on first use.
 
-    def device_info(self) -> dict[str, Any]:
-        return dict(self.snapshot().get("device_info") or {})
-
-    def current_data(self) -> dict[str, Any]:
-        return dict(self.snapshot().get("data") or {})
-
-    def read_config(self) -> dict[str, Any]:
-        return dict(self.snapshot().get("config") or {})
-
-    def update_config(self, patch: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(patch, dict) or not isinstance(patch.get("system"), dict):
-            raise ValueError("Hardware configuration must contain a system object.")
-        value = self._request("update_config", patch)
-        return value if isinstance(value, dict) else {}
-
-    def power(self, action: str) -> dict[str, Any]:
-        if action not in {"restart_service", "reboot", "shutdown"}:
-            raise ValueError("Choose restart_service, reboot, or shutdown.")
-        value = self._request("power", {"action": action})
-        return value if isinstance(value, dict) else {}
-
-    def package_power(self, interval_seconds: float = 2.0) -> dict[str, Any]:
-        """Package watts, measured by the privileged side across two samples.
-
-        RAPL counters are root-only, so this is the only account that can read
-        them. Reporting package power as unavailable from the control plane
-        described the reader, not the hardware.
+        Created lazily (and under a module guard, so two threads cannot mint
+        two) rather than in ``__init__``, because a runtime built without the
+        enclosure returns from ``__init__`` early and tests build one with
+        ``__new__``. A family is a container the bridge supervises on its own:
+        ``construct``, ``phoenix`` and ``balancer:<name>`` - the name validated
+        before a lock is minted for it (:meth:`_balancer_lock`), and at most
+        :data:`MAX_FAMILY_LOCKS` of them.
         """
-        value = self._request(
-            "package_power", {"interval_seconds": interval_seconds}
-        )
-        return value if isinstance(value, dict) else {}
+        with _FAMILY_LOCKS_GUARD:
+            locks = self.__dict__.setdefault("_family_locks", {})
+            if family not in locks and len(locks) >= MAX_FAMILY_LOCKS:
+                raise ValueError("The hardware bridge supervises too many replica balancers.")
+            return locks.setdefault(family, threading.RLock())
 
-    def rapl_energy(self) -> dict[str, Any]:
-        """The raw counters, with no sleep, for a caller measuring its own gap.
+    def _balancer_lock(self, name: Any) -> threading.RLock:
+        """One deployment's balancer family lock, for a VALID deployment name only."""
+        from .gpu_pool_units import deployment_name
 
-        :meth:`package_power` holds a bridge thread for the length of the
-        interval it is given, which is fine for a one-shot report and wrong on
-        a telemetry poll. This returns the counters as they read right now and
-        leaves the division to the sampler on the other side.
-        """
-        value = self._request("rapl_energy")
-        return value if isinstance(value, dict) else {}
-
-    def memory_ecc(self) -> dict[str, Any]:
-        """Whether the memory has ECC, from EDAC and the SMBIOS memory records.
-
-        Here for the same reason as RAPL: ``/sys/firmware/dmi/entries`` is mode
-        0400 root, so the unprivileged control plane cannot tell "no ECC" from
-        "not readable" and was publishing the wrong one of the two.
-        """
-        value = self._request("memory_ecc")
-        return value if isinstance(value, dict) else {}
-
-    def wmi_sensors(self) -> dict[str, Any]:
-        """Fans and board temperatures from ``hp_wmi_sensors``, if loaded."""
-        value = self._request("wmi_sensors")
-        return value if isinstance(value, dict) else {}
-
-    def drive_health(self) -> dict[str, Any]:
-        """NVMe SMART wear, power-on hours, unsafe shutdowns and media errors."""
-        value = self._request("drive_health")
-        return value if isinstance(value, dict) else {}
-
-    def flm_start(self, tag: str, ctx_len: int, port: int) -> dict[str, Any]:
-        """Launch the flm-real NPU server as root (VD-001).
-
-        The privileged side needs root for CAP_IPC_LOCK; this client holds none
-        of it and only carries the request. The tag is validated at the root
-        boundary (:mod:`vaelor.flm_service`), not here — a client-side check
-        would be advisory, and the boundary that matters is the one that
-        actually launches the process (LESSONS #178).
-        """
-        value = self._request(
-            "flm_start",
-            {"tag": str(tag), "ctx_len": int(ctx_len), "port": int(port)},
-        )
-        return value if isinstance(value, dict) else {}
-
-    def flm_stop(self) -> dict[str, Any]:
-        """Stop the flm-real NPU server (service stop only, never a reboot;
-        VD-019)."""
-        value = self._request("flm_stop")
-        return value if isinstance(value, dict) else {}
-
-    def flm_status(self) -> dict[str, Any]:
-        """Whether the flm-real NPU server is running, and on what tag/port."""
-        value = self._request("flm_status")
-        return value if isinstance(value, dict) else {}
-
-    def flm_binary_present(self) -> dict[str, Any]:
-        """Whether the flm-real binary is present, checked by the root bridge.
-
-        The executor cannot traverse the binary's ``0770 root:root`` parent
-        directories, so its own stat reads absent even on a box that serves
-        (VD-001); this asks the privileged side, which can. A courier call like
-        the rest — the stat that matters happens at the root boundary.
-        """
-        value = self._request("flm_binary_present")
-        return value if isinstance(value, dict) else {}
-
-    def flm_install_release(self, source_url: str, expected_sha256: str) -> dict[str, Any]:
-        """Install a fine-tuned NPU model from a pinned release, as root.
-
-        A fine-tune (ff-4b-h) is not in the snap's public flm catalog, so it is
-        delivered as a release the appliance downloads, verifies and unpacks into
-        the snap paths flm-real serves from. Those paths are root-owned and this
-        client holds no root, so the privileged side does the download-and-unpack
-        and verifies the bytes against ``expected_sha256`` - which the caller
-        pins from the model-catalog entry, the same trust model as the flm tag it
-        passes to :meth:`flm_start`.
-        """
-        value = self._request(
-            "flm_install_release",
-            {"source_url": str(source_url), "expected_sha256": str(expected_sha256)},
-        )
-        return value if isinstance(value, dict) else {}
-
-    def gpu_start(
-        self, model_path: str, port: int, runtime: dict[str, Any] | None
-    ) -> dict[str, Any]:
-        """Launch the ROCmFPX GPU model server through the root bridge.
-
-        Same reason the NPU goes through here (:meth:`flm_start`), a different
-        privilege: the GPU server needs the bridge unit's /dev/dri + /dev/kfd
-        access, its writable ``/var/log/vaelor`` and its lack of
-        ``MemoryDenyWriteExecute`` — none of which the sandboxed workload
-        executor has (``PrivateDevices=true`` hides the GPU, and its
-        ``/var/log/vaelor`` is read-only). The model path and port are validated
-        at the root boundary inside :mod:`vaelor.gpu_rocmfpx_service`, not here —
-        the payload is carried through so the one place the rule lives is the one
-        that launches the process (LESSONS #178).
-        """
-        value = self._request(
-            "gpu_start",
-            {"model_path": model_path, "port": port, "runtime": runtime},
-        )
-        return value if isinstance(value, dict) else {}
-
-    def gpu_stop(self) -> dict[str, Any]:
-        """Stop the GPU model server (service stop only, never a reboot)."""
-        value = self._request("gpu_stop")
-        return value if isinstance(value, dict) else {}
-
-    def gpu_status(self) -> dict[str, Any]:
-        """Whether the GPU model server is running, and on what model/port."""
-        value = self._request("gpu_status")
-        return value if isinstance(value, dict) else {}
-
-
-class _HardwareRuntime:
-    """Own PMAuto without starting the legacy web dashboard."""
+        return self._family_lock("balancer:" + deployment_name(name))
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
@@ -339,7 +203,7 @@ class _HardwareRuntime:
         privilege; the seam supplies the mechanism.
         """
         if action not in {"restart_service", "reboot", "shutdown"}:
-            raise ValueError("Choose restart_service, reboot, or shutdown.")
+            raise ValueError(POWER_ACTION_REFUSAL)
         record = self._power_actions().get(action) or {}
         run = record.get("run")
         if run is None:
@@ -416,7 +280,7 @@ class _HardwareRuntime:
         never touches :mod:`vaelor.flm_service`, and so the bridge starts on a
         machine where flm-real does not exist.
         """
-        with self._lock:
+        with self._family_lock("construct"):
             existing = getattr(self, "_flm_process", None)
             if existing is None:
                 from .flm_service import FlmProcess
@@ -428,33 +292,19 @@ class _HardwareRuntime:
     def flm_start(self, tag: str, ctx_len: int, port: int) -> dict[str, Any]:
         """Launch flm-real as root (VD-001).
 
-        This service already runs as root - it asserted ``geteuid()==0`` before
-        serving - so the child inherits CAP_IPC_LOCK to pin NPU pages without
-        any capability juggling here. The tag is validated inside
-        :mod:`vaelor.flm_service` against the installed allowlist and the tag
-        grammar before it is placed in a fixed argument vector: no shell, no
-        interpolation, no ``PATH`` lookup (LESSONS #178).
-
-        Held under ``self._lock`` for the WHOLE op, not just the singleton
-        lookup (VD-001). `_Server` is a `ThreadingMixIn` with `daemon_threads`,
-        so two `flm_start` requests - the boot reconcile and a manual
-        `model.deploy` - run on concurrent threads. `FlmProcess.start` is a
-        non-atomic check-then-act (`if alive(): stop()` then spawn); without the
-        lock both callers can see `alive()==False` and both spawn, orphaning a
-        second flm-real that pins NPU pages. The RLock is reentrant, so the
-        nested `_flm()` acquire is fine, and it serializes launches so only one
-        flm-real is ever tracked.
+        The root child inherits CAP_IPC_LOCK to pin NPU pages. The tag is validated
+        inside :mod:`vaelor.flm_service` against the installed allowlist and the tag
+        grammar before entering a fixed argument vector: no shell, no interpolation,
+        no ``PATH`` lookup (LESSONS #178). Held under ``self._lock`` for the whole op
+        (VD-001): `FlmProcess.start` is a non-atomic check-then-act, so two threads
+        unlocked could orphan a second flm-real pinning NPU pages; the reentrant
+        RLock serializes it so only one is ever tracked.
         """
         with self._lock:
             return self._flm().start(str(tag), ctx_len=int(ctx_len), port=int(port))
 
     def flm_stop(self) -> dict[str, Any]:
-        """Stop flm-real. A service stop only - never a reboot (VD-019).
-
-        Under ``self._lock`` for the same reason as :meth:`flm_start`: a stop
-        racing a concurrent start must not interleave the check-then-act that
-        tracks the single flm-real process (VD-001).
-        """
+        """Stop flm-real (a service stop, never a reboot, VD-019), under ``self._lock`` as :meth:`flm_start`."""
         with self._lock:
             return self._flm().stop()
 
@@ -505,21 +355,34 @@ class _HardwareRuntime:
         model, so once it lands the existing supervisor serves the tag with no
         other change - the turnkey equivalent of the manual place-model step, done
         as root behind the bridge.
+
+        **Only the shipped release.** The pair the caller sends must be exactly
+        a release this wheel's catalog pins (`model_catalog.pinned_release`),
+        and the URL and digest used are then the catalog's: a caller cannot
+        have root fetch, trust and unpack an archive of its own choosing by
+        naming its own URL beside its own digest.
         """
         from pathlib import Path
 
         from . import flm_npu_release
         from .flm_service import FLM_MODEL_PATH
+        from .model_catalog import pinned_release
 
+        release = pinned_release(source_url, expected_sha256)
+        if release is None:
+            raise ValueError(
+                "Only the on-device model release this appliance ships with can "
+                "be installed."
+            )
         with self._lock:
             # Stop any running flm-real before replacing the model files it may
             # have open. A no-op on a fresh box; on a re-install over a live model
             # it frees the files, and the deploy step relaunches flm-real after.
             self._flm().stop()
             return flm_npu_release.install(
-                str(source_url),
+                release["source_url"],
                 Path(FLM_MODEL_PATH),
-                expected_sha256=str(expected_sha256),
+                expected_sha256=release["sha256"],
             )
 
     def _gpu_server(self):
@@ -530,12 +393,12 @@ class _HardwareRuntime:
         :mod:`vaelor.gpu_rocmfpx_service`, and so the bridge starts on a machine
         where the ROCmFPX fork does not exist.
         """
-        with self._lock:
+        with self._family_lock("construct"):
             existing = getattr(self, "_gpu_process", None)
             if existing is None:
-                from .gpu_rocmfpx_service import GpuServerProcess
+                from .gpu_rocmfpx_service import GpuServerProcess, configured_model_cache_dir
 
-                existing = GpuServerProcess()
+                existing = GpuServerProcess(model_cache_dir=configured_model_cache_dir())
                 self._gpu_process = existing
             return existing
 
@@ -544,27 +407,15 @@ class _HardwareRuntime:
     ) -> dict[str, Any]:
         """Launch the ROCmFPX GPU model server as root.
 
-        The GPU server is launched here, not from the workload executor, for the
-        privileges only this unit holds: /dev/dri and /dev/kfd for HIP/Vulkan (the
-        executor's ``PrivateDevices=true`` hides them, so the fork sees no GPU and
-        falls back to the CPU), a writable ``/var/log/vaelor`` for the server log
-        (the executor's is read-only — the ``[Errno 30] Read-only file system``
-        that blocked the deploy), and no ``MemoryDenyWriteExecute`` for the fork's
-        JIT. This service already asserted ``geteuid()==0`` before serving, so the
-        child inherits all of it without any capability juggling here. The model
-        path and port are validated inside :mod:`vaelor.gpu_rocmfpx_service`
-        against the path and port rules before they enter a fixed argument
-        vector: no shell, no interpolation (LESSONS #178).
-
-        Held under ``self._lock`` for the WHOLE op, exactly as :meth:`flm_start`
-        is (VD-001): ``_Server`` is a ``ThreadingMixIn`` with ``daemon_threads``,
-        so a boot reconcile and a manual ``model.deploy`` can call ``gpu_start``
-        on two threads at once. ``GpuServerProcess.start`` is a non-atomic
-        check-then-act (``if alive(): stop()`` then spawn); without the lock both
-        callers can see ``alive()==False`` and both spawn, orphaning a second
-        server holding VRAM. The RLock is reentrant, so the nested
-        ``_gpu_server()`` acquire is fine, and it serializes launches so only one
-        server is ever tracked.
+        Launched here, not from the workload executor, for privileges only this
+        unit holds: /dev/dri and /dev/kfd for HIP/Vulkan (the executor's
+        ``PrivateDevices=true`` hides them), a writable ``/var/log/vaelor``, and no
+        ``MemoryDenyWriteExecute`` for the fork's JIT. The model path and port are
+        validated inside :mod:`vaelor.gpu_rocmfpx_service` before they enter a fixed
+        argument vector: no shell, no interpolation (LESSONS #178). Held under
+        ``self._lock`` for the whole op, as :meth:`flm_start` is (VD-001): the
+        launch is a non-atomic check-then-act, so two threads unlocked could orphan
+        a second server holding VRAM; the reentrant RLock serializes it.
         """
         with self._lock:
             return self._gpu_server().start(
@@ -585,11 +436,163 @@ class _HardwareRuntime:
         """Whether the GPU model server is running, and on what model and port."""
         return self._gpu_server().status()
 
+    def _proxy_server(self):
+        """The supervised LLM Server auth-proxy process, created on first use.
+
+        Lazily imported and constructed like :meth:`_gpu_server`, so a host that
+        never enables the LLM Server never touches :mod:`vaelor.llm_server_proxy`,
+        and so the bridge starts on a machine without nginx or docker.
+        """
+        with self._family_lock("construct"):
+            existing = getattr(self, "_proxy_process", None)
+            if existing is None:
+                from .llm_server_proxy import LlmServerProxyProcess
+
+                existing = LlmServerProxyProcess()
+                self._proxy_process = existing
+            return existing
+
+    def proxy_start(
+        self, listen_host: Any, listen_port: Any, model_port: Any, api_keys: Any,
+        wake_door: bool = False, unloaded_notice: bool = False, loading: bool = False,
+    ) -> dict[str, Any]:
+        """Launch the LLM Server auth proxy as root.
+
+        Held under ``self._lock`` for the whole op, as :meth:`gpu_start` (VD-001):
+        the launch is a non-atomic check-then-act a toggle racing the reconcile
+        could otherwise double. The key/coupling and every validation happen inside
+        :mod:`vaelor.llm_server_proxy` at this root boundary, the payload carried
+        through unaltered so the rule lives where the root-owned config is written
+        (LESSONS #178).
+        """
+        with self._lock:
+            return self._proxy_server().start(
+                listen_host=str(listen_host), listen_port=int(listen_port),
+                model_port=(
+                    None if wake_door or unloaded_notice else int(model_port)
+                ),
+                api_keys=[str(key) for key in (api_keys or [])],
+                wake_door=bool(wake_door),
+                unloaded_notice=bool(unloaded_notice),
+                loading=bool(loading),
+            )
+
+    def proxy_stop(self) -> dict[str, Any]:
+        """Stop the LLM Server auth proxy and remove its config, under ``self._lock`` as :meth:`proxy_start`."""
+        with self._lock:
+            return self._proxy_server().stop()
+
+    def proxy_status(self) -> dict[str, Any]:
+        """Whether the LLM Server auth proxy is running, and on what binding."""
+        return self._proxy_server().status()
+
+    def _phoenix_server(self):
+        """The supervised Phoenix trace-collector process, created on first use.
+
+        Lazily imported and constructed like :meth:`_proxy_server`, so a host that
+        never enables tracing never touches :mod:`vaelor.phoenix_service`, and so
+        the bridge starts on a machine without docker or the Phoenix image.
+        """
+        with self._family_lock("construct"):
+            existing = getattr(self, "_phoenix_process", None)
+            if existing is None:
+                from .phoenix_service import PhoenixServerProcess
+
+                existing = PhoenixServerProcess()
+                self._phoenix_process = existing
+            return existing
+
+    def phoenix_start(self, port: Any, bind_host: Any) -> dict[str, Any]:
+        """Launch the Phoenix trace collector as root.
+
+        The check-then-act tracking the single container is serialised on the
+        ``phoenix`` family lock (ACC-067), NOT the shared model lock: the replace
+        is a ``docker stop`` and ``run`` of a collector that holds no model, and
+        holding the shared lock across it froze every other verb (and every
+        status read) for its length. The loopback-only publish is enforced
+        inside :mod:`vaelor.phoenix_service` (LESSONS #178). The image PULL runs
+        first, outside any lock; it is idempotent, so the lock guards only the
+        replace via ``skip_ensure``.
+        """
+        server = self._phoenix_server()
+        server.ensure_image()
+        with self._family_lock("phoenix"):
+            return server.start(
+                port=int(port), bind_host=str(bind_host), skip_ensure=True,
+            )
+
+    def phoenix_stop(self) -> dict[str, Any]:
+        """Stop the Phoenix trace collector and remove it, on its own family lock as :meth:`phoenix_start`."""
+        with self._family_lock("phoenix"):
+            return self._phoenix_server().stop()
+
+    def phoenix_status(self) -> dict[str, Any]:
+        """Whether the Phoenix trace collector is running, and on what binding."""
+        return self._phoenix_server().status()
+
+    # The cluster-agent verbs (agent_start/stop/status/rekey) live in
+    # `hardware_bridge_agents.AgentBridgeVerbs`, mixed in above.
+
+    def _balancer_server(self, name: Any):
+        """The supervised balancer process for one deployment, created on first use.
+
+        Per deployment name, because the container is named for it
+        (``vaelor-vllm-<name>-balancer``); lazily imported like
+        :meth:`_proxy_server`, so a host that never replicates never touches
+        :mod:`vaelor.gpu_pool_replicas`. The name is validated by the one
+        deployment-name rule inside `BalancerProcess`, at this root boundary.
+        """
+        with self._family_lock("construct"):
+            from .gpu_pool_replicas import BalancerProcess
+
+            servers = getattr(self, "_balancer_processes", None)
+            if servers is None:
+                servers = {}
+                self._balancer_processes = servers
+            key = str(name)
+            if key not in servers:
+                servers[key] = BalancerProcess(key)
+            return servers[key]
+
+    def balancer_start(
+        self, name: Any, port: Any, upstreams: Any, api_key: Any
+    ) -> dict[str, Any]:
+        """Launch a replicated deployment's balancer as root (VD-129).
+
+        Serialised for the WHOLE op on this deployment's own family lock
+        (ACC-067): the launch is a non-atomic check-then-act, and the mode
+        reconcile converging the balancer must not race the deploy starting it
+        - but the balancer holds no model, so the shared lock is not taken and
+        a restore after a bridge restart no longer stalls every other verb.
+        The config, the upstream pool and the key are validated inside
+        :mod:`vaelor.gpu_pool_replicas` at this root boundary - the payload is
+        carried through unaltered so the one place the rule lives is the one
+        that writes the root-owned config (LESSONS #178).
+        """
+        if not isinstance(upstreams, list):
+            raise ValueError("The balancer upstreams must be a list.")
+        with self._balancer_lock(name):
+            return self._balancer_server(name).start(
+                port=int(port), upstreams=[str(item) for item in upstreams],
+                api_key=str(api_key),
+            )
+
+    def balancer_stop(self, name: Any) -> dict[str, Any]:
+        """Stop a deployment's balancer and remove its config. Service stop only."""
+        with self._balancer_lock(name):
+            return self._balancer_server(name).stop()
+
+    def balancer_status(self, name: Any) -> dict[str, Any]:
+        """Whether a deployment's balancer is running, on what port, pooling whom."""
+        return self._balancer_server(name).status()
+
+
 
 class _Handler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
         request_bytes = self.rfile.readline(MAX_REQUEST_BYTES + 1)
         response: dict[str, Any]
+        action: Any = None
         try:
             if not request_bytes or len(request_bytes) > MAX_REQUEST_BYTES:
                 raise ValueError("Invalid hardware request size.")
@@ -672,10 +675,109 @@ class _Handler(socketserver.StreamRequestHandler):
                 data = runtime.gpu_stop()
             elif action == "gpu_status":
                 data = runtime.gpu_status()
+            elif action == "proxy_start":
+                if not isinstance(payload, dict):
+                    raise ValueError("Invalid LLM Server proxy launch request.")
+                # As with gpu_start, the key/coupling and validation that matter
+                # happen at the root boundary inside `llm_server_proxy`; the payload
+                # is passed through unaltered so there is one place the rule lives
+                # and it is the one that writes the root-owned config (#178).
+                data = runtime.proxy_start(
+                    payload.get("listen_host"),
+                    payload.get("listen_port"),
+                    payload.get("model_port"),
+                    payload.get("api_keys"),
+                    wake_door=payload.get("wake_door") is True,
+                    unloaded_notice=payload.get("unloaded_notice") is True,
+                    loading=payload.get("loading") is True,
+                )
+            elif action == "proxy_stop":
+                data = runtime.proxy_stop()
+            elif action == "proxy_status":
+                data = runtime.proxy_status()
+            elif action == "phoenix_start":
+                if not isinstance(payload, dict):
+                    raise ValueError("Invalid Phoenix launch request.")
+                # As with proxy_start, the loopback-only publish is enforced at the
+                # root boundary inside `phoenix_service`; the payload is passed
+                # through unaltered so there is one place the rule lives and it is
+                # the one that launches the container (#178).
+                data = runtime.phoenix_start(
+                    payload.get("port"), payload.get("bind_host"),
+                )
+            elif action == "phoenix_stop":
+                data = runtime.phoenix_stop()
+            elif action == "phoenix_status":
+                data = runtime.phoenix_status()
+            elif action in AGENT_ACTIONS:
+                # Dedicated verbs like phoenix_start: the config body and gate
+                # keys ride the payload unaltered to the root boundary in
+                # `agent_service`, which owns the fixed ExecStart. No
+                # `bridge_argv_policy` entry, no `run_argv` (#178).
+                data = dispatch_agent_action(runtime, action, payload)
+            elif action == "balancer_start":
+                if not isinstance(payload, dict):
+                    raise ValueError(_INVALID_BALANCER_REQUEST)
+                # As with proxy_start, the name, the pool and the key are
+                # validated at the root boundary inside `gpu_pool_replicas`;
+                # the payload is passed through unaltered so there is one place
+                # the rule lives and it is the one that writes the root-owned
+                # config (#178).
+                data = runtime.balancer_start(
+                    payload.get("name"), payload.get("port"),
+                    payload.get("upstreams"), payload.get("api_key"),
+                )
+            elif action == "balancer_stop":
+                if not isinstance(payload, dict):
+                    raise ValueError(_INVALID_BALANCER_REQUEST)
+                data = runtime.balancer_stop(payload.get("name"))
+            elif action == "balancer_status":
+                if not isinstance(payload, dict):
+                    raise ValueError(_INVALID_BALANCER_REQUEST)
+                data = runtime.balancer_status(payload.get("name"))
+            elif action == "run_argv":
+                if not isinstance(payload, dict):
+                    raise ValueError("Invalid controller command request.")
+                # The argv policy that matters is enforced at the root boundary
+                # inside `run_argv`; the payload is carried through unaltered so
+                # there is one place the rule lives and it is the one that
+                # spawns the process (#178).
+                data = runtime.run_argv(
+                    payload.get("argv"),
+                    payload.get("stdin_text", ""),
+                    payload.get("timeout"),
+                )
+            elif action == "run_serving_profile":
+                if not isinstance(payload, dict):
+                    raise ValueError("Invalid serving profile request.")
+                # Only the capture WINDOW crosses the wire; the PID is derived
+                # root-side from `docker inspect`, never taken from the caller
+                # (no profiling an attacker-named process). The window is clamped
+                # and every capture is bounded inside the runtime (#178).
+                data = runtime.run_serving_profile(payload.get("seconds"))
+            elif action in HOST_SETTING_ACTIONS:
+                # The GPU memory pool (VD-161): one whole number, or nothing,
+                # crosses the socket; path, line and command are root-side.
+                data = dispatch_host_setting(runtime, action, payload)
+            elif action in CONTROLLER_UNIT_VERBS:
+                # The controller's unit and model-store verbs (VD-143): typed
+                # values in, every rule and every file operation root-side.
+                data = runtime.controller_verb(action, payload)
             else:
                 raise ValueError("Unsupported hardware action.")
             response = {"ok": True, "data": data}
-        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as error:
+        except OSError as error:
+            # An OSError's text carries root-side paths and errno detail the
+            # caller has no business reading: it goes to the journal, and the
+            # caller gets a plain sentence (VD-143).
+            print(
+                "vaelor-hardware-bridge: {} failed: {}: {}".format(
+                    str(action or "request"), type(error).__name__, error,
+                ),
+                file=sys.stderr, flush=True,
+            )
+            response = {"ok": False, "error": _OS_REFUSAL}
+        except (AttributeError, OverflowError, RuntimeError, TypeError, ValueError) as error:
             response = {"ok": False, "error": str(error)}
         self.wfile.write(
             (json.dumps(response, separators=(",", ":")) + "\n").encode("utf-8")
@@ -689,6 +791,26 @@ class _UnixStreamServer(socketserver.TCPServer):
 class _Server(socketserver.ThreadingMixIn, _UnixStreamServer):
     daemon_threads = True
     allow_reuse_address = True
+    #: The uids served (VD-143, `bridge_peers`). Empty until `main` resolves
+    #: them, so a server built any other way serves nobody.
+    admitted_uids: frozenset = frozenset()
+
+    def verify_request(self, request, client_address) -> bool:
+        """Serve a connection only from an admitted peer, before reading a byte."""
+        return admit(request, self.admitted_uids)
+
+
+def _start_state_root_layout() -> threading.Thread:
+    """Lay the state root out once per start, off the serving path (review B1).
+
+    A hot-patched or upgraded box restarts this service; systemd runs the
+    layout outside this unit's ``ProtectSystem=strict`` sandbox.
+    """
+    worker = threading.Thread(
+        target=start_layout_unit, name="vaelor-state-root-layout", daemon=True,
+    )
+    worker.start()
+    return worker
 
 
 def main() -> None:
@@ -704,9 +826,21 @@ def main() -> None:
     server.runtime = runtime  # type: ignore[attr-defined]
     os.chmod(socket_path, 0o660)
     try:
-        import grp
-
-        os.chown(socket_path, 0, grp.getgrnam("vaelor").gr_gid)
+        server.admitted_uids = admitted_uids()
+        group_id, group_name = socket_group()
+        os.chown(socket_path, 0, group_id)
+        if group_name != BRIDGE_SOCKET_GROUP:
+            # Every start, loudly, until the installer has run: the fallback
+            # group is one the untrusted-content account also has, so only the
+            # uid check stands between it and this socket.
+            print(
+                "vaelor-hardware-bridge: WARNING: the {} group does not exist, "
+                "so the socket falls back to group {} (which vaelor-research also "
+                "has). Every peer but root, vaelor and vaelor-workloads is still "
+                "refused by uid. Re-run the Vaelor installer to create the "
+                "group.".format(BRIDGE_SOCKET_GROUP, group_name),
+                file=sys.stderr, flush=True,
+            )
     except (KeyError, OSError):
         server.server_close()
         socket_path.unlink(missing_ok=True)
@@ -722,6 +856,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     runtime.start()
+    _start_state_root_layout()
     try:
         server.serve_forever(poll_interval=0.25)
     finally:

@@ -258,7 +258,7 @@ def record_decline(
         }
     if conversation is None:
         conversation = store.ensure_conversation(
-            actor, title=str(message)[:100], model=model,
+            actor, title=str(message)[:100],
             collections=list(collections or []),
         )
     recorded = store.add_exchange(

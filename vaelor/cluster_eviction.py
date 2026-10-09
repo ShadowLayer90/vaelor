@@ -31,6 +31,7 @@ import time
 from typing import Any, Callable, Dict, List
 
 from .cluster_architecture import mismatched_nodes
+from .cluster_node_removal import FORCED_REMOVAL_ACK, WorkerInUse
 
 #: Typed by the operator, not defaulted. This is the only Vaelor operation that
 #: destroys an enrollment without the operator naming the node.
@@ -143,12 +144,23 @@ class ArchitectureEviction:
                 "node_id": target["node_id"],
                 "force": False,
             })
+        except WorkerInUse:
+            # Review R4: a machine a deployment still uses is never escalated
+            # to force here. The owner's rule requires THEM to type the forced
+            # confirmation after reading which deployments it would degrade;
+            # this code supplying it would bypass exactly that. Reported.
+            raise
         except Exception as error:  # noqa: BLE001 - escalation is reported
             forced_because = str(error)[:300]
+            # The same forced-removal rule every door follows (owner decision
+            # 2026-09-28): this eviction was approved from a plan that says a
+            # worker which will not leave is removed by force, so it carries
+            # the typed acknowledgement the rule requires.
             result = self._remove_node({
                 "confirm": "force-remove-worker-node",
                 "node_id": target["node_id"],
                 "force": True,
+                "data_loss_ack": FORCED_REMOVAL_ACK,
             })
         swarm_node_id = str(result.get("swarm_node_id", ""))
         return {

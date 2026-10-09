@@ -45,6 +45,12 @@ export interface AccelerationReading {
    * model's worth of memory, but not whose.
    */
   basis?: string;
+  /**
+   * The GPU cluster deployment serving from this adapter, when one is: its
+   * reading is attributed from that deployment's record (`basis`
+   * `serving-record`) and names vLLM, never the single-machine library.
+   */
+  cluster_deployment?: string;
   /** `true`, `false`, or `null` for "the check could not be made". */
   in_use: boolean | null;
   state: string;
@@ -79,15 +85,33 @@ export interface Verdict {
   degraded: boolean;
 }
 
-const ACCELERATION_VERDICTS: Record<string, Omit<Verdict, "state">> = {
+/**
+ * Every word an acceleration reading's `state` may carry. The owner is
+ * `vaelor/accelerator_runtime.py` `ACCELERATION_STATES` (review A13); this is
+ * the one TypeScript copy, marked for `tests/test_wire_vocabularies.py`, and
+ * the verdict table below is typed by it, so the compiler refuses a table
+ * that misses a word or holds one the copy does not (LESSONS 6).
+ */
+export const ACCELERATION_STATES = [ // vocabulary: acceleration-state
+  "accelerated", "cpu", "cpu-planned", "cpu-fallback", "not-offloaded", "unattributed", "idle", "unknown",
+] as const;
+export type AccelerationState = (typeof ACCELERATION_STATES)[number];
+
+const ACCELERATION_VERDICTS: Record<AccelerationState, Omit<Verdict, "state">> = {
   accelerated: { tone: "success", headline: "Running on the accelerator", degraded: false },
   // Not a fault and not a degradation: this deployment asked for the CPU.
   cpu: { tone: "neutral", headline: "Running on the CPU by configuration", degraded: false },
+  // The GPU AI-Chat fit plan put the model on the CPU (it does not fit, or the
+  // budget could not be read - the detail is the plan's own sentence). Not a
+  // fault, and not "by configuration" either.
+  "cpu-planned": { tone: "neutral", headline: "Running on the CPU, as its GPU plan decided", degraded: false },
   "cpu-fallback": { tone: "danger", headline: "Running on the CPU — the GPU library did not load", degraded: true },
   "not-offloaded": { tone: "danger", headline: "An accelerator was requested and not given", degraded: true },
   // The accelerator is in use; this engine cannot be shown to be what is using
   // it. An unanswered question, and it must not read as a fault.
   unattributed: { tone: "info", headline: "In use, but not attributable to this engine", degraded: false },
+  // Nothing is configured to serve on this adapter: a plain fact, not a gap.
+  idle: { tone: "neutral", headline: "Not serving a model", degraded: false },
   unknown: { tone: "neutral", headline: "Not established", degraded: false },
 };
 
@@ -133,7 +157,11 @@ export function contextVerdict(reading: ContextReading | null | undefined): Verd
  */
 export function basisNote(reading: AccelerationReading): string {
   if (!["accelerated", "unattributed"].includes(String(reading.state))) return "";
-  return reading.basis === "differential"
-    ? "Measured against a baseline taken before this server started, so what is left is this server's own allocation."
-    : "Measured with no baseline, so it establishes what the accelerator is holding rather than which server put it there.";
+  if (reading.basis === "differential") {
+    return "Measured against a baseline taken before this server started, so what is left is this server's own allocation.";
+  }
+  // A clustered adapter's detail already says which deployment's record places
+  // the server here; the "no baseline" caveat is about attribution it made.
+  if (reading.basis === "serving-record") return "";
+  return "Measured with no baseline, so it establishes what the accelerator is holding rather than which server put it there.";
 }

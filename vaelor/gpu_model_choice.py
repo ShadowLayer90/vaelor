@@ -6,11 +6,23 @@ and a thin builder that hands :mod:`vaelor.copilot_setup` the override making th
 tested 27B (``qwen3-8-27b-rocmfp4-fast``) the recommended local model.
 
 The defect this exists to prevent is the phantom model. The ROCmFP4 27B loads
-only in the ROCmFPX llama.cpp fork on a gfx1151 GPU, so recommending it on a Pi,
-on an x86 box with no such GPU, or on a gfx1151 box where the fork is not yet
-provisioned would name a model the machine cannot run - which is exactly what the
+only on a gfx1151 GPU, so recommending it on a Pi or on an x86 box with no such
+GPU would name a model the machine cannot run - which is exactly what the
 catalog's engine gate exists to stop. The discovery below keeps the invitation
-honest: all three conditions must hold before the 27B is offered.
+honest: the machine must have the GPU AND be able to run the serving container.
+
+**C0: serving is a self-contained ROCm CONTAINER, so the gate is on the CONTAINER
+prerequisites, not the dead host fork.** The bare ``llama-server`` fork broke on
+the re-imaged Strix Halo box (ROCm soname drift), so :mod:`vaelor.gpu_rocmfpx_service`
+now serves the model inside ``docker.io/kyuz0/amd-strix-halo-toolboxes:rocm-10.0``,
+which bundles its own ROCm. The container needs neither the host fork binary nor
+the host ROCm libs, so gating availability on those (as the pre-C0 gate did) said
+"GPU serving unavailable" on the very box that can serve - the chicken-and-egg this
+fix removes. Availability now holds iff a gfx1151 GPU is present AND Docker can run
+a container; the host fork binary / ROCm libs are read only as informational fields.
+The serving IMAGE is deliberately NOT required pre-pulled: it is fetched at deploy
+by :meth:`vaelor.gpu_rocmfpx_service.GpuServerProcess.ensure_image`, so gating on a
+cached multi-GB image would be the same chicken-and-egg one layer down.
 
 It deliberately does **not** require the model already downloaded. The
 recommendation IS the invitation to install it, so gating on the artifact would
@@ -24,11 +36,11 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence
 
+from .docker_health import container_runtime_healthy
 from .gpu_rocmfpx_service import (
     GPU_ENGINE_BINARY,
     GPU_MEASURED_DEFAULTS,
     ROCM_RUNTIME_LIB_CANDIDATES,
-    ROCM_RUNTIME_PROBE_SONAME,
     resolve_rocm_lib_dir,
 )
 from .inference_context import GPU_RECOMMENDED_CONTEXT_TOKENS
@@ -85,38 +97,30 @@ def names_a_gfx1151(accelerators: Iterable[Any]) -> bool:
     return _names_a_gfx1151(accelerators)
 
 
-def _unavailable_reason(
-    gpu_present: bool,
-    binary_present: bool,
-    libs_present: bool,
-    binary: str,
-    lib_candidates: Sequence[str],
-) -> str:
+def _unavailable_reason(gpu_present: bool, docker_ok: bool) -> str:
     """The specific gap, so an unprovisioned box says what to do, not a bare False.
 
     Honest absence is the point, the same discipline as ``npu_serving_verdict``:
-    a machine missing any one condition names it rather than reporting a blank
-    "not available", so an operator can act on the reason.
+    a machine missing either CONTAINER prerequisite names it rather than reporting
+    a blank "not available", so an operator can act on the reason. The host fork
+    binary and host ROCm libs are deliberately NOT named here: they no longer gate
+    serving (the container bundles its own ROCm), so naming them would send an
+    operator to install the very thing C0 stopped needing.
     """
     missing = []
     if not gpu_present:
         missing.append(
             "no gfx1151 GPU (Strix Halo / Radeon 8060S) is present"
         )
-    if not binary_present:
+    if not docker_ok:
         missing.append(
-            "the ROCmFPX engine is not installed or executable at {}".format(binary)
-        )
-    if not libs_present:
-        missing.append(
-            "no gfx1151 ROCm runtime ({}) is present on any of {}".format(
-                ROCM_RUNTIME_PROBE_SONAME, ", ".join(lib_candidates)
-            )
+            "Docker is not installed or its storage area is missing, so the "
+            "self-contained ROCm serving container cannot run"
         )
     return (
         "Vaelor cannot serve the ROCmFP4 GPU model on this machine: {}. It "
-        "becomes available once the gfx1151 GPU, the ROCmFPX engine and the "
-        "gfx1151 ROCm runtime are all present."
+        "becomes available once a gfx1151 GPU is present and Docker can run the "
+        "self-contained ROCm serving container."
     ).format("; ".join(missing))
 
 
@@ -125,27 +129,35 @@ def discover_gpu_rocm_serving(
     *,
     binary: str = GPU_ENGINE_BINARY,
     lib_candidates: Sequence[str] = ROCM_RUNTIME_LIB_CANDIDATES,
+    docker_probe: Callable[[], bool] = container_runtime_healthy,
 ) -> Dict[str, Any]:
-    """Whether this machine can run the ROCmFP4 GPU model, and why not when it can't.
+    """Whether this machine can serve the ROCmFP4 GPU model, and why not when it can't.
 
-    The GPU analogue of :func:`vaelor.flm_service.discover_npu_serving`. All three
-    preconditions must hold:
+    The GPU analogue of :func:`vaelor.flm_service.discover_npu_serving`. C0 serves
+    the model in a self-contained ROCm CONTAINER, so both CONTAINER preconditions
+    must hold:
 
     1. a **gfx1151 accelerator** (Strix Halo / Radeon 8060S) is in
        ``hardware["accelerators"]`` - the only condition read off the passed
-       inventory rather than the filesystem;
-    2. the **ROCmFPX fork binary** exists and is executable
-       (``os.access(binary, os.X_OK)``); and
-    3. a **gfx1151 ROCm runtime lib dir** is present - resolved through the SAME
-       :func:`vaelor.gpu_rocmfpx_service.resolve_rocm_lib_dir` the launch path
-       uses, so discovery and the launch agree on what "the libs are present"
-       means. It is present iff the resolver returns a real dir (one of the
-       ordered candidates that actually contains ``libamdhip64.so.7``) rather than
-       ``None``. A bare ``os.path.isdir`` on one hardcoded path would report the
-       stale snap dir absent while ``/opt/rocm`` served, disagreeing with the
-       launch.
+       inventory rather than the filesystem; and
+    2. **Docker can run a container** on this host - probed through the SAME
+       :func:`vaelor.docker_health.container_runtime_healthy` the app-deploy /
+       cluster paths trust. That probe is socket-FREE and fail-SAFE by design
+       (LESSONS #141): capability discovery runs as the least-privilege control
+       user, deliberately NOT in the ``docker`` group, so a ``docker info`` /
+       ``docker version`` would return permission-denied and false-negate the very
+       Z2 that serves fine. It reports usable when ``docker`` is installed and its
+       storage area is present (or un-stattable), and unusable only when ``docker``
+       is absent or its data-root is confirmed missing - so a missing Docker reads
+       as unavailable, never as an exception.
 
-    It does not check that the model is downloaded - see the module docstring.
+    The **host fork binary** (``os.access``) and the **host ROCm libs**
+    (:func:`resolve_rocm_lib_dir`) are read only as INFORMATIONAL fields: the
+    container bundles its own ROCm and needs neither, so gating on them said
+    "unavailable" on the re-imaged box that can serve (the C0 blocker). The serving
+    IMAGE is deliberately not required pre-pulled - it is fetched at deploy - and
+    the model download is likewise not checked here (module docstring).
+
     Fails closed: any exception or missing field yields ``available`` False,
     because a recommendation made on a bad read is the phantom-model defect this
     gate exists to stop.
@@ -153,21 +165,24 @@ def discover_gpu_rocm_serving(
     try:
         accelerators = (hardware or {}).get("accelerators") or []
         gpu_present = _names_a_gfx1151(accelerators)
+        docker_ok = bool(docker_probe())
+        # Informational only: the container carries its own ROCm, so neither the
+        # host fork binary nor the host ROCm libs gate serving under C0.
         binary_present = bool(binary) and os.access(binary, os.X_OK)
         libs_present = resolve_rocm_lib_dir(lib_candidates) is not None
     except Exception:
-        # A malformed hardware dict or an OSError from the filesystem probes must
-        # not raise on the way to a recommendation; it must read as "cannot serve".
-        gpu_present = binary_present = libs_present = False
-    available = bool(gpu_present and binary_present and libs_present)
+        # A malformed hardware dict, a probe raising, or an OSError from the
+        # informational filesystem reads must not raise on the way to a
+        # recommendation; it must read as "cannot serve".
+        gpu_present = docker_ok = binary_present = libs_present = False
+    available = bool(gpu_present and docker_ok)
     return {
         "available": available,
         "gpu_present": bool(gpu_present),
+        "docker_present": bool(docker_ok),
         "binary_present": bool(binary_present),
         "libs_present": bool(libs_present),
-        "reason": "" if available else _unavailable_reason(
-            gpu_present, binary_present, libs_present, binary, lib_candidates
-        ),
+        "reason": "" if available else _unavailable_reason(gpu_present, docker_ok),
         "model_id": GPU_CHAT_MODEL_ID,
     }
 
@@ -426,4 +441,29 @@ def generic_gpu_runtime(
         # generic runtime states "no speculative decode" here rather than leaving
         # it to a default it must not inherit.
         "spec_type": "",
+        # Stock GGUFs run on the MAINLINE image, so the engine is empty. Stated
+        # explicitly (like spec_type above) so the FP4 measured default
+        # `engine="rocmfpx"` can never leak in and route a generic model to the
+        # fork image, which cannot read a stock GGUF's tensors.
+        "engine": "",
     }
+
+
+def gpu_chat_context(identity: Mapping[str, str], fork_serves: bool) -> Optional[int]:
+    """The window a GPU AI-Chat deploy runs whatever memory profile is chosen.
+
+    W4d-D28 (LESSONS 5): "Use model" offered 2K / 4K / 8K and the 27B ran at
+    131,072, because the ROCmFPX fork route never reads the profile - the FP4
+    entry keeps its measured runtime and any other GGUF gets
+    :func:`generic_gpu_runtime`'s window. The executor's ``_gpu_chat_runtime_for``
+    launches exactly these two (a test binds them), so the list can say what
+    will run. ``None`` when the fork does not serve here: the compose path then
+    sizes from the profile, and the profiles are true.
+    """
+    if not fork_serves:
+        return None
+    from .model_catalog import catalog_engine, catalog_runtime
+
+    if identity and catalog_engine(**identity) == "rocmfpx":
+        return int(catalog_runtime(**identity).get("context") or 0) or None
+    return int(generic_gpu_runtime(ngl=0)["context"])

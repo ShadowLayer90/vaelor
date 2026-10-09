@@ -2,7 +2,7 @@
 
 These are the last resort in :meth:`DeploymentAgent._fallback_answer`, reached
 only when no fact tool matched: what Docker is, what KVM is not, what the three
-intelligence modes are. They are constants, they take no evidence, and they were
+Assistant runs on. They are constants, they take no evidence, and they were
 sitting in the middle of a method whose other branches all interpret live
 readings - which made a 980-line module out of two unrelated jobs.
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence, Tuple
 
+from .assistant_console_places import CONNECTIONS_PLACE
 from .phrase_match import mentions
 
 
@@ -54,10 +55,14 @@ STATIC_ANSWERS: Tuple[Tuple[Sequence[str], str], ...] = (
     ),
     (
         ("llm", "model", "local ai", "openai", "endpoint", "api"),
-        "The assistant has three intelligence modes: a private local model on "
-        "this node, a hosted API provider, or an OpenAI-compatible endpoint "
-        "such as LM Studio, Lemonade, or llama.cpp. Built-in help works without "
-        "a model; a connected model adds broader open-ended reasoning.",
+        # Review B6 (VD-049, VD-201): the Assistant runs Vaelor's own model or
+        # built-in basic mode, and nothing configured changes that. A hosted
+        # API or an OpenAI-compatible endpoint is connected for AI Chat.
+        "The Assistant runs Vaelor's own model on this machine, or built-in "
+        "basic mode when that model is not running; it never uses a model "
+        "you connect. Models you connect - a hosted API or an "
+        "OpenAI-compatible endpoint such as LM Studio or llama.cpp - are used "
+        "in AI Chat, set up under " + CONNECTIONS_PLACE + ".",
     ),
     (
         ("ram", "memory", "storage", "disk"),

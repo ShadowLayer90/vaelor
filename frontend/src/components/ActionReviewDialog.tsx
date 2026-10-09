@@ -1,10 +1,14 @@
-import { Button } from "./ui";
 import { useMemo, useRef } from "react";
-import { Icon } from "./Icon";
+import { AppsDialog, AppsFacts } from "./appsKit";
+import { Button } from "./ui";
+import { Icon, ICON_SIZE } from "./Icon";
 import type { AssistantEvidence } from "./agentTypes";
-import { ModalShell } from "./ModalShell";
 import { useMachineProfile } from "../hooks/useMachineProfile";
+import { jobLabel } from "../lib/jobPresentation";
 import { machineNoun } from "../lib/machine";
+import { evidenceSourceLabel } from "../lib/evidenceSourceLabels";
+import { formatQuantity, formatTypedGib } from "../lib/format";
+import { modelSurfaceName, runtimeModeName } from "../lib/modelModes";
 
 export interface ProposedJob {
   type: string;
@@ -31,7 +35,7 @@ const jobCopy: Record<string, { title: string; change: string; checks: string[];
   },
   "compose.start": {
     title: "Start this application",
-    change: "Start the selected managed application and verify its containers become healthy.",
+    change: "Start the selected managed application with its saved configuration and verify its containers become healthy.",
     checks: ["Managed project identity", "Port availability", "Container startup", "Application health"],
   },
   "compose.stop": {
@@ -41,7 +45,7 @@ const jobCopy: Record<string, { title: string; change: string; checks: string[];
   },
   "compose.restart": {
     title: "Restart this application",
-    change: "Restart the selected application and verify it returns to a healthy state.",
+    change: "Recreate any service whose saved configuration changed, restart the selected application, and verify it returns to a healthy state.",
     checks: ["Managed project identity", "Current health", "Graceful restart", "Application health after restart"],
   },
   "compose.update": {
@@ -90,6 +94,18 @@ const jobCopy: Record<string, { title: string; change: string; checks: string[];
     change: "Set the reviewed Linux swappiness value now and save the same policy for future boots.",
     checks: ["Administrator approval", "Supported profile", "Active kernel value", "Persistent sysctl configuration"],
   },
+  "host.gpu-memory.apply": {
+    title: "Change this controller's GPU memory pool",
+    change: "Write the GPU memory pool setting on this controller and rebuild its boot image. Nothing restarts; the pool changes size the next time you restart this controller.",
+    checks: ["Administrator approval", "A GPU that shares system memory", "A size inside this machine's range", "Boot image rebuilt, or the old setting put back"],
+    approval: "Approve change",
+  },
+  "cluster.node.gpu-memory": {
+    title: "Change a worker's GPU memory pool",
+    change: "Write the GPU memory pool setting on this worker and rebuild its boot image. Nothing restarts; the pool changes size the next time you restart that worker.",
+    checks: ["Administrator approval", "A GPU that shares system memory", "A size inside that machine's range", "Setting read back from the worker"],
+    approval: "Approve change",
+  },
   "host.web-research.manage": {
     title: "Manage guarded web research",
     change: "Install, repair, or remove Vaelor's private public-source discovery service using the exact reviewed action.",
@@ -97,7 +113,71 @@ const jobCopy: Record<string, { title: string; change: string; checks: string[];
   },
 };
 
-function displayValue(key: string, value: unknown) {
+/**
+ * What each payload field is, in the owner's words (W6 retest, LESSONS 6): the
+ * review printed the wire key ("profile", "inspection job id"). A field not
+ * named here is shown by its key with its separators as spaces, and the
+ * guard (reviewDialogWords.test.tsx) holds the fields the callers send.
+ */
+const SCOPE_FIELDS: Record<string, string> = {
+  project: "App",
+  profile: "Memory profile",
+  template: "App template",
+  port: "Port",
+  repo: "Model repository",
+  file: "Model file",
+  path: "Model file",
+  size_bytes: "Size",
+  action: "Change",
+  mode: "How it runs",
+  surface: "Used by",
+  endpoint: "Address",
+  content: "Compose file",
+  size_gib: "Pool size",
+};
+
+/**
+ * Ids and typed confirmations: the reader approves what they stand for, never
+ * the token itself (the AppsActionReview board). Named ones, plus any key that
+ * is an id (`draft_id`, `node_id`) or an acknowledgement (`data_loss_ack`).
+ */
+const HIDDEN_FIELDS = new Set(["confirm", "confirmation", "id"]);
+
+function hiddenField(key: string) {
+  return HIDDEN_FIELDS.has(key) || /_id$/.test(key) || /_ack$/.test(key);
+}
+
+/**
+ * FE-W7-5: what an enum value in a payload is called on the screen that sent
+ * it. The review printed the wire word ("set", "install", "balanced",
+ * "ai-chat"); a value not named here is shown as recorded.
+ */
+const ACTION_WORDS: Record<string, Record<string, string>> = {
+  "host.gpu-memory.apply": { set: "Set a new pool size", revert: "Remove the pool setting" },
+  "cluster.node.gpu-memory": { set: "Set a new pool size", revert: "Remove the pool setting" },
+  "host.web-research.manage": { install: "Install the search service", repair: "Repair the search service", remove: "Remove the search service" },
+};
+
+/** One payload value in the owner's words and units (FE-W7-5), or null when only the generic rules apply. */
+function reviewValue(jobType: string, key: string, value: unknown): string | null {
+  // W7-D5: a model file reads as its catalog button reads it, and a pool size
+  // the owner typed in GiB shows its GB beside it - both through lib/format.ts.
+  if (key === "size_bytes" && typeof value === "number") {
+    return formatQuantity(value, jobType.startsWith("model.") ? "model" : "capacity");
+  }
+  if (key === "size_gib" && typeof value === "number") return formatTypedGib(value);
+  if (key === "port" && value === 0) return "Chosen automatically";
+  if (typeof value !== "string") return null;
+  if (key === "action") return ACTION_WORDS[jobType]?.[value] ?? null;
+  // The mode and surface words have one owner, lib/modelModes.ts (LESSONS 6).
+  if (key === "mode") return runtimeModeName(value);
+  if (key === "surface") return modelSurfaceName(value);
+  return null;
+}
+
+function displayValue(jobType: string, key: string, value: unknown) {
+  const worded = reviewValue(jobType, key, value);
+  if (worded !== null) return worded;
   if (key === "content" && typeof value === "string") {
     return `${value.length.toLocaleString()} characters of Compose YAML`;
   }
@@ -108,24 +188,56 @@ function displayValue(key: string, value: unknown) {
   return String(value ?? "Not specified");
 }
 
-export function ActionReviewDialog({
+interface ActionReviewDialogProps {
+  job: ProposedJob | null;
+  /**
+   * The caller's own names for payload values ({profile: "AI low latency"}):
+   * the review printed the wire value ("ai_latency") because only the caller
+   * knows what it is called on its screen.
+   */
+  valueLabels?: Record<string, string>;
+  summary: string;
+  evidence?: AssistantEvidence[];
+  suggestedActions?: string[];
+  busy: boolean;
+  /** Why the approval was refused (VD-189): shown inside this dialog, never on the inert page beneath. */
+  error?: string;
+  onCancel: () => void;
+  onApprove: () => void;
+}
+
+/**
+ * A review dialog with no proposed job renders nothing — and must *do* nothing.
+ *
+ * Several call sites keep this component mounted permanently with `job={null}`
+ * and hand it a job only when the reader opens a review (WebResearchSetup is
+ * one). The body's `useMachineProfile()` is a network discovery, and hooks run
+ * before an early `return null`, so a dialog that was never opened still asked
+ * the appliance what machine it is — on every mount, for a surface with nothing
+ * on screen. Worse, that request outlived the mount: its answer arrived after
+ * the reader had moved on, and in the test suite the straggler landed inside
+ * whichever test happened to be running and was charged to that test's mock.
+ *
+ * Gating the whole body behind `job` here means a closed dialog costs nothing.
+ */
+export function ActionReviewDialog(props: ActionReviewDialogProps) {
+  if (!props.job) return null;
+  return <ActionReviewBody {...props} job={props.job} />;
+}
+
+function ActionReviewBody({
   job,
   summary,
   evidence = [],
   suggestedActions = [],
   busy,
+  error,
+  valueLabels = {},
   onCancel,
   onApprove,
-}: {
-  job: ProposedJob | null;
-  summary: string;
-  evidence?: AssistantEvidence[];
-  suggestedActions?: string[];
-  busy: boolean;
-  onCancel: () => void;
-  onApprove: () => void;
-}) {
-  const closeRef = useRef<HTMLButtonElement>(null);
+}: ActionReviewDialogProps & { job: ProposedJob }) {
+  // The AppsActionReview board: Cancel takes focus first, so Enter never approves by accident.
+  const cancelRef = useRef<HTMLButtonElement>(null);
   /*
    * Task #76. The footer of every approval dialog — inspect, download, deploy,
    * restart — read "The job is validated again **on the Pi**". On an HP Z2
@@ -142,58 +254,88 @@ export function ActionReviewDialog({
   const machine = useMachineProfile();
   const noun = machineNoun(machine?.machine_class ?? "generic");
   const copy = useMemo(
-    () => job ? jobCopy[job.type] ?? {
-      title: job.type.replaceAll(".", " "),
+    () => jobCopy[job.type] ?? {
+      title: jobLabel(job.type),
       change: "Run the proposed Vaelor operation with its server-side safety policy.",
       checks: ["Authorization", "Input validation", "Live preflight checks", "Audited result"],
-    } : null,
+    },
     [job],
   );
 
-
-  if (!job || !copy) return null;
-  const scope = Object.entries(job.payload).filter(([key]) => !["confirm"].includes(key));
+  // `node_id` is an internal id; the review names the machine in its summary.
+  const scope = Object.entries(job.payload).filter(([key]) => !hiddenField(key));
   return (
-    <ModalShell
+    <AppsDialog
+      busy={busy}
       className="action-review-dialog"
       describedBy="action-review-description"
-      initialFocusRef={closeRef}
-      labelledBy="action-review-title"
-      onClose={() => { if (!busy) onCancel(); }}
-      size="standard"
+      error={error || undefined}
+      eyebrow={copy.readOnly ? "Read-only check · no download" : "Approval required · nothing has run"}
+      footer={(
+        <>
+          <Button disabled={busy} onClick={onCancel} ref={cancelRef}>Cancel</Button>
+          <Button disabled={busy} onClick={onApprove} variant="primary">{busy ? "Submitting…" : copy.approval ?? "Approve and run"}</Button>
+        </>
+      )}
+      footerStart={(
+        <span className="action-review__shield">
+          <Icon aria-hidden="true" name="shield" size={ICON_SIZE.inline} />
+          The job is validated again on this {noun} and recorded in Activity.
+        </span>
+      )}
+      initialFocusRef={cancelRef}
+      onClose={onCancel}
+      title={copy.title}
+      titleId="action-review-title"
     >
-        <header>
-          <span><Icon name="shield" size={22} /></span>
-          <div><small>{copy.readOnly ? "Read-only check · no download" : "Approval required · nothing has run"}</small><h2 id="action-review-title">{copy.title}</h2></div>
-          <Button aria-label="Close action review" className="icon-button" disabled={busy} onClick={onCancel} ref={closeRef} type="button">×</Button>
-        </header>
-        <p id="action-review-description">{copy.change}</p>
-        <section>
-          <h3>Why Vaelor proposed this</h3>
-          <p>{summary}</p>
+      <p className="action-review__change" id="action-review-description">{copy.change}</p>
+      <section className="action-review__section">
+        <h3>Why Vaelor proposed this</h3>
+        <p>{summary}</p>
+      </section>
+      <div className="action-review__grid">
+        <section className="action-review__panel">
+          <h3>Preflight plan</h3>
+          <ol className="action-review__checks">
+            {copy.checks.map((check) => (
+              <li key={check}><Icon aria-hidden="true" name="done" size={ICON_SIZE.inline} /><span>{check}</span></li>
+            ))}
+          </ol>
         </section>
-        <div className="action-review-dialog__grid">
-          <section>
-            <h3>Preflight plan</h3>
-            <ol>{copy.checks.map((check) => <li key={check}><Icon name="shield" size={14} /><span>{check}</span></li>)}</ol>
-          </section>
-          <section>
-            <h3>Change scope</h3>
-            <dl>
-              <div><dt>Operation</dt><dd>{job.type.replaceAll(".", " ")}</dd></div>
-              {scope.map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{displayValue(key, value)}</dd></div>)}
-            </dl>
-          </section>
-        </div>
-        {evidence.length > 0 && <details><summary>Evidence used · {evidence.length} source{evidence.length === 1 ? "" : "s"}</summary><ul>{evidence.map((item) => <li key={`${item.source}-${item.summary}`}><strong>{item.source.replaceAll(".", " ")}</strong><span>{item.summary}</span></li>)}</ul></details>}
-        {suggestedActions.length > 0 && <section><h3>After approval</h3><ul>{suggestedActions.map((item) => <li key={item}>{item}</li>)}</ul></section>}
-        <footer>
-          <p><Icon name="shield" size={14} /> The job is validated again on this {noun} and recorded in Activity.</p>
-          <div>
-            <Button variant="quiet" disabled={busy} onClick={onCancel} type="button">Cancel</Button>
-            <Button variant="primary" disabled={busy} onClick={onApprove} type="button">{busy ? "Submitting…" : copy.approval ?? "Approve and run"}</Button>
-          </div>
-        </footer>
-    </ModalShell>
+        <section className="action-review__panel">
+          <h3>Change scope</h3>
+          <AppsFacts
+            className="action-review__scope"
+            rows={[
+              { key: "operation", label: "Operation", value: jobLabel(job.type) },
+              ...scope.map(([key, value]) => ({
+                key,
+                label: SCOPE_FIELDS[key] ?? key.replaceAll("_", " "),
+                value: valueLabels[key] ?? displayValue(job.type, key, value),
+              })),
+            ]}
+          />
+        </section>
+      </div>
+      {evidence.length > 0 && (
+        <details className="action-review__evidence">
+          <summary>Evidence used · {evidence.length} source{evidence.length === 1 ? "" : "s"}</summary>
+          <ul>
+            {evidence.map((item) => (
+              <li key={`${item.source}-${item.summary}`}>
+                <strong title={item.source}>{evidenceSourceLabel(item.source)}</strong>
+                <span>{item.summary}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {suggestedActions.length > 0 && (
+        <section className="action-review__section">
+          <h3>After approval</h3>
+          <ul className="action-review__after">{suggestedActions.map((item) => <li key={item}>{item}</li>)}</ul>
+        </section>
+      )}
+    </AppsDialog>
   );
 }

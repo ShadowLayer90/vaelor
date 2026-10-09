@@ -8,6 +8,9 @@ from typing import Any, Dict, List, Sequence
 
 from .answer_evidence import describe_missing
 from .assistant_action_requests import detect_action_requests
+from .assistant_console_places import (
+    ASSISTANT_SETUP, DESTINATIONS, HARDWARE_PLACE,
+)
 from .byte_units import describe_gb
 
 logger = logging.getLogger(__name__)
@@ -75,24 +78,7 @@ def with_performance(result: Any, body: Any) -> Any:
 # reading "changes are made on System > Case lighting" with no way to get
 # there. Ordered most specific first so "System > Cooling" is never reduced to
 # a bare "System" match.
-_DESTINATIONS: tuple[tuple[str, str, str, bool], ...] = (
-    ("System > Case lighting", "#/system", "Case lighting", True),
-    ("System > Cooling", "#/system", "Cooling", True),
-    ("System > Hardware & services", "#/system", "Hardware & services", True),
-    ("Workloads > Install", "#/workloads", "Install", True),
-    ("Assistant > Agents", "#/assistant/agents", "Run history", True),
-    ("Remote console", "#/kvm", "Remote console", True),
-    # Every answer that sends a user to AI Chat named it in prose and emitted
-    # no route, so "ask it in AI Chat" was a dead end on a screen the user had
-    # to go and find. It is a real page; it gets a real link.
-    ("AI Chat", "#/ai-chat", "AI Chat", True),
-    ("app manager", "#/workloads", "App manager", True),
-    ("Workloads", "#/workloads", "Workloads", False),
-    ("Activity", "#/activity", "Activity", False),
-    ("Fleet", "#/fleet", "Fleet", False),
-    ("Admin", "#/admin", "Admin", False),
-    ("Overview", "#/", "Overview", False),
-)
+_DESTINATIONS: tuple[tuple[str, str, str, bool], ...] = DESTINATIONS
 
 _COMPILED_DESTINATIONS = tuple(
     (
@@ -184,11 +170,13 @@ def _media_name(kind: Any, position: int, duplicates: int) -> str:
 
 def connected_model_failure_answer() -> str:
     return (
-        "The selected AI connection did not answer this request, so I cannot answer it "
-        "reliably without guessing. Confirm the selected model is loaded and retry, or "
-        "choose a smaller model. Built-in appliance questions about cooling, lighting, "
+        # Review B6: "choose a smaller model" offered a choice the Assistant
+        # does not have (VD-049); its model is Vaelor's own.
+        "The Assistant's model did not answer this request, so I cannot answer it "
+        "reliably without guessing. Its status is on {}; ask again "
+        "once it is running. Built-in appliance questions about cooling, lighting, "
         "display, storage, network, services, workloads, and updates remain available."
-    )
+    ).format(ASSISTANT_SETUP)
 
 
 #: Prefixed to a built-in answer that stands in for a model that did not reply.
@@ -215,7 +203,7 @@ def connected_model_failure_answer() -> str:
 MODEL_DID_NOT_ANSWER_PREFIX = (
     "The AI model did not answer, so this is what Vaelor can tell you from "
     "its own live readings instead - it may not cover what you asked. The "
-    "model's own status is on Assistant setup."
+    "model's own status is on " + ASSISTANT_SETUP + "."
 )
 
 
@@ -607,7 +595,7 @@ def out_of_scope_after_model_failure() -> dict[str, Any]:
     """
     return {
         "answer": (
-            "The selected AI connection did not answer this request, and this question "
+            "The Assistant's model did not answer this request, and this question "
             "is also outside what I cover. I answer questions about this appliance - its "
             "cooling, lighting, display, storage, network, services, workloads, updates, "
             "and jobs - so there is no built-in answer for me to fall back on here. Ask "
@@ -618,7 +606,7 @@ def out_of_scope_after_model_failure() -> dict[str, Any]:
         "evidence": [{
             "source": "assistant.scope",
             "summary": (
-                "The connected model did not answer, and the question has no appliance "
+                "The Assistant's model did not answer, and the question has no appliance "
                 "facts behind it."
             ),
         }],
@@ -630,7 +618,7 @@ def general_knowledge_model_failure() -> dict[str, Any]:
         "answer": connected_model_failure_answer(),
         "evidence": [{
             "source": "assistant.fallback",
-            "summary": "The selected AI connection did not answer correctly, so Vaelor did not guess or substitute unrelated appliance data.",
+            "summary": "The Assistant's model did not answer correctly, so Vaelor did not guess or substitute unrelated appliance data.",
         }],
     }
 
@@ -826,7 +814,7 @@ def network_summary(network: Any) -> str:
         )
     return (
         "No network interface reports itself as up in the current sample, so "
-        "there is no address to give you. System > Hardware & services lists "
+        "there is no address to give you. " + HARDWARE_PLACE + " lists "
         "what was detected."
     )
 

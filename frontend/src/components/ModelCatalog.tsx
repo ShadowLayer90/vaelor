@@ -1,8 +1,10 @@
 import { useState } from "react";
+import "../styles/apps-setup.css";
 import { formatQuantity } from "../lib/format";
+import { AppsDialog, AppsFacts, AppsIconTile } from "./appsKit";
+import { AppsBanner } from "./appsSetupParts";
 import type { CopilotSetupData, LocalModelChoice } from "./CopilotSetup";
-import { Icon } from "./Icon";
-import { Button, Input, Notice } from "./ui";
+import { Button, Input } from "./ui";
 
 /**
  * The models this appliance can install — read from the appliance.
@@ -23,21 +25,16 @@ import { Button, Input, Notice } from "./ui";
  * can resolve a real file. Naming a model the appliance does not stock is no
  * longer something this screen is able to do, because it has no names of its
  * own to say.
+ *
+ * VD-200 (the AppsModelCatalog board): card borders carry no meaning. Only
+ * the recommended card is outlined, in orange, and it carries the one primary
+ * button; the colour-by-position borders this screen used to draw are gone.
  */
 
-/**
- * The card borders, which are decoration and carry no meaning.
- *
- * They used to be a property of a hand-written entry — `accent: "cyan"` beside
- * `license: "Apache 2.0"` — so a colour looked like a fact about the model.
- * They are assigned by position instead, the way the telemetry tiles are: the
- * caption on Home already had to say that colours group readings rather than
- * indicate health, and the same is true here.
- */
-const CARD_ACCENTS = ["cyan", "orange", "violet", "green"] as const;
+/** Why Review installation is held for a reader who cannot install (viewers). */
+const INSTALL_ROLE_REASON = "Operator access is required to install an app.";
 
 function ModelCard({
-  accent,
   busy,
   disabled,
   gpu,
@@ -45,7 +42,6 @@ function ModelCard({
   onChoose,
   recommended,
 }: {
-  accent: string;
   busy: boolean;
   disabled: boolean;
   gpu: boolean;
@@ -54,50 +50,48 @@ function ModelCard({
   recommended: boolean;
 }) {
   return (
-    <article className={`model-choice model-choice--${accent}`}>
+    <article className={recommended ? "apps-choice apps-choice--accent" : "apps-choice"}>
       {/*
         * The badge row. Both the recommended flag and the GPU marker (added for
-        * the ROCmFP4 27B) live here, in one in-flow flex row at the top of the
-        * card, so they wrap and space beside each other instead of overlapping.
-        * Each is still driven by its own condition — recommended by the pick,
-        * GPU by the recommendation state so it shows only where the override
-        * fired — and the row is absent when the card carries neither.
+        * the ROCmFP4 27B) are driven by their own conditions — recommended by
+        * the pick, GPU by the recommendation state so it shows only where the
+        * override fired — and the row is absent when the card carries neither.
         */}
       {(recommended || gpu) && (
-        <div className="model-choice__badges">
-          {recommended && (
-            <span className="model-choice__recommended">Recommended for this hardware</span>
-          )}
-          {gpu && (
-            <span className="model-choice__gpu">Runs on the graphics processor</span>
-          )}
+        <div className="apps-model-card__badges">
+          {recommended && <span className="apps-flag apps-flag--accent">Recommended for this hardware</span>}
+          {gpu && <span className="apps-flag">Runs on the graphics processor</span>}
         </div>
       )}
-      <div className="model-choice__heading">
-        <span><Icon name="cpu" /></span>
-        <small>{model.parameter_size ? `${model.parameter_size} parameters` : "Local model"}</small>
+      <div className="apps-model-card__heading">
+        <AppsIconTile accent={recommended} name={gpu ? "gpu" : "cpu"} />
+        <span>{model.parameter_size ? `${model.parameter_size} parameters` : "Local model"}</span>
       </div>
       <h3>{model.name}</h3>
       <p>{model.experience}</p>
-      <dl>
-        {/* The size sentence the appliance derived from the byte count its own
-            fit check divides by, rather than a figure written beside a name. */}
-        <div><dt>Download</dt><dd>{model.size_note}</dd></div>
-        {model.quantization && (
-          <div><dt>Quantisation</dt><dd>{model.quantization}</dd></div>
-        )}
-        {/* The artifact. An entry without these two is not in the catalog, and
-            showing them is what makes that checkable from the screen. */}
-        {model.repo && <div><dt>Repository</dt><dd>{model.repo}</dd></div>}
-        {model.file && <div><dt>File</dt><dd>{model.file}</dd></div>}
-      </dl>
-      <Button
-        disabled={busy || disabled}
-        onClick={() => onChoose(model.search_query)}
-        variant={recommended ? "primary" : undefined}
-      >
-        Review installation
-      </Button>
+      <AppsFacts
+        className="apps-model-card__facts"
+        rows={[
+          // The size sentence the appliance derived from the byte count its own
+          // fit check divides by, rather than a figure written beside a name.
+          { label: "Download", value: model.size_note },
+          ...(model.quantization ? [{ label: "Quantisation", value: model.quantization }] : []),
+          // The artifact. An entry without these two is not in the catalog, and
+          // showing them is what makes that checkable from the screen.
+          ...(model.repo ? [{ label: "Repository", value: model.repo, mono: true }] : []),
+          ...(model.file ? [{ label: "File", value: model.file, mono: true }] : []),
+        ]}
+      />
+      <div className="apps-choice__action">
+        <Button
+          disabled={busy}
+          disabledReason={disabled ? INSTALL_ROLE_REASON : undefined}
+          onClick={() => onChoose(model.search_query)}
+          variant={recommended ? "primary" : "secondary"}
+        >
+          Review installation
+        </Button>
+      </div>
     </article>
   );
 }
@@ -148,65 +142,64 @@ export function ModelCatalog({
   const memory = setup
     ? `${formatQuantity(setup.hardware.memory_total_bytes, "capacity")} RAM`
     : "this device";
+  const searchReason = disabled ? INSTALL_ROLE_REASON : !search.trim() ? "Enter a model name first." : undefined;
   return (
-    <section className="model-catalog" aria-labelledby="model-catalog-title">
-      <div className="model-catalog__header">
-        <div>
-          <span className="page-eyebrow">Local AI catalog</span>
-          <h2 id="model-catalog-title">Choose what matters most</h2>
-          <p>
-            {recommendation?.primary
-              ? `Vaelor recommends ${recommendation.primary.name} for ${memory}.`
-              : "Vaelor has not read this machine's recommendation yet."}
-            {" "}Every exact file must pass RAM, storage, and format checks before download.
-          </p>
-          {/*
-            * Clarify NPU vs GPU for a beginner (test finding #2). The
-            * hardware-independent part is true on every machine: these are
-            * installable local models for AI Chat, a GPU-served card is marked,
-            * and the Assistant is a separate flow. The neural-processor clause
-            * is added ONLY where the Assistant is actually NPU-served
-            * (`assistantOnNpu`); on a Pi that claim would be false, so it is
-            * omitted rather than stated universally (the VD-108 class).
-            */}
-          <p className="model-catalog__scope">
-            These are local models you install for AI Chat and other on-device use — a card that
-            runs on the graphics processor is marked. The Assistant is set up separately
-            {assistantOnNpu
-              ? " and runs its own model on this appliance's neural processor"
-              : ""}, not from this list.
-          </p>
-          {/*
-            * What is offered, and what the hardware could hold — two figures,
-            * kept apart. Conflating them is the whole defect: a Z2 whose
-            * budget reaches the 32B class was told "Vaelor recommends 32B"
-            * against a catalog whose largest entry is 4B. Where the machine
-            * *does* outrun the catalog this line stays off, because
-            * `catalog_note` above already states the same fact and adds what
-            * to do about it, and one screen does not need to say it twice.
-            */}
-          {recommendation?.hardware_tier && !recommendation.exceeds_catalog && (
-            <p className="model-catalog__tiers">
-              Recommended size {recommendation.parameter_range} · this machine's memory budget
-              reaches the {recommendation.hardware_tier} class.
-            </p>
-          )}
-        </div>
-        <Button onClick={onClose} variant="quiet">Close</Button>
-      </div>
+    <AppsDialog
+      eyebrow="Local AI catalog"
+      footer={<Button onClick={onClose}>Close</Button>}
+      onClose={onClose}
+      size="wide"
+      title="Choose what matters most"
+      titleId="model-catalog-title"
+    >
+      <p>
+        {recommendation?.primary
+          ? `Vaelor recommends ${recommendation.primary.name} for ${memory}.`
+          : "Vaelor has not read this machine's recommendation yet."}
+        {" "}Every exact file must pass RAM, storage, and format checks before download.
+      </p>
+      {/*
+        * Clarify NPU vs GPU for a beginner (test finding #2). The
+        * hardware-independent part is true on every machine: these are
+        * installable local models for AI Chat, a GPU-served card is marked,
+        * and the Assistant is a separate flow. The neural-processor clause
+        * is added ONLY where the Assistant is actually NPU-served
+        * (`assistantOnNpu`); on a Pi that claim would be false, so it is
+        * omitted rather than stated universally (the VD-108 class).
+        */}
+      {models.length > 0 && (
+        <p className="apps-model-scope">
+          These are local models you install for AI Chat and other on-device use - a card that
+          runs on the graphics processor is marked. The Assistant is set up separately
+          {assistantOnNpu
+            ? " and runs its own model on this appliance's neural processor"
+            : ""}, not from this list.
+        </p>
+      )}
+      {/*
+        * What is offered, and what the hardware could hold — two figures,
+        * kept apart. Where the machine *does* outrun the catalog this line
+        * stays off, because `catalog_note` already states the same fact and
+        * adds what to do about it.
+        */}
+      {recommendation?.hardware_tier && !recommendation.exceeds_catalog && (
+        <p className="apps-model-tiers">
+          Recommended size {recommendation.parameter_range} · this machine's memory budget
+          reaches the {recommendation.hardware_tier} class.
+        </p>
+      )}
       {/*
         * A machine that outruns the catalog is told so about its *hardware*.
         * The sentence names no model, because naming one the catalog does not
         * stock is the whole defect this screen was carrying.
         */}
       {recommendation?.exceeds_catalog && recommendation.catalog_note && (
-        <Notice severity="info">{recommendation.catalog_note}</Notice>
+        <AppsBanner tone="info">{recommendation.catalog_note}</AppsBanner>
       )}
       {models.length ? (
-        <div className="model-catalog__grid">
-          {models.map((model, index) => (
+        <div className="apps-model-grid">
+          {models.map((model) => (
             <ModelCard
-              accent={CARD_ACCENTS[index % CARD_ACCENTS.length]}
               busy={busy}
               disabled={disabled}
               gpu={gpuServed && model.id === recommendedId}
@@ -224,14 +217,17 @@ export function ModelCatalog({
          * fetch is worse than saying nothing and leaving the search box, which
          * resolves a real repository and file every time.
          */
-        <Notice severity="info">
+        <AppsBanner tone="info">
           Vaelor has not read this appliance's reviewed model list yet. Search Hugging Face
           below to check a specific model, or reopen this screen once the appliance has answered.
-        </Notice>
+        </AppsBanner>
       )}
-      <form className="model-search" onSubmit={(event) => { event.preventDefault(); if (search.trim()) onChoose(search); }}>
-        <div>
-          <label htmlFor="model-search">Looking for another model?</label>
+      <form
+        className="apps-model-search"
+        onSubmit={(event) => { event.preventDefault(); if (search.trim() && !disabled && !busy) onChoose(search); }}
+      >
+        <div className="apps-model-search__text">
+          <strong id="model-search-label">Looking for another model?</strong>
           <span>Enter a Hugging Face model name. Vaelor will check format, memory, and storage first.</span>
         </div>
         <Input
@@ -242,8 +238,8 @@ export function ModelCatalog({
           placeholder="Example: organization/model-name"
           value={search}
         />
-        <Button disabled={busy || disabled || !search.trim()} type="submit">Check this model</Button>
+        <Button disabled={busy} disabledReason={searchReason} type="submit">Check this model</Button>
       </form>
-    </section>
+    </AppsDialog>
   );
 }

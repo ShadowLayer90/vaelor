@@ -95,6 +95,12 @@ export interface AgentStatus {
   configured: boolean;
   provider: string;
   model?: string | null;
+  /**
+   * Whether the chosen model's endpoint answered when the status was read.
+   * Sent only when `configured`; `configured` alone never said it answers.
+   */
+  reachable?: boolean;
+  unreachable_reason?: string;
   approval_required: boolean;
   tools: string[];
 }
@@ -115,4 +121,4 @@ export interface AgentPlan {
   } | null;
 }
 
-export type InstallFlow = "catalog" | "model" | "copilot" | "custom" | "planner" | "researched" | null;
+export type InstallFlow = "catalog" | "model" | "copilot" | "connection" | "custom" | "planner" | "researched" | null;

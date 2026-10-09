@@ -99,12 +99,27 @@ class Senders:
         return self.webhook or http_post
 
 
+#: Discord refuses a message whose ``content`` is longer than this.
+DISCORD_CONTENT_LIMIT = 2000
+
+
+def _machine(alert: Dict[str, Any]) -> str:
+    """The machine that crossed, by name - never its internal node id."""
+    return str(alert.get("machine") or "this appliance")
+
+
 def _alert_lines(alert: Dict[str, Any]) -> List[str]:
-    """Human-readable summary lines shared by both channels' text bodies."""
+    """Human-readable summary lines shared by both channels' text bodies.
+
+    The machine leads: with a controller and workers, "CPU temperature is
+    high" without saying WHICH box sent the reader to look at the wrong one
+    (ACC-087).
+    """
     return [
+        "Machine: {}".format(_machine(alert)),
         "Trigger: {}".format(alert.get("trigger_name", "")),
         "Signal: {} {} {}".format(
-            alert.get("source", ""),
+            alert.get("signal") or alert.get("source", ""),
             alert.get("operator", ""),
             alert.get("threshold", ""),
         ),
@@ -114,10 +129,29 @@ def _alert_lines(alert: Dict[str, Any]) -> List[str]:
     ]
 
 
+def slack_escape(text: str) -> str:
+    """Escape the three characters Slack treats as control characters."""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def alert_sentence(alert: Dict[str, Any]) -> str:
+    """One line a chat service shows: which rule, on which machine, what value."""
+    return "Vaelor alert: {} on {} - {} is {} (rule: {} {}).".format(
+        alert.get("trigger_name", "appliance"),
+        _machine(alert),
+        alert.get("signal") or alert.get("source", "a signal"),
+        alert.get("observed_value", "unknown"),
+        alert.get("operator", ""),
+        alert.get("threshold", ""),
+    )
+
+
 def build_alert_message(channel: Dict[str, Any], alert: Dict[str, Any]) -> EmailMessage:
     """Compose the notification email for one email channel."""
     message = EmailMessage()
-    message["Subject"] = "Vaelor alert: {}".format(alert.get("trigger_name", "appliance"))
+    message["Subject"] = "Vaelor alert: {} on {}".format(
+        alert.get("trigger_name", "appliance"), _machine(alert)
+    )
     message["From"] = channel.get("from_address", "")
     message["To"] = channel.get("to_address", "")
     message.set_content(
@@ -130,9 +164,27 @@ def build_alert_message(channel: Dict[str, Any], alert: Dict[str, Any]) -> Email
 
 
 def build_webhook_body(alert: Dict[str, Any]) -> bytes:
-    """The JSON payload posted to a webhook channel."""
+    """The JSON payload posted to a webhook channel.
+
+    The form offers "Slack, Discord, or other webhook", and those two services
+    each require their own message field - Slack an incoming webhook's ``text``,
+    Discord an execute-webhook's ``content`` - and reject a body carrying
+    neither (ACC-088). Both are sent, holding the same plain sentence; each
+    service ignores the other's field and the structured fields, which a
+    generic receiver reads.
+    """
+    sentence = alert_sentence(alert)
     return json.dumps(
         {
+            # Slack reads `<...>` as a link or a mention (`<!channel>` pings
+            # everyone), so its text carries &, < and > escaped the way Slack's
+            # own formatting rules require; a rule's name cannot ping anyone.
+            "text": slack_escape(sentence),
+            "content": sentence[:DISCORD_CONTENT_LIMIT],
+            # Discord would ping on "@everyone" in content; no mention is parsed.
+            "allowed_mentions": {"parse": []},
+            # The machine by name only; its internal node id is not sent.
+            "machine": _machine(alert),
             "trigger_name": alert.get("trigger_name", ""),
             "source": alert.get("source", ""),
             "operator": alert.get("operator", ""),

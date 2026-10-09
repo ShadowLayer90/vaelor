@@ -1,17 +1,26 @@
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { ApiError } from "../lib/api";
 import { modelDisplayName, modelIdentity } from "../lib/modelIdentity";
-import type { AiChatConnection } from "./aiChatTypes";
-import { Select } from "./ui";
+import { LOCAL_BY_MANAGED_PREFIX } from "../lib/gpuServingMode";
+import type { AiChatClustering, AiChatConnection } from "./aiChatTypes";
+import { Icon, ICON_SIZE } from "./Icon";
+import { StatusPill } from "./StatusPill";
+import { Button } from "./ui";
 
 /**
- * Choosing what you want to talk to.
+ * Choosing what you want to talk to (the ChatModels board).
  *
- * Extracted from `AiChat.tsx` without any change of behaviour, because that
- * file stood at **999 lines** and `styles/ai-chat.css` at **exactly 1,000** —
- * one line and none of headroom respectively, against the 1,000-line limit in
- * `CLAUDE.md`. Nothing further can be built here until the picker has its own
- * file, and this is that file. The rules that came with it are in
- * `styles/ai-chat-picker.css` for the same reason.
+ * A button in the chat's top row that opens a panel: a search box, the
+ * backend's sentence when the connection cannot change, the models grouped by
+ * where they run, and, for an administrator, Add a connection and Manage
+ * connections.
  *
  * Per VD-007 the user picks the AI Chat model — AI Chat is their tool, not
  * infrastructure — and AI Chat keeps **both** local model install and external
@@ -29,10 +38,34 @@ import { Select } from "./ui";
  * it.
  */
 export function blamedModel(error: unknown, model: string): string {
-  if (!model || !(error instanceof ApiError)) return "";
+  if (!(error instanceof ApiError)) return "";
+  // The appliance names the model the request actually went to (ACC-095).
+  // The picker's value is only a fallback for a failure that never reached
+  // the appliance, such as the browser's own timeout.
+  const sent = typeof error.details.model === "string" ? error.details.model : "";
+  const blamed = sent || model;
+  if (!blamed) return "";
+  // `chat_model_busy` is Vaelor refusing the request itself (its own
+  // concurrency bound); nothing reached the model, so the model is not blamed.
+  if (error.code === "chat_model_busy") return "";
   return error.code.startsWith("chat_model_") || error.code === "request_timeout"
-    ? model
+    ? blamed
     : "";
+}
+
+/**
+ * The model a reopened chat puts in the picker (ACC-095).
+ *
+ * The model that last answered in it, when the connection still offers it;
+ * otherwise the current choice, when that is offered; otherwise the first
+ * model offered. A model the live list does not offer is never selected: the
+ * picker could not show it, and in cluster mode vLLM answered it with a 404
+ * that was then blamed on the model the picker did show.
+ */
+export function reopenedChatModel(answered: string, current: string, offered: string[]): string {
+  if (!offered.length) return current;
+  if (answered && offered.includes(answered)) return answered;
+  return offered.includes(current) ? current : offered[0];
 }
 
 /**
@@ -160,7 +193,9 @@ export function modelPickerPresentation(
       return {
         state,
         placeholder: "No provider connected",
-        message: "Install a local model or add an external provider in Details, then pick one here.",
+        // VD-200: this named an add form in Details that does not exist. The
+        // form is in Apps and AI (`connectionFormHandoff`).
+        message: "Install a local model, or connect an external provider for AI Chat under Apps and AI, then pick one here.",
         identifier: "",
         interactive: false,
       };
@@ -196,73 +231,286 @@ export function modelPickerPresentation(
   }
 }
 
+/**
+ * A panel that opens under a top-row button: closed by Escape, by a press
+ * outside it, or by a choice. Escape is taken here, in the capture phase, so it
+ * closes the panel and does not also leave focus view.
+ */
+export function useChatPopover() {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback((refocus = true) => {
+    setOpen(false);
+    if (refocus) buttonRef.current?.focus();
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const pressOutside = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      close();
+    };
+    document.addEventListener("mousedown", pressOutside);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("mousedown", pressOutside);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [close, open]);
+  return { open, setOpen, close, rootRef, buttonRef };
+}
+
+/** Arrow keys, Home and End move between the enabled options of a list. */
+export function moveOptionFocus(event: ReactKeyboardEvent<HTMLElement>) {
+  const keys = ["ArrowDown", "ArrowUp", "Home", "End"];
+  if (!keys.includes(event.key)) return;
+  const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]:not([aria-disabled="true"])')];
+  if (!options.length) return;
+  event.preventDefault();
+  const at = options.indexOf(document.activeElement as HTMLButtonElement);
+  const next = event.key === "Home" ? 0
+    : event.key === "End" ? options.length - 1
+      : event.key === "ArrowDown" ? Math.min(options.length - 1, at + 1)
+        : Math.max(0, at - 1);
+  options[next]?.focus();
+}
+
+/** The three groups the board draws, in its order. */
+const GROUP_CLUSTER = "Cluster";
+const GROUP_MACHINE = "This machine";
+const GROUP_CONNECTIONS = "Your connections";
+
+/**
+ * Where a connection's models run, as the picker groups them. The cluster's
+ * row is the one the mode file names (`cluster_credential_id`, VD-210), asked
+ * of the backend rather than inferred from a refusal, since any other
+ * connection may now be chosen while clustered. "This machine" is claimed
+ * only on `vaelor-managed`, the one locality value that proves this
+ * appliance serves the model itself.
+ */
+export function connectionGroup(connection: AiChatConnection, clusterId = ""): string {
+  if (clusterId && connection.id === clusterId) return GROUP_CLUSTER;
+  return connection.local_source === LOCAL_BY_MANAGED_PREFIX ? GROUP_MACHINE : GROUP_CONNECTIONS;
+}
+
+/**
+ * The line under a connection's name: the service's own name (`provider_label`,
+ * "Anthropic" rather than a wire id), and - for `remote`, the one locality known
+ * to leave this machine - that prompts and files do (VD-206).
+ */
+export function connectionLine(connection: AiChatConnection): string {
+  const name = connection.provider_label || connection.provider;
+  return connection.local_source === "remote"
+    ? `${name} · prompts and files leave this machine`
+    : name;
+}
+
+type PickerRow = {
+  key: string;
+  /** The model id a model row chooses; absent on a connection row. */
+  model?: string;
+  name: string;
+  label: string;
+  line: string;
+  selected: boolean;
+  disabled: boolean;
+  pill: { label: string; tone: "success" | "danger" | "neutral" } | null;
+  choose: () => void;
+};
+
 export function AiChatModelPicker({
+  administrator = false,
+  busy = false,
   connection,
+  connections = [],
   models,
   modelFailures,
+  onActivateConnection,
   onChoose,
+  onConnect,
+  onManageConnections,
+  clustering,
   value,
 }: {
+  /** Only an administrator can add or manage a connection (`POST /credentials`). */
+  administrator?: boolean;
+  /** A connection is being activated, so no other choice may start. */
+  busy?: boolean;
   connection: AiChatConnection | null | undefined;
+  /** Every connection AI Chat can be pointed at, the active one included. */
+  connections?: AiChatConnection[];
   models: string[];
   /** Models the appliance has already blamed for a failed request. */
   modelFailures: Record<string, string>;
+  onActivateConnection?: (connection: AiChatConnection) => void;
   onChoose: (model: string) => void;
+  /** Open the add-a-connection form. */
+  onConnect?: () => void;
+  /** Open Settings, Connections. */
+  onManageConnections?: () => void;
+  /** VD-210: the cluster's row and the rows AI Chat cannot take, in the backend's words. */
+  clustering?: AiChatClustering;
   value: string;
 }) {
+  const popover = useChatPopover();
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const ids = useId().replaceAll(":", "");
   /*
    * The model this picker actually points at. A remembered value the live list
-   * no longer offers is reconciled to the first available model here — the same
-   * one the dropdown falls back to showing — so the caption, the failure
-   * mark and the dropdown all read one model rather than three.
+   * no longer offers is reconciled to the first available model here, so the
+   * button, the failure mark and the list all read one model rather than three.
    */
   const selected = effectiveModel(models, value);
-  /*
-   * One call, one state. The words under the control, the placeholder inside
-   * it and whether it accepts input all come out of the same object, so the
-   * picker cannot say "choose a model" while refusing to let one be chosen.
-   */
   const picker = modelPickerPresentation({ connection, models, value }, selected in modelFailures);
-  /*
-   * The name is the answer; the path is the evidence. Both are in the hint so
-   * they share one `aria-describedby` — a screen-reader user hears the model
-   * it is using and then, quietly, the file it came from, rather than being
-   * read a directory path as if it were a product name.
-   */
-  const hint = picker.identifier ? (
-    <>
-      {picker.message}{" "}
-      <span className="ai-chat-model-picker__identifier">{picker.identifier}</span>
-    </>
-  ) : picker.message;
+  const buttonLabel = picker.state === "chosen" ? modelDisplayName(selected) : picker.placeholder;
+
+  useEffect(() => {
+    if (popover.open) searchRef.current?.focus();
+    else setQuery("");
+  }, [popover.open]);
+
+  const groups = new Map<string, PickerRow[]>();
+  const add = (group: string, row: PickerRow) => groups.set(group, [...(groups.get(group) ?? []), row]);
+  if (connection) {
+    const group = connectionGroup(connection, clustering?.clusterId);
+    groups.set(group, []);
+    for (const model of models) {
+      const failed = model in modelFailures;
+      add(group, {
+        key: "model:" + model,
+        model,
+        name: modelDisplayName(model),
+        label: modelOptionLabel(model, failed),
+        line: `${connection.label} · ${connectionLine(connection)}`,
+        selected: model === selected,
+        disabled: false,
+        pill: model === selected
+          ? (failed ? { label: "Last request failed", tone: "danger" } : { label: "In use", tone: "success" })
+          : null,
+        choose: () => {
+          onChoose(model);
+          popover.close();
+        },
+      });
+    }
+  }
+  for (const item of connections) {
+    if (item.id === connection?.id) continue;
+    // VD-210: only a row the backend refuses is held, and its reason is
+    // its own line, beside it - every other connection can still be chosen.
+    const held = clustering?.refusals[item.id] ?? "";
+    add(connectionGroup(item, clustering?.clusterId), {
+      key: "connection:" + item.id,
+      name: item.label,
+      label: item.label,
+      line: held || connectionLine(item),
+      selected: false,
+      disabled: busy || Boolean(held) || !onActivateConnection,
+      pill: { label: held ? "Paused for the cluster" : "Not active", tone: "neutral" },
+      choose: () => {
+        onActivateConnection?.(item);
+        popover.close();
+      },
+    });
+  }
+  const needle = query.trim().toLowerCase();
+  const shown = [...groups.entries()]
+    .map(([group, rows]) => [group, rows.filter((row) => !needle || row.name.toLowerCase().includes(needle))] as const)
+    .filter(([, rows]) => rows.length);
+
   return (
-    <div className="ai-chat-model-picker" data-model-state={picker.state}>
-      <Select
-        disabled={!picker.interactive}
-        disabledReason={picker.interactive ? undefined : picker.message}
-        hint={picker.interactive ? hint : undefined}
+    <div className="ai-chat-popover-anchor ai-chat-model-picker" data-model-state={picker.state} ref={popover.rootRef}>
+      <Button
+        aria-controls={popover.open ? `ai-chat-model-panel-${ids}` : undefined}
+        aria-expanded={popover.open}
+        aria-haspopup="dialog"
+        aria-label={`Model ${buttonLabel}`}
+        className={popover.open ? "ai-chat-menu-button is-open" : "ai-chat-menu-button"}
         id="ai-chat-model"
-        label="Model"
-        onChange={(event) => onChoose(event.target.value)}
-        value={selected}
+        onClick={() => popover.setOpen((open) => !open)}
+        ref={popover.buttonRef}
+        type="button"
       >
-        {/*
-          * The placeholder is a prompt, never a choice. It was selectable, so
-          * on a machine with one local model an owner who opened the list to
-          * *look* — the ordinary reason to open it — could mis-click the first
-          * row and silently unset the only model the appliance has (#163). A
-          * conversation dated four days earlier was already labelled "No
-          * model", so the state was reachable and had been reached. Once a
-          * model is chosen the prompt stays visible and inert; before one is
-          * chosen it is still the honest empty value.
-          */}
-        <option disabled={Boolean(selected)} value="">{picker.placeholder}</option>
-        {models.map((model) => (
-          <option key={model} value={model}>
-            {modelOptionLabel(model, model in modelFailures)}
-          </option>
-        ))}
-      </Select>
+        <span className="ai-chat-menu-button__key">Model</span>
+        <span className="ai-chat-menu-button__value">{buttonLabel}</span>
+        <Icon className="ai-chat-menu-button__chevron" name="chevron" size={ICON_SIZE.inline} />
+      </Button>
+      {popover.open && (
+        <div
+          aria-label="Choose a model"
+          className="ai-chat-popover ai-chat-popover--models"
+          id={`ai-chat-model-panel-${ids}`}
+          role="dialog"
+        >
+          <label className="ai-chat-popover__search">
+            <span className="sr-only">Search models</span>
+            <input
+              className="ai-chat-input"
+              onChange={(event) => setQuery(event.target.value)}
+              // ArrowDown from the search goes to the first choice it left (VD-200 assist review).
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowDown") return;
+                const first = event.currentTarget.closest(".ai-chat-popover")?.querySelector<HTMLElement>('[role="option"]:not([disabled])');
+                if (first) { event.preventDefault(); first.focus(); }
+              }}
+              placeholder="Search models"
+              ref={searchRef}
+              type="search"
+              value={query}
+            />
+          </label>
+          <p className="ai-chat-popover__message" data-model-state={picker.state}>
+            {picker.message}
+            {picker.identifier && <span className="ai-chat-model-picker__identifier"> {picker.identifier}</span>}
+          </p>
+          {shown.map(([group, rows]) => {
+            const headingId = `ai-chat-model-${ids}-${group.replaceAll(" ", "-")}`;
+            return (
+              <div className="ai-chat-popover__group" key={group}>
+                <h3 className="ai-chat-popover__eyebrow" id={headingId}>{group}</h3>
+                <div aria-labelledby={headingId} onKeyDown={moveOptionFocus} role="listbox">
+                  {rows.map((row) => (
+                    <Button
+                      aria-label={row.label}
+                      aria-selected={row.selected}
+                      className={row.selected ? "ai-chat-option is-selected" : "ai-chat-option"}
+                      data-model={row.model}
+                      disabled={row.disabled}
+                      key={row.key}
+                      onClick={row.choose}
+                      role="option"
+                      type="button"
+                      variant="quiet"
+                    >
+                      <span className="ai-chat-option__text">
+                        <strong>{row.name}</strong>
+                        <small>{row.line}</small>
+                      </span>
+                      {row.pill && <StatusPill label={row.pill.label} tone={row.pill.tone} />}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          {needle && !shown.length && <p className="ai-chat-popover__message">No model or connection matches that search.</p>}
+          {administrator && (onConnect || onManageConnections) && (
+            <div className="ai-chat-popover__footer">
+              {onConnect && (
+                <Button onClick={() => { popover.close(false); onConnect(); }} type="button" variant="primary">Add a connection</Button>
+              )}
+              {onManageConnections && (
+                <Button className="ai-chat-ghost" onClick={() => { popover.close(false); onManageConnections(); }} type="button" variant="quiet">Manage connections</Button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import type { TelemetrySample } from "../types";
 import { timeAgo } from "./format";
 
 /**
@@ -206,4 +207,18 @@ export function connectionStatus(input: ConnectionInput, indicator = "live-dot")
     indicatorClassName: connectionIndicator(state, indicator),
     attention: connectionNeedsAttention(state),
   };
+}
+
+/** How many samples the shell keeps for the trends. */
+export const SAMPLE_HISTORY = 30;
+
+/**
+ * The shell's sample history with one more poll's answer. A source that has
+ * stopped answers the same sample on every poll; that is not a new reading, so
+ * it is not appended - the trend's bars and Live readings' "one reading" then
+ * describe the same samples.
+ */
+export function appendSample(history: TelemetrySample[], sample: TelemetrySample): TelemetrySample[] {
+  if (history.length && history[history.length - 1].sampled_at === sample.sampled_at) return history;
+  return [...history, sample].slice(-SAMPLE_HISTORY);
 }
