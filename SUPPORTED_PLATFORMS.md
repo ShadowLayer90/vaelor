@@ -5,7 +5,7 @@ specific than “the Pironman hardware can run on this OS”: some appliance
 operating systems support an enclosure but cannot provide a general-purpose
 Docker host, package manager, desktop, or local AI runtime.
 
-Last reviewed: 2026-10-09 (Vaelor 1.5)
+Last reviewed: 2026-10-10 (Vaelor 1.5.1)
 
 ## Support levels
 
@@ -97,9 +97,13 @@ The Overview page reports the detected OS and one of these levels. Feature avail
 - **Vaelor 1.5** reached the Z2 Mini by upgrading it in place, with a model
   serving across the Z2 Mini and the ZBook throughout. The ZBook now runs as a
   **cluster worker** that the Z2 Mini provisions and updates, rather than as a
-  full appliance. A cold install of the published 1.5 release is the next
-  validation run; until it is recorded here, the 2026-09-06 run above is the
-  most recent cold install.
+  full appliance.
+- **The published 1.5 release was installed cold from GitHub on 2026-10-09**:
+  the Z2 Mini wiped and installed with the documented installer, and the ZBook
+  wiped and enrolled again as a worker from the Z2 Mini. It found six defects,
+  fixed in 1.5.1. The fixes were deployed in place to the Z2 Mini, and the
+  certificate switchover was verified on both machines; 1.5.1 itself has not
+  had a cold install.
 - The commissioned Ubuntu 26.04 Raspberry Pi completed the versioned
   Pironman-to-Vaelor 2.0.4 migration on 2026-07-30. Ten Vaelor services,
   HTTPS health, encrypted credentials, legacy aliases, and the existing Qwen
@@ -263,8 +267,9 @@ A machine joining as a worker needs:
   with no such link is recorded with the reason and refused by the GPU deploy,
   not by enrolment.
 - **The controller's certificate with its addresses.** Worker telemetry verifies
-  the controller's certificate; a controller first installed before 1.5 needs a
-  new certificate (see the 1.5 notes in `CHANGELOG.md`).
+  the controller's certificate. From 1.5.1 the controller's household
+  certificate authority issues it with the controller's addresses, including
+  on a controller upgraded from an older release (see `SECURE_ACCESS.md`).
 
 **Splitting one model across machines** additionally needs a **dedicated link**
 between them — such as a Thunderbolt cable — chosen in Cluster › Setup, and

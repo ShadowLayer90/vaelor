@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from . import worker_telemetry_config as telemetry
+from .tls_paths import WORKER_OS_TRUST_FILE
 from .gpu_pool_units import DOCKER, GATE_CONFIG_ROOT, GATE_CONFIG_ROOT_MODE
 from .gpu_ray_plane import NFT_BINARY, RAY_TOKEN_ROOT, RAY_TOKEN_ROOT_MODE
 from .platforms.graphics_software import integrated_amd_gpu
@@ -54,6 +55,12 @@ PLACEHOLDER_NODE = "<node-id>"
 PLACEHOLDER_KEY = "<ingest-key>"
 PLACEHOLDER_INGEST_URL = "<controller-ingest-url>"
 PLACEHOLDER_CA = "<controller-ca-sha256>"
+PLACEHOLDER_ROOT = "<household-root-sha256>"
+
+#: The systems whose trust store is a folder of ``.crt`` files that
+#: ``update-ca-certificates`` folds in (VD-212). Elsewhere the household root
+#: is not placed in the system store; the worker's telemetry still pins it.
+OS_TRUST_STORE_SYSTEMS = ("ubuntu", "debian")
 
 #: Component kinds (design §3a.1). ``marker`` is the installer fence; its
 #: content records an applied time, so only its presence, owner and mode count.
@@ -156,7 +163,9 @@ MANIFEST: Tuple[Component, ...] = (
               mode="0755"),
     Component("telegraf", FILE, telemetry.TELEGRAF_BINARY_PATH, "Telemetry agent (Telegraf)", mode="0755"),
     Component("emitter", FILE, telemetry.EMITTER_PATH, "Telemetry emitter", mode="0755"),
-    Component("controller-ca", FILE, telemetry.CONTROLLER_CA_PATH, "Controller certificate",
+    # VD-212: what the telemetry agent pins is the household authority's trust
+    # bundle (`cluster_worker_profile.controller_trust`), not one certificate.
+    Component("controller-ca", FILE, telemetry.CONTROLLER_CA_PATH, "Household certificate authority",
               applies="controller_ca", mode="0644"),
     Component("telegraf-config", FILE, telemetry.CONFIG_PATH, "Telemetry agent settings", mode="0600"),
     Component("telegraf-unit", UNIT, telemetry.UNIT_PATH, "Telemetry agent service", mode="0644",
@@ -167,10 +176,21 @@ MANIFEST: Tuple[Component, ...] = (
     Component("amd-smi", PACKAGE, AMD_PREFERENCES_PATH, "AMD amd-smi", applies="amd_smi", mode="0644"),
     Component("hp-wmi-sensors", MODULE_CONF, WMI_MODULE_CONF_PATH, "Fan and board sensor module",
               applies="hp_wmi", mode="0644"),
+    # VD-212: the root alone in the worker's system trust store, so the
+    # worker's own tools (curl, Python, Docker pulls from the controller) trust
+    # the console too. Applied with `update-ca-certificates`.
+    Component("household-root-os", FILE, WORKER_OS_TRUST_FILE, "Household authority in the system trust store",
+              applies="household_root_os", mode="0644"),
     Component("marker", MARKER, MARKER_PATH, "Worker profile marker", mode="0644"),
 )
 
 COMPONENTS: Dict[str, Component] = {component.id: component for component in MANIFEST}
+
+#: Components added after workers were first read (VD-212). A reading stored
+#: before the upgrade does not report them; `cluster_worker_profile` reads that
+#: as "not placed yet", never as "could not be read". Add a component here when
+#: it joins the manifest after release.
+LATER_COMPONENTS: Tuple[str, ...] = ("household-root-os",)
 
 
 def _text_sha(text: str) -> str:
@@ -212,6 +232,9 @@ def key_line_frame() -> Tuple[str, str]:
 
 Verdict = Tuple[Optional[bool], str]
 
+#: Why a predicate that needs the operating system cannot answer yet.
+OS_UNREAD = "this machine's operating system was not read"
+
 
 def _always(facts: Mapping[str, Any]) -> Verdict:
     return True, ""
@@ -234,7 +257,7 @@ def _amd_smi(facts: Mapping[str, Any]) -> Verdict:
         return False, "AMD publishes amd-smi for x86-64 only; this machine is {}".format(architecture)
     os_id, version = str(facts.get("os_id") or ""), str(facts.get("os_version") or "")
     if not os_id:
-        return None, "this machine's operating system was not read"
+        return None, OS_UNREAD
     if os_id != "ubuntu" or version not in AMD_PUBLISHED_UBUNTU:
         return False, "AMD does not publish amd-smi for {} {}".format(os_id, version).rstrip()
     bound = facts.get("amdgpu_bound")
@@ -256,13 +279,29 @@ def _hp_wmi(facts: Mapping[str, Any]) -> Verdict:
 
 def _controller_ca(facts: Mapping[str, Any]) -> Verdict:
     if not facts.get("controller_ca_sha256"):
+        if facts.get("controller_ca_refusal"):
+            # VD-212 fail loud: an installed controller with nothing to pin
+            # cannot say what the worker should hold - not "not needed".
+            return None, str(facts["controller_ca_refusal"])
         return False, "this controller has no certificate to pin"
+    return True, ""
+
+
+def _household_root_os(facts: Mapping[str, Any]) -> Verdict:
+    os_id = str(facts.get("os_id") or "")
+    if not os_id:
+        return None, OS_UNREAD
+    if os_id not in OS_TRUST_STORE_SYSTEMS:
+        return False, ("the system trust store is managed on Ubuntu and Debian only; this machine "
+                       "runs {}".format(os_id))
+    if not facts.get("household_root_sha256"):
+        return False, "this controller's household certificate authority has not produced its root yet"
     return True, ""
 
 
 PREDICATES = {
     "always": _always, "gpu_sampler": _gpu_sampler, "amd_smi": _amd_smi,
-    "hp_wmi": _hp_wmi, "controller_ca": _controller_ca,
+    "hp_wmi": _hp_wmi, "controller_ca": _controller_ca, "household_root_os": _household_root_os,
 }
 
 
@@ -290,6 +329,8 @@ def node_facts(inventory: Mapping[str, Any], probed: Optional[Mapping[str, Any]]
         "amdgpu_bound": probed.get("amdgpu_bound"),
         "wmi_guid": probed.get("wmi_guid"),
         "controller_ca_sha256": (controller_inputs or {}).get("controller_ca_sha256") or "",
+        "controller_ca_refusal": (controller_inputs or {}).get("controller_ca_refusal") or "",
+        "household_root_sha256": (controller_inputs or {}).get("household_root_sha256") or "",
     }
 
 
@@ -334,7 +375,7 @@ def _expected_fields(component: Component, facts: Mapping[str, Any],
         return fields
     fields["sha256"] = _content_sha(component, inputs, release)
     if not fields["sha256"] and not release:
-        fields["cannot_compare"] = _cannot_compare(component)
+        fields["cannot_compare"] = _cannot_compare(component, inputs)
     return fields
 
 
@@ -354,22 +395,28 @@ def _content_sha(component: Component, inputs: Mapping[str, Any], release: bool)
         return str(inputs.get("telegraf_binary_sha256") or "")
     if component.id == "controller-ca":
         return PLACEHOLDER_CA if release else str(inputs.get("controller_ca_sha256") or "")
+    if component.id == "household-root-os":
+        return PLACEHOLDER_ROOT if release else str(inputs.get("household_root_sha256") or "")
     if component.id == "telegraf-config":
         if release:
             return {"pinned": _bytes_sha(config_text(PLACEHOLDER_INGEST_URL, True)),
                     "unpinned": _bytes_sha(config_text(PLACEHOLDER_INGEST_URL, False))}
         url = str(inputs.get("ingest_url") or "")
-        if not url:
+        if not url or (not inputs.get("controller_ca_sha256") and inputs.get("controller_ca_refusal")):
+            # VD-212: never expect settings without certificate checks on a
+            # controller that should have something to pin.
             return ""
         return _bytes_sha(config_text(url, bool(inputs.get("controller_ca_sha256"))))
     raise ValueError("No content source for component {!r}.".format(component.id))
 
 
-def _cannot_compare(component: Component) -> str:
+def _cannot_compare(component: Component, inputs: Mapping[str, Any]) -> str:
     if component.id == "telegraf":
         return ("this controller has no verified Telegraf tarball staged, so the "
                 "installed binary cannot be compared")
     if component.id == "telegraf-config":
+        if inputs.get("ingest_url") and inputs.get("controller_ca_refusal"):
+            return str(inputs["controller_ca_refusal"])
         return "this controller has no cluster address yet, so the settings cannot be compared"
     return "this controller cannot say what the file should hold"
 

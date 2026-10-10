@@ -70,6 +70,12 @@ REMOTE_COMMAND_ALLOWLIST = frozenset({
     # One shape only - `mv -f PATH.vaelor-new-<16 hex> PATH`, a checked file renamed
     # onto its own target (`ssh_sudo_stream.check_rename`, VD-164).
     "mv",
+    # VD-212, LESSONS 18: the household root into a WORKER's system trust store
+    # (`worker_profile_apply`) and out again (`worker_telemetry_runtime.uninstall`).
+    # Bare only. A worker's SSH login is already a full sudoer, so this widens
+    # nothing there; the root bridge's own set (`bridge_argv_policy`) does NOT
+    # take it - that socket's clients have no root primitive.
+    "update-ca-certificates",
 })
 
 
@@ -180,6 +186,8 @@ def remote_command_refusal(args):
                 and re.fullmatch(_NFT_TABLE, args[4]))
         if not (load or drop):
             return "Only a split's own nftables table may be loaded or removed."
+    if args[0] == "update-ca-certificates" and len(args) != 1:
+        return "Only a bare update-ca-certificates may be run."
     if args[0] == "systemctl" and any(
         "slice" in str(arg) or _SYSTEMCTL_PATTERN.search(str(arg)) for arg in args[1:]
     ):

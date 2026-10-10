@@ -20,10 +20,12 @@ existing power action.
 
 **A worker's card is a stored reading, and says how old it is.** The controller
 is read live on every request. A worker is read over SSH only at enrolment, at
-a Recheck and by its own jobs, so its card carries ``checked_at`` and, past
-:data:`STALE_AFTER_SECONDS`, a ``stale_reason`` - the console then asks for a
-Recheck before a change is reviewed, instead of reviewing one against a
-reading nobody can vouch for (review S7).
+a Recheck and by its own jobs, so its card carries ``checked_at`` - when the
+reading was taken, by a probe that answered or a pool job (`_read_at`) - and,
+past :data:`STALE_AFTER_SECONDS` or after a check that failed, a
+``stale_reason``. The console then asks for a Recheck before a change is
+reviewed, instead of reviewing one against a reading nobody can vouch for
+(review S7).
 
 **Only what a card draws is served** (review S4): `gpu_memory_pool.card_view`
 of the status, never a machine's files.
@@ -93,14 +95,53 @@ def _worker_link(node: Dict[str, Any], chosen: Any) -> Dict[str, Any]:
     return record
 
 
-def _read_at(inventory: Dict[str, Any]) -> Optional[int]:
-    """When a worker's pool was last read: its last probe, or its last pool job."""
+def _stamp(value: Any) -> Optional[int]:
+    return int(value) if isinstance(value, (int, float)) and value > 0 else None
+
+
+def _read_at(node: Dict[str, Any]) -> Optional[int]:
+    """When a worker's pool reading was TAKEN: its last successful probe, or its last pool job.
+
+    The probe's reading is dated by the node's ``last_seen``, which only a
+    probe that answered stamps - enrolment (`ClusterStore.add_node`) and every
+    Recheck or capacity re-read that reached the machine (`_reprobe_node`).
+    It is not dated by ``inventory.checked_at``: enrolment never wrote that
+    stamp, so a worker read seconds earlier at enrolment showed "not read
+    yet" and asked for a Recheck (v1.5 cold install, 2026-10-09); and a check
+    that FAILED writes it too (ACC-094), which made the old reading it kept
+    look freshly read.
+    """
+    inventory = node.get("inventory") or {}
     stamps = [
-        value for value in (
-            inventory.get("checked_at"), inventory.get("gpu_memory_pool_checked_at"),
-        ) if isinstance(value, (int, float)) and value > 0
+        stamp for stamp in (
+            _stamp(node.get("last_seen")), _stamp(inventory.get("gpu_memory_pool_checked_at")),
+        ) if stamp is not None
     ]
-    return int(max(stamps)) if stamps else None
+    return max(stamps) if stamps else None
+
+
+#: How a worker's pool card asks for a Recheck before a change is reviewed.
+_RECHECK_BEFORE_CHANGE = "Recheck it before changing its GPU memory pool."
+
+
+def _stale_reason(node: Dict[str, Any], name: str, read_at: Optional[int], now: float) -> str:
+    """Why a supported worker's reading may not be reviewed against, or ``""``.
+
+    A check after the reading that could not reach the machine says so, in its
+    own recorded words, rather than letting the older reading pass for current.
+    """
+    inventory = node.get("inventory") or {}
+    attempted = _stamp(inventory.get("checked_at"))
+    if inventory.get("reachable") is False and attempted is not None and (
+        read_at is None or attempted > read_at
+    ):
+        why = str(inventory.get("unreachable_reason") or "").strip()
+        return "This reading of {} is older than its last check, which failed{} {}".format(
+            name, ": " + why if why else ".", _RECHECK_BEFORE_CHANGE,
+        )
+    if read_at is None or now - read_at > STALE_AFTER_SECONDS:
+        return "This reading of {} is not recent. {}".format(name, _RECHECK_BEFORE_CHANGE)
+    return ""
 
 
 def _enrolled_interface(address: str) -> str:
@@ -146,19 +187,16 @@ def register_host_settings_routes(context: ApiContext) -> None:
             # nothing: say so, from the same rule that reads a live machine.
             else gpu_memory_pool.pool_status(None, inventory.get("gpu"))
         )
-        read_at = _read_at(inventory)
-        stale = status.get("supported") and (
-            read_at is None or now - read_at > STALE_AFTER_SECONDS
-        )
+        read_at = _read_at(node)
         name = node.get("name") or node["id"]
         return {
             "node_id": node["id"],
             "name": name,
             "role": "worker",
             "checked_at": read_at,
+            # A machine with no setting has nothing to go stale.
             "stale_reason": (
-                "This reading of {} is not recent. Recheck it before changing "
-                "its GPU memory pool.".format(name) if stale else ""
+                _stale_reason(node, name, read_at, now) if status.get("supported") else ""
             ),
             "pool": gpu_memory_pool.card_view(status),
         }

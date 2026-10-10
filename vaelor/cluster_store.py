@@ -22,6 +22,31 @@ LOGGER = logging.getLogger(__name__)
 NODE_NOT_FOUND = "Cluster node was not found."
 
 
+#: What a refused cluster action tells the owner to do when this node is not
+#: yet Vaelor's controller: the console control, not the missing precondition.
+CONTROLLER_NOT_SET_UP = (
+    "This node is not set up as the cluster controller yet. Open Cluster > "
+    "Setup, choose Review controller setup and approve it, then try again."
+)
+
+
+def controller_recorded(record: Optional[Dict[str, Any]]) -> bool:
+    """Whether Vaelor itself has set this node up as the cluster controller.
+
+    The one answer to "is this node the controller?" (LESSONS 6). Docker's
+    Swarm state is not it: an uninstall can leave the machine a live Swarm
+    manager, and a fresh store then holds no controller. The console said
+    "Controller active" from Docker while the join refused from this record,
+    and the owner had no control to reconcile them (v1.5 cold install,
+    2026-10-09). The console, the join and placement all ask here; only
+    `ClusterOperations.initialize`, an approved plan, makes it true.
+    """
+    record = record or {}
+    return bool(record.get("initialized")) and bool(
+        str(record.get("advertise_address") or "").strip()
+    )
+
+
 #: The cluster store's file under the state root: the store's default and the
 #: installer's read-only GPU check (`deployment_refresh.cluster_database`)
 #: both take it from here, so the two cannot name different files (review A4).

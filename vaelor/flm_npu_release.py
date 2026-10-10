@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import tarfile
 from pathlib import Path
@@ -67,6 +68,16 @@ _FETCH_TIMEOUT_SECONDS = 120
 #: bridge, on top of the sha256 pin that already gates the CONTENT.
 _ALLOWED_ASSET_HOSTS = ("github.com",)
 _ALLOWED_ASSET_HOST_SUFFIX = ".githubusercontent.com"
+
+
+#: The modes every installed model directory and file is given, whatever the
+#: archive stored. The v1.5 release tar stores the model folder 0770, and an
+#: extraction keeps that (less group/other write), so user ``vaelor`` could not
+#: read the folder and the console showed "Size unknown". The ONE home of the
+#: pair: ``deploy/fetch-npu-model.sh`` and ``deploy/install-vaelor.sh`` spell
+#: them in shell, and ``tests/test_npu_model_modes.py`` holds both to these.
+MODEL_DIRECTORY_MODE = 0o755
+MODEL_FILE_MODE = 0o644
 
 
 class ReleaseInstallError(Exception):
@@ -293,6 +304,7 @@ def install(
             if destination.exists():
                 _rmtree(destination)
             child.replace(destination)
+            _normalise_modes(destination)
         model_dir_name = installed_dirs[0]
         dest_model = models_parent / model_dir_name
     finally:
@@ -304,6 +316,33 @@ def install(
         "model_dir": str(dest_model),
         "model": model_dir_name,
     }
+
+
+def _normalise_modes(entry: Path) -> None:
+    """Give one installed entry, and everything below it, the console's modes.
+
+    Directories become :data:`MODEL_DIRECTORY_MODE` and files
+    :data:`MODEL_FILE_MODE`. Only what the archive placed is passed here, never
+    the models dir itself. A symlink is skipped and never followed - the member
+    check already refuses one, so this is defence in depth, not the guard.
+    """
+    if entry.is_symlink():
+        return
+    if entry.is_file():
+        os.chmod(entry, MODEL_FILE_MODE)
+        return
+    if not entry.is_dir():
+        return
+    os.chmod(entry, MODEL_DIRECTORY_MODE)
+    for root, directories, files in os.walk(entry, followlinks=False):
+        for name in directories:
+            path = os.path.join(root, name)
+            if not os.path.islink(path):
+                os.chmod(path, MODEL_DIRECTORY_MODE)
+        for name in files:
+            path = os.path.join(root, name)
+            if not os.path.islink(path):
+                os.chmod(path, MODEL_FILE_MODE)
 
 
 def _rmtree(path: Path) -> None:

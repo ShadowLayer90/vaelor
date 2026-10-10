@@ -21,9 +21,49 @@ import "../styles/settings.css";
  * message state; these components only present it.
  */
 
+/** What `/security/transport` says about the household authority (VD-212). */
+export interface TransportAuthority {
+  /** `ready`, `not-set-up`, or `unreadable` (a file Vaelor could not read). */
+  state: string; message: string;
+  /** Colon-separated upper-case hex, as certificate dialogs and phones show it. */
+  fingerprint_sha256: string; fingerprint_sha1: string;
+  /** ISO 8601. */
+  created_at: string | null;
+  /**
+   * What the console serves (`tls_authority_pki.classify`): `household`,
+   * `legacy-self-signed`, `previous-household`, `custom`, `none`, or
+   * `unreadable` when the file was there and could not be read.
+   */
+  kind: string;
+}
+
 export interface TransportStatus {
   secure: boolean; scheme: string; certificate_managed: boolean;
   certificate_fingerprint: string; vnc_secure: boolean; remote_ready: boolean;
+  /** Absent from a controller older than VD-212: read as "not read", never as "none". */
+  authority?: TransportAuthority;
+  /** `expires_at` is ISO 8601. */
+  leaf?: { expires_at: string; names: string[] } | null;
+  /** The switch to the household certificate, as `tls_authority_status` states it; null when not reported. */
+  migration?: { state: "none" | "waiting" | "blocked" | "done"; reason: string | null } | null;
+  /** Each name the root could not cover, and why; null when not reported. */
+  names_left_out?: Array<{ name: string; reason: string }> | null;
+}
+
+const CERTIFICATE_KIND: Record<string, string> = {
+  household: "Issued by this Vaelor's household authority",
+  "legacy-self-signed": "Earlier self-signed certificate",
+  "previous-household": "Issued by this Vaelor's previous authority",
+  custom: "Your own certificate (Vaelor leaves it alone)",
+  none: "Not configured",
+  unreadable: "Could not be read",
+};
+
+function certificateFact(transport: TransportStatus | null) {
+  if (!transport) return "Not read";
+  const kind = transport.authority?.kind;
+  if (kind) return CERTIFICATE_KIND[kind] ?? "Could not be read";
+  return transport.certificate_managed ? "Local appliance certificate" : "Not configured";
 }
 
 export interface AgentApiToken {
@@ -75,14 +115,12 @@ export function SecureRemoteAccess({ transport }: { transport: TransportStatus |
       <RecordFacts className="stg-transport__facts" facts={[
         { key: "console", label: "Console", value: transport ? (transport.secure ? "Encrypted HTTPS" : "Unencrypted HTTP") : "Not read" },
         { key: "desktop", label: "Remote Desktop", value: transport ? (transport.vnc_secure ? "Encrypted WSS" : "Trusted LAN only") : "Not read" },
-        { key: "certificate", label: "Certificate", value: transport ? (transport.certificate_managed ? "Local appliance certificate" : "Not configured") : "Not read" },
+        { key: "certificate", label: "Certificate", value: certificateFact(transport) },
+        ...(transport?.leaf ? [{ key: "renews", label: "Valid until", value: new Date(transport.leaf.expires_at).toLocaleDateString() }] : []),
       ]} />
-      {transport?.certificate_fingerprint && (
-        <div className="stg-fingerprint">
-          <span><span className="record-eyebrow">SHA-256 fingerprint</span><code className="record-mono">{transport.certificate_fingerprint.match(/.{1,2}/g)?.join(":")}</code></span>
-          <span className="record-card-button"><a className="ui-button ui-button--secondary" download href="/api/v2/security/certificate">Download certificate</a></span>
-        </div>
-      )}
+      {/* VD-212: a device trusts the household authority, not this one
+          certificate, so its fingerprint and download live in Trust this
+          Vaelor below; the leaf's own were dropped from here. */}
       {/* Only once the transport has actually been read: warning about an
           unencrypted link Vaelor has not looked at is a guess wearing an
           alarm's clothes, and it trains the reader to ignore the real one. */}

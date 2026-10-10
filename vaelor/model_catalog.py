@@ -84,7 +84,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 #: the installer honours, so overriding the tag moves both; ``VAELOR_NPU_RELEASE_SOURCE``
 #: overrides the whole URL (e.g. for an offline mirror or a test source).
 NPU_RELEASE_REPO = os.environ.get("VAELOR_REPO", "ShadowLayer90/vaelor")
-NPU_RELEASE_TAG = os.environ.get("VAELOR_RELEASE_TAG", "v1.5")
+NPU_RELEASE_TAG = os.environ.get("VAELOR_RELEASE_TAG", "v1.5.1")
 NPU_RELEASE_SOURCE = os.environ.get(
     "VAELOR_NPU_RELEASE_SOURCE",
     "https://api.github.com/repos/{}/releases/tags/{}".format(

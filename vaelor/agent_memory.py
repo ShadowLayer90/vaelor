@@ -156,23 +156,94 @@ def _first_certificate(pem: str) -> str:
     return pem[start:stop + len(end)] + "\n"
 
 
+#: One PEM certificate block, header to footer.
+_PEM_BLOCK = re.compile(r"-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----", re.S)
+
+
+def _every_certificate(pem: str) -> str:
+    """Every PEM certificate block in ``pem``, in order, or an empty string."""
+    found = _PEM_BLOCK.findall(pem)
+    return "".join(block + "\n" for block in found)
+
+
 def controller_certificate_pem() -> str:
-    """The control plane's serving certificate (leaf only), or ``""`` if it has none.
+    """What a deployed agent pins for the control plane, or ``""`` if there is nothing.
 
-    Derived exactly as :mod:`vaelor.tls_proxy` derives it: ``VAELOR_TLS_CERT``,
-    else the installer's ``tls/vaelor.crt`` under the application root. The
-    deploy runs in the workload executor, whose unit does not carry the control
-    plane's TLS environment, so the installed file is the fact both processes
-    can read. The certificate is public; the private key is never touched.
+    The one answer workers use too (`cluster_worker_profile.controller_trust`,
+    LESSONS 6). With the household authority's trust bundle (VD-212), EVERY
+    certificate in it: the root, and while an existing install migrates the
+    certificate still served - pinning the first only would drop the root, or
+    pin a certificate the authority is about to retire. Before the authority
+    has run, the served certificate's leaf only, as before: that file may carry
+    a chain, and trusting it must never mean trusting everything an
+    intermediate signed. The deploy runs in the workload executor, so both are
+    files that process reads. Certificates are public; no key is touched.
     """
-    from .runtime_paths import app_path, env_value
+    from .cluster_worker_profile import TRUST_BUNDLE, controller_trust
 
-    path = env_value("VAELOR_TLS_CERT", "PM_TLS_CERT", app_path("tls/vaelor.crt"))
+    trust = controller_trust()
+    if not trust.path:
+        return ""
     try:
-        with open(path, encoding="ascii") as handle:
-            return _first_certificate(handle.read())
+        with open(trust.path, encoding="ascii") as handle:
+            text = handle.read()
     except (OSError, UnicodeDecodeError):
         return ""
+    return _every_certificate(text) if trust.kind == TRUST_BUNDLE else _first_certificate(text)
+
+
+def pin_checks_hostname(pem: str) -> bool:
+    """Whether an agent pinning ``pem`` also checks the controller's name (VD-212).
+
+    Only when the set is authorities alone - the household root after the
+    migration - so the certificate the controller serves can only be the
+    root's own issue, which carries every private address the controller
+    holds. Any end-entity certificate in the set (the installer's pre-VD-212
+    self-signed one during the migration, an owner's custom certificate, or a
+    CA-issued leaf served before the authority ran) may be the one served,
+    and its names were chosen without this controller's cluster address in
+    mind: it stays an exact pin of that one key, with no name check, as before
+    VD-212 (review R17). The agent is re-rendered when the set changes (it is
+    in the surface digest). An unreadable or empty set checks the name: the
+    stricter answer (LESSONS 1).
+    """
+    try:
+        from cryptography import x509
+
+        certificates = x509.load_pem_x509_certificates(pem.encode("ascii"))
+    except Exception:  # noqa: BLE001 - unreadable: the stricter answer
+        return True
+    for certificate in certificates:
+        try:
+            authority = certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+        except x509.ExtensionNotFound:
+            authority = False
+        if not authority:
+            return False
+    return True
+
+
+def pin_digest(pem: str) -> str:
+    """A digest of exactly the certificates an agent pins, for its surface digest (VD-212).
+
+    The sha256 over each certificate's DER sha256, in order: it changes when the
+    household root changes, when it first appears, and when the migration drops
+    the retired console certificate - each a reason to re-render the agent's
+    pin. ``""`` when nothing is pinned.
+    """
+    import ssl
+
+    blocks = _PEM_BLOCK.findall(pem or "")
+    if not blocks:
+        return ""
+    digest = hashlib.sha256()
+    for block in blocks:
+        try:
+            der = ssl.PEM_cert_to_DER_cert(block + "\n")
+        except ValueError:
+            der = block.encode("ascii", "replace")
+        digest.update(hashlib.sha256(der).digest())
+    return digest.hexdigest()
 
 
 def memory_client_config(advertise_address: str, token: str, *,
@@ -202,6 +273,11 @@ def memory_client_config(advertise_address: str, token: str, *,
     }
     if pem:
         block["ca_pem"] = pem
+        # VD-212: the agent checks the advertise address against the
+        # controller's certificate, except while it pins the pre-VD-212
+        # self-signed one (`pin_checks_hostname`). Written explicitly, so the
+        # agent never guesses; a config without it predates VD-212.
+        block["check_hostname"] = pin_checks_hostname(pem)
     return block
 
 

@@ -68,12 +68,32 @@ class PortableStateError(ValueError):
     pass
 
 
-def _derive_key(passphrase: str, salt: bytes) -> bytes:
+#: The scrypt cost every passphrase envelope is written with: the portable-state
+#: archive and the household authority's export (VD-212). Each envelope records
+#: the values in its header and is opened with the recorded ones, so raising
+#: these later still opens what was written before.
+SCRYPT_PARAMETERS = {"n": 2**15, "r": 8, "p": 1}
+
+
+def derive_passphrase_key(passphrase: str, salt: bytes, n: int | None = None,
+                          r: int | None = None, p: int | None = None) -> bytes:
+    """The AES-256-GCM key for an owner's passphrase (scrypt; SCRYPT_PARAMETERS).
+
+    Parameters read back from a header are bounded, so a changed header can
+    neither weaken the derivation below today's cost nor make it unboundedly slow.
+    """
     if len(passphrase) < MIN_PASSPHRASE_LENGTH:
         raise PortableStateError(
             f"Use a transfer passphrase with at least {MIN_PASSPHRASE_LENGTH} characters."
         )
-    return Scrypt(salt=salt, length=32, n=2**15, r=8, p=1).derive(
+    n = SCRYPT_PARAMETERS["n"] if n is None else n
+    r = SCRYPT_PARAMETERS["r"] if r is None else r
+    p = SCRYPT_PARAMETERS["p"] if p is None else p
+    if not (isinstance(n, int) and 2**14 <= n <= 2**20 and n & (n - 1) == 0
+            and isinstance(r, int) and 1 <= r <= 16
+            and isinstance(p, int) and 1 <= p <= 4):
+        raise PortableStateError("The key-derivation parameters are unsupported.")
+    return Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(
         passphrase.encode("utf-8")
     )
 
@@ -296,9 +316,7 @@ class PortableState:
             {
                 "schema": SCHEMA,
                 "kdf": "scrypt",
-                "n": 2**15,
-                "r": 8,
-                "p": 1,
+                **SCRYPT_PARAMETERS,
                 "salt": base64.b64encode(salt).decode("ascii"),
                 "nonce": base64.b64encode(nonce).decode("ascii"),
             },
@@ -306,7 +324,7 @@ class PortableState:
             sort_keys=True,
         ).encode("utf-8")
         aad = MAGIC + header
-        encrypted = AESGCM(_derive_key(passphrase, salt)).encrypt(
+        encrypted = AESGCM(derive_passphrase_key(passphrase, salt)).encrypt(
             nonce, plaintext, aad
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -342,7 +360,8 @@ class PortableState:
             nonce = base64.b64decode(metadata["nonce"], validate=True)
             if metadata.get("schema") != SCHEMA or metadata.get("kdf") != "scrypt":
                 raise PortableStateError("The transfer archive version is unsupported.")
-            return AESGCM(_derive_key(passphrase, salt)).decrypt(
+            cost = {k: metadata.get(k, v) for k, v in SCRYPT_PARAMETERS.items()}
+            return AESGCM(derive_passphrase_key(passphrase, salt, **cost)).decrypt(
                 nonce, encrypted, MAGIC + header
             )
         except (InvalidTag, KeyError, TypeError, ValueError) as error:

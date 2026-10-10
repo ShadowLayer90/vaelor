@@ -40,7 +40,7 @@ from .cluster_node_removal import (
     take_profile_off_safely,
     take_telemetry_off,
 )
-from .cluster_store import NODE_NOT_FOUND, ClusterStore
+from .cluster_store import NODE_NOT_FOUND, ClusterStore, controller_recorded
 from .cluster_worker_profile import WorkerProfileMixin
 from .cluster_worker_telemetry import (
     WorkerTelemetryMixin,
@@ -419,12 +419,21 @@ class ClusterManager(WorkerTelemetryMixin, WorkerProfileMixin):
                 if app_groups:
                     runtime["app_groups"] = app_groups
         controller = self.store.controller()
-        if runtime.get("initialized"):
+        # LESSONS 6: `initialized` is "Vaelor set this node up as controller"
+        # (controller_recorded, which join_node also reads); Docker's own fact
+        # rides as `swarm_active`. A read never ADOPTS a Swarm (an uninstall
+        # can leave one): only the approved initialize creates the record. The
+        # write below only refreshes cluster_id on an already-recorded
+        # controller, keeping its address, for cluster_id's other readers.
+        runtime["swarm_active"] = bool(runtime.get("initialized"))
+        runtime["initialized"] = runtime["swarm_active"] and controller_recorded(controller)
+        if runtime["initialized"]:
             controller = self.store.set_controller({
                 "initialized": True,
                 "cluster_id": runtime.get("node_id", ""),
                 "advertise_address": controller.get("advertise_address", ""),
             })
+        controller["initialized"] = runtime["initialized"]  # Home reads this one too.
         # After `set_controller`, which returns a fresh record: assigning this
         # earlier meant an initialised cluster silently lost it.
         if controller_address:
@@ -577,7 +586,7 @@ class ClusterManager(WorkerTelemetryMixin, WorkerProfileMixin):
             for node in self.store.list_nodes()
         ]
         controller = self.store.controller()
-        if controller.get("initialized") and status.get("control_available"):
+        if controller_recorded(controller) and status.get("control_available"):
             try:
                 hardware = self.inventory_probe() or {}
             except (AttributeError, OSError, TypeError, ValueError):
@@ -662,7 +671,7 @@ class ClusterManager(WorkerTelemetryMixin, WorkerProfileMixin):
         cluster identity is worse than one that says the identity is wrong.
         """
         address = str(controller.get("advertise_address", "") or "")
-        if not controller.get("initialized") or not address:
+        if not controller_recorded(controller):
             # Not clustered: there is no address to be wrong about, and a
             # "healthy" verdict here would be a claim about nothing.
             return {"advertise_address_held": None, "advertise_address_reason": ""}

@@ -160,13 +160,14 @@ def build_wake_client(section: Any) -> Optional[WakeClient]:
     context = None
     ca_pem = str(section.get("ca_pem") or "").strip()
     if ca_pem and urllib.parse.urlsplit(endpoint).scheme == "https":
-        # The memory client's exact pin on the controller's own certificate -
-        # one TLS setup for both calls to the control plane. Imported here:
-        # agent_server imports this module.
-        from .agent_server import pinned_certificate_context
+        # The memory client's pin on the controller's household authority, the
+        # name checked as the deploy said (VD-212) - one TLS setup for both
+        # calls to the control plane. Imported here: agent_server imports
+        # this module.
+        from .agent_server import pin_section_checks_hostname, pinned_certificate_context
 
         try:
-            context = pinned_certificate_context(ca_pem)
+            context = pinned_certificate_context(ca_pem, pin_section_checks_hostname(section))
         except (ssl.SSLError, ValueError):
             return None
     return WakeClient(endpoint, token, ssl_context=context)

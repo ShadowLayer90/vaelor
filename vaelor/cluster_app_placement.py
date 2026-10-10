@@ -46,6 +46,7 @@ from .cluster_capacity import (
     reservation_from_service_details,
 )
 from .cluster_placement import CONTROLLER_PLACEMENT_ID
+from .cluster_store import controller_recorded
 
 #: The three placement intents an operator chooses between, and the label each
 #: carries as a managed service label so `service_details` can read the decision
@@ -447,7 +448,7 @@ def app_capacity_ledger(
         if node.get("labels", {}).get("swarm_node_id"):
             joined_ids.add(str(node["id"]))
     controller = store.controller()
-    if controller.get("initialized") and status.get("control_available"):
+    if controller_recorded(controller) and status.get("control_available"):
         try:
             hardware = (inventory_probe() if inventory_probe else {}) or {}
         except (AttributeError, OSError, TypeError, ValueError):

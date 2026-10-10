@@ -87,10 +87,11 @@ SOURCE_CLUSTER_LINK = "cluster-link"
 #: ``is_private`` is wider than this - it also answers yes for the ranges
 #: reserved for documentation and for benchmarking - and an address from one of
 #: those on a real link is a mistake to say, not a network to bind (review).
-_LAN_NETWORKS = tuple(
+RFC1918_NETWORKS = tuple(
     ipaddress.ip_network(network)
     for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
+_LAN_NETWORKS = RFC1918_NETWORKS
 
 
 def lan_address(value: Any) -> bool:

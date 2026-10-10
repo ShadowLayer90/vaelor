@@ -1,0 +1,134 @@
+/*
+ * Settings › Connections › Trust this Vaelor (VD-212). The card is a plain
+ * (not flush) Card like Secure remote access above it, so every block lines
+ * up on the card body's own left edge; sizes and colours are tokens only.
+ */
+
+.trust-panel .ui-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.trust-fingerprints {
+  flex: 1 1 320px;
+}
+
+/* Break only at the <wbr> after each colon, never inside a pair: the record
+   grid's overflow-wrap: anywhere split "9B:A" / "5:C2" (VD-212 review). */
+.trust-fingerprints dd,
+.trust-fingerprint {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.trust-subhead {
+  margin: 6px 0 0;
+  padding-top: 14px;
+  color: var(--text-faint-label);
+  border-top: 1px solid var(--border-row);
+  font-size: var(--font-size-ui-xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.trust-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.trust-command {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trust-command__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trust-command__code {
+  max-height: 132px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  color: var(--text-secondary);
+  background: var(--bg-kv);
+  border: 1px solid var(--border-kv);
+  border-radius: var(--radius-md);
+  font-family: var(--font-family-data);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.trust-command__code:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.trust-phones {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+/* The SVG draws its own white ground and quiet zone (api_trust_routes.py), so a
+   camera reads it dark on white whatever the console's theme. */
+.trust-phones__qr {
+  flex: 0 0 auto;
+  width: 176px;
+  height: 176px;
+  border-radius: var(--radius-md);
+}
+
+.trust-phones__qr--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  text-align: center;
+  border: 1px dashed var(--border-kv);
+}
+
+.trust-phones__steps {
+  flex: 1 1 300px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.trust-phones__steps strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+}
+
+.trust-phones__steps ol {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.5;
+}
+
+.trust-phones__steps li + li {
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .trust-phones__qr {
+    margin: 0 auto;
+  }
+}

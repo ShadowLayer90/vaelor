@@ -9,6 +9,7 @@ import { SettingsRecovery, type PortableStateStatus, type RecoveryStatus, type R
 import { SettingsSessions, type ManagedSession } from "./SettingsSessions";
 import { SettingsTwoFactor } from "./SettingsTwoFactor";
 import { StatusPill } from "./StatusPill";
+import { TrustThisVaelor } from "./TrustThisVaelor";
 import { Button, Notice, TabSet } from "./ui";
 import type { CredentialListing, StoredCredential } from "../lib/credentialStatus";
 import { destinations } from "../lib/destinations";
@@ -446,6 +447,7 @@ export function Administration({ session }: { session: Session; /** The shell pa
           {tab === "secrets" && (
             <>
               <SecureRemoteAccess transport={transport} />
+              <TrustThisVaelor transport={transport} />
               <div className="stg-two-col stg-two-col--even">
                 <ExternalApiPanel
                   busy={busy}

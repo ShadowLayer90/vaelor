@@ -1,7 +1,10 @@
 [Unit]
 Description=Vaelor control plane
-After=network-online.target vaelor-credential-broker.service vaelor-hardware-bridge.service vaelor-workload-broker.service vaelor-application-research.service
-Wants=network-online.target vaelor-hardware-bridge.service vaelor-workload-broker.service vaelor-application-research.service
+# The household authority (VD-212) issues and renews the certificate this
+# serves. Wants= also starts it on a box a console upgrade brought it to, where
+# no installer ran to enable it.
+After=network-online.target vaelor-credential-broker.service vaelor-hardware-bridge.service vaelor-workload-broker.service vaelor-application-research.service vaelor-tls-authority.service
+Wants=network-online.target vaelor-hardware-bridge.service vaelor-workload-broker.service vaelor-application-research.service vaelor-tls-authority.service
 
 [Service]
 Type=simple

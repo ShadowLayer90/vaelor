@@ -1,0 +1,63 @@
+[Unit]
+# The household authority (VD-212): a root unique to this install that signs
+# the console's certificate, renews it, migrates an install that still serves
+# the old self-signed certificate, and keeps the root in this machine's own
+# trust store. It is a long-running service rather than an install step
+# because a console upgrade never re-runs the installer (VD-212 plan).
+#
+# Root because the root's key is sealed with `systemd-creds --with-key=host`
+# and the OS trust store is root's. The key is decrypted only into this
+# process's memory; the console reads the issued certificate and its key
+# (0640 root:vaelor) and nothing else from here.
+Description=Vaelor household certificate authority
+After=local-fs.target network-online.target
+Wants=network-online.target
+Before=vaelor-control-plane.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+# The control plane records which workers hold the trust bundle in
+# /var/lib/vaelor/tls (FLEET_TRUST_STATE); this service only reads it. A console
+# upgrade never runs the installer, so an upgraded controller may lack the
+# folder and the control plane cannot create it on the 0750 state root. "+"
+# runs this one line outside the sandbox below (ProtectSystem=strict would
+# refuse it with EROFS), as root, before the namespace exists; it never writes
+# the record. The pass repeats the check, so `ensure` covers the installer too.
+ExecStartPre=+/usr/bin/install -d -m 0750 -o vaelor -g vaelor /var/lib/vaelor/tls
+ExecStart=/opt/vaelor/venv/bin/python -m vaelor.tls_authority run
+Restart=on-failure
+RestartSec=30
+# 0022, not 0077: update-ca-certificates writes the system CA bundle under this
+# umask, and a 0600 bundle would break TLS for every non-root program on the
+# machine. The authority sets every mode it writes explicitly.
+UMask=0022
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+# The authority's own home (root.crt, root-key.cred). systemd creates it 0700
+# root before the namespace is built, so the required path always exists.
+ConfigurationDirectory=vaelor/authority
+ConfigurationDirectoryMode=0700
+ReadWritePaths=/etc/vaelor/authority
+# The issued certificate, its key, the public root copy, the worker trust
+# bundle and the pending certificate. The installer creates /opt/vaelor/tls;
+# without it the authority has nowhere to write and must fail, not start.
+ReadWritePaths=/opt/vaelor/tls
+# The controller's own OS trust store (update-ca-certificates writes both).
+# Optional so a host without ca-certificates still starts and reports the
+# missing folder, rather than failing to build the namespace.
+ReadWritePaths=-/usr/local/share/ca-certificates -/etc/ssl/certs
+# AF_NETLINK: `ip addr` reads every global address for the certificate's names.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

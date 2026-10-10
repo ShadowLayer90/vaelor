@@ -18,8 +18,18 @@ import type {
 
 export interface ClusterRuntimeFlags {
   available: boolean;
+  /**
+   * Whether Vaelor set this node up as the cluster controller: Docker's Swarm
+   * is active AND the controller record the join reads exists
+   * (`cluster_store.controller_recorded`, LESSONS 6). It used to be Docker's
+   * state alone, so a Swarm an uninstall left behind read "Controller active"
+   * while the join refused, and "Review controller setup" was never offered
+   * (v1.5 cold install, 2026-10-09).
+   */
   initialized: boolean;
   control_available: boolean;
+  /** Docker's own Swarm state, published beside `initialized`. */
+  swarm_active?: boolean;
   /**
    * Task #75. What the controller observed about the container engine, kept
    * apart from what it observed about Swarm. `available: false` used to be the
@@ -279,7 +289,9 @@ export function clusterState(
       id: "not-initialized",
       label: "Not initialized",
       tone: "degraded",
-      summary: "Docker is running, but this node is not yet a cluster controller.",
+      summary: runtime.swarm_active
+        ? "Docker on this node still runs a cluster, likely from an earlier installation, but Vaelor has not set this node up as its controller."
+        : "Docker is running, but this node is not yet a cluster controller.",
       unavailable: "Workers cannot be enrolled until the controller is set up.",
       nextStep: "Review controller setup to make this node the head controller.",
       operatingAsController: false,

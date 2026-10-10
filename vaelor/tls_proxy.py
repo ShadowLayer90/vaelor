@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import ssl
 
-from .runtime_paths import app_path, env_value
+from .runtime_paths import env_value
+from .tls_paths import leaf_cert, leaf_key
+from .tls_reload import ReloadingContext
 
 
 LISTEN_HOST = env_value(
@@ -79,21 +80,16 @@ class TlsProxy:
 
 
 async def serve():
-    cert = env_value(
-        "VAELOR_TLS_CERT", "PM_TLS_CERT", app_path("tls/vaelor.crt")
-    )
-    key = env_value(
-        "VAELOR_TLS_KEY", "PM_TLS_KEY", app_path("tls/vaelor.key")
-    )
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(cert, key)
+    # The same certificate the console serves, re-read at each handshake once
+    # the household authority renews it - no restart (VD-212, ``tls_reload``).
+    # The first load still raises: no certificate is a startup failure.
+    contexts = ReloadingContext(leaf_cert(), leaf_key())
     proxy = TlsProxy()
     server = await asyncio.start_server(
         proxy.handle,
         LISTEN_HOST,
         LISTEN_PORT,
-        ssl=context,
+        ssl=contexts.listening_context(),
         backlog=64,
     )
     async with server:

@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import worker_telemetry_config as cfg
 from .ssh_transport import SshTransportError
+from .tls_paths import WORKER_OS_TRUST_FILE
 from .telemetry_store import REPORTING_WINDOW_SECONDS
 from .worker_telemetry_bundle import (
     build_sampler_bytes, build_zipapp_bytes, bundle_digest, sampler_bundle_digest,
@@ -255,7 +256,20 @@ class WorkerTelemetryRuntime:
         Now the agent is installed and running first; a sampler that fails is
         reported in ``sampler_error`` (a plain sentence) and the agent reports
         "the sampler is missing" until the next repair pass tries again.
+
+        **Nothing to pin on an installed controller is a refusal** (VD-212):
+        with no ``controller_ca_source`` the agent would post without
+        certificate checks, so on a controller whose household authority or
+        TLS folder is installed this raises ``ValueError`` with the reason
+        (`cluster_worker_profile.NOTHING_TO_PIN`) before anything is touched.
+        Only a development box keeps the explicit insecure opt-in.
         """
+        if not controller_ca_source or not Path(controller_ca_source).is_file():
+            from .cluster_worker_profile import controller_trust
+
+            refusal = controller_trust().refusal
+            if refusal:
+                raise ValueError(refusal)
         self._ensure_dirs(transport)
         self._ship_telegraf(transport, architecture)
         self._ship_emitter(transport)
@@ -445,11 +459,14 @@ class WorkerTelemetryRuntime:
     def _ship_controller_ca(
         self, transport, source: Optional[str]
     ) -> Optional[str]:
-        """Place the controller's cert on the worker for TLS pinning, if given.
+        """Place what the worker pins on the worker, if given.
 
-        Returns the on-worker CA path when a cert was shipped, else ``None`` —
-        which tells the config renderer to fall back to the documented
-        insecure-TLS follow-up rather than silently trusting the system store.
+        ``source`` is `cluster_worker_profile.controller_ca_source`: the
+        household authority's trust bundle (one or more PEM certificates), or
+        the served certificate before the authority has run (VD-212). Returns
+        the on-worker CA path when it was shipped, else ``None`` - which, on a
+        development box only, tells the config renderer to use the explicit
+        insecure opt-in (:meth:`install` refuses it on an installed controller).
         """
         if not source or not Path(source).is_file():
             return None
@@ -518,6 +535,11 @@ class WorkerTelemetryRuntime:
         and its ``0600`` config (which carries the key) and the binary and
         emitter are removed. The controller-side ingest-key hash is cleared by
         the manager; this clears the copy on the worker.
+
+        The household root comes out of the worker's system trust store too
+        (VD-212), and the store is rebuilt without it. A worker with no
+        ``update-ca-certificates`` (not Ubuntu or Debian) never had the root
+        placed there, so its absence is not an error.
         """
         state = self._unit_properties(transport, _LOAD_STATE)
         if state.get(_LOAD_STATE) != _UNIT_NOT_FOUND:
@@ -528,9 +550,15 @@ class WorkerTelemetryRuntime:
         transport.run(["systemctl", "daemon-reload"], sudo=True)
         for path in (
             cfg.CONFIG_PATH, cfg.EMITTER_PATH, cfg.TELEGRAF_BINARY_PATH,
-            cfg.CONTROLLER_CA_PATH,
+            cfg.CONTROLLER_CA_PATH, WORKER_OS_TRUST_FILE,
         ):
             transport.run(["rm", "-f", path], sudo=True)
+        try:
+            transport.run(["update-ca-certificates"], sudo=True)
+        except SshTransportError as error:
+            # sudo's own words when the tool is not installed.
+            if "command not found" not in str(error).lower() and not _absent(error):
+                raise
 
     # -- reconcile --------------------------------------------------------
     def reconcile(

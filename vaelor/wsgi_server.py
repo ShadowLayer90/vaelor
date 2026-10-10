@@ -60,6 +60,8 @@ import threading
 
 import waitress
 
+from .tls_reload import ReloadingContext, StaticContext
+
 _LOGGER = logging.getLogger(__name__)
 
 #: The terminator forwards to waitress here; waitress binds this and nothing
@@ -193,7 +195,13 @@ class _TlsTerminator:
         self._peers = peers if peers is not None else _PeerTable()
         self._host = host
         self._port = port
-        self._ssl_context = ssl_context
+        # A holder, not a context: ``current()`` is asked at every accept, so a
+        # certificate the household authority renews is served from the next
+        # handshake on with no restart (VD-212; see ``tls_reload``).
+        self._contexts = (
+            ssl_context if hasattr(ssl_context, "current")
+            else StaticContext(ssl_context)
+        )
         self._backend_port = backend_port
         self._log = log
         self._slots = threading.Semaphore(MAX_TLS_CONNECTIONS)
@@ -238,7 +246,9 @@ class _TlsTerminator:
         try:
             client.settimeout(TLS_HANDSHAKE_TIMEOUT)
             try:
-                tls = self._ssl_context.wrap_socket(client, server_side=True)
+                tls = self._contexts.current().wrap_socket(
+                    client, server_side=True
+                )
             except (ssl.SSLError, OSError):
                 _close(client)
                 return
@@ -364,15 +374,16 @@ class ControlPlaneServer:
 
     @staticmethod
     def _build_ssl_context(ssl_context):
+        """A context holder: fixed for a caller's own ``SSLContext``, and
+        reloading for the appliance's ``(cert, key)`` paths, so a renewed
+        certificate is served without a restart (VD-212). The first load of the
+        paths still raises - no certificate is a startup failure."""
         if ssl_context is None:
             return None
         if isinstance(ssl_context, ssl.SSLContext):
-            return ssl_context
+            return StaticContext(ssl_context)
         cert, key = ssl_context
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.load_cert_chain(cert, key)
-        return context
+        return ReloadingContext(cert, key)
 
     def serve_forever(self):
         if self._terminator is None:

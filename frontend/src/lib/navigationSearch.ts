@@ -100,6 +100,8 @@ export function searchEntries(
   for (const [id, label, keywords] of settingsSections) {
     add({ id: `admin-${id}`, label, context: destinations.admin.name, keywords, href: `#/admin/${id}`, page: "admin" });
   }
+  // VD-212: the panel that installs this Vaelor's certificate authority on the owner's devices.
+  add({ id: "admin-trust", label: "Trust this Vaelor", context: `${destinations.admin.name} › Connections`, keywords: ["certificate", "certificate authority", "browser warning", "not secure", "fingerprint", "QR code", "HTTPS"], href: "#/admin/connections", page: "admin" });
   for (const [id, label, keywords] of activityTabs) {
     add({ id: `activity-${id}`, label, context: destinations.activity.name, keywords, href: `#/activity/${id}`, page: "activity" });
   }

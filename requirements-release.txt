@@ -28,6 +28,7 @@ pytz==2026.3.post1
 pyudev==0.24.4
 redis==8.1.0
 requests==2.34.2
+segno==1.6.6
 six==1.17.0
 typing_extensions==4.16.0
 urllib3==2.7.0

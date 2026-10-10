@@ -10,7 +10,8 @@ parts that differ - so a worker that already matches is left untouched, and
 **Every command is an allowlisted argv through `SshTransport.run`** (LESSONS
 18): ``install``, ``chown``, ``chmod``, ``tee`` (which the transport lands
 beside the target, digest-checks and renames into place), ``sha256sum``,
-``stat``, ``tar``, ``systemctl``, ``rm``, ``apt-get`` and ``python3 -c`` for
+``stat``, ``tar``, ``systemctl``, ``rm``, ``apt-get``, ``update-ca-certificates``
+(VD-212, the household root in the system trust store) and ``python3 -c`` for
 the few questions no allowlisted tool answers. Artifacts are staged in a
 private directory (VD-172) and their digests are checked on both sides.
 
@@ -191,6 +192,26 @@ class Inputs:
     previous_amd_smi: Optional[Mapping[str, Any]] = None
     gpu_sampler: bool = False
     facts: Dict[str, Any] = field(default_factory=dict)
+    #: The household root for the worker's system trust store (VD-212): the
+    #: same file the expected profile was digested from
+    #: (`cluster_worker_profile.household_root_source`), read when the apply
+    #: starts, so the job's caller does not restate it.
+    household_root_source: Optional[str] = field(default_factory=lambda: _household_root())
+    #: Why telemetry settings may not be written without certificate checks
+    #: here (`cluster_worker_profile.controller_trust`), or ``""``.
+    controller_ca_refusal: str = field(default_factory=lambda: _controller_ca_refusal())
+
+
+def _household_root() -> Optional[str]:
+    from .cluster_worker_profile import household_root_source
+
+    return household_root_source()
+
+
+def _controller_ca_refusal() -> str:
+    from .cluster_worker_profile import controller_trust
+
+    return controller_trust().refusal
 
 
 class ApplyFailed(RuntimeError):
@@ -263,6 +284,9 @@ class ProfileApplier:
         if entry.kind == wp.PACKAGE:
             self._apply_amd_smi()
             return
+        if component == "household-root-os":
+            self._apply_household_root(entry)
+            return
         undo = self._backup(component, entry.path)
         try:
             self._write_text(entry.path, wp.WMI_MODULE_CONF_TEXT, entry.mode)
@@ -284,6 +308,33 @@ class ProfileApplier:
                               failure.undo + restored["words"]) from failure
         except Exception as error:  # noqa: BLE001 - put back, then reported by kind
             raise self._failed("amd-smi", error, [undo]) from error
+        self._drop_backups([undo])
+
+    def _apply_household_root(self, entry: wp.Component) -> None:
+        """The root into the system trust store, then ``update-ca-certificates`` (VD-212).
+
+        Put back like any file on failure, and the trust store rebuilt again
+        from what was put back, so a failed change never leaves the store
+        built from a file that is no longer there.
+        """
+        source = self.inputs.household_root_source
+        undo = self._backup(entry.id, entry.path)
+        try:
+            if not source:
+                raise StepFailed("This controller's household certificate authority has not produced its root.")
+            data = Path(source).read_bytes()
+            self._install_bytes(data, "household-root.crt", entry.path, entry.mode, _sha(data))
+            self.transport.run(["update-ca-certificates"], sudo=True)
+        except Exception as error:  # noqa: BLE001 - put back, then reported by kind
+            failure = self._failed(entry.id, error, [undo])
+            try:
+                self.transport.run(["update-ca-certificates"], sudo=True)
+            except Exception as again:  # noqa: BLE001 - said beside the outcome, logged
+                LOGGER.warning("could not rebuild the trust store on node %s: %s", self.inputs.node_id, again)
+                failure.undo.append("the system trust store could not be rebuilt; run: sudo update-ca-certificates")
+                if failure.outcome == FAILED_RESTORED:
+                    failure.outcome = FAILED_NOT_RESTORED
+            raise failure from error
         self._drop_backups([undo])
 
     def _directory_undo(self, entry: wp.Component) -> Undo:
@@ -361,9 +412,13 @@ class ProfileApplier:
             data = Path(source).read_bytes()
             self._install_bytes(data, "controller-ca.pem", entry.path, entry.mode, _sha(data))
         elif entry.id == "telegraf-config":
+            ca_pinned = bool(self.inputs.controller_ca_source)
+            if not ca_pinned and self.inputs.controller_ca_refusal:
+                # VD-212 fail loud: an installed controller never writes the
+                # agent's settings without certificate checks.
+                raise StepFailed(self.inputs.controller_ca_refusal)
             key = self.inputs.mint_key()
             self._key_minted = True
-            ca_pinned = bool(self.inputs.controller_ca_source)
             text = telemetry.render_config(
                 node_id=self.inputs.node_id, ingest_url=self.inputs.ingest_url, ingest_key=key,
                 tls_ca_path=telemetry.CONTROLLER_CA_PATH if ca_pinned else None,

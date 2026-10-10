@@ -142,8 +142,11 @@ export interface FleetSummary {
   };
   runtime: {
     available: boolean;
+    /** Vaelor set this node up as controller - see `ClusterRuntimeFlags`. */
     initialized: boolean;
     control_available: boolean;
+    /** Docker's own Swarm fact, which `initialized` no longer is (LESSONS 6). */
+    swarm_active?: boolean;
     /** Task #75: the engine fact, separate from the Swarm fact. */
     engine?: "ready" | "absent" | "unreadable";
     engine_reason?: string;

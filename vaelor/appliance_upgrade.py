@@ -64,6 +64,7 @@ from packaging.version import InvalidVersion, Version
 from .appliance_recovery import START_SERVICES, STOP_SERVICES
 from .build_provenance import write_installed_record
 from .state_root_layout import settle_after_install
+from .upgrade_dependencies import install_unmet
 from .www_v2_orphans import MODULE as ORPHAN_SWEEP
 from .runtime_paths import env_value, jobs_group_id, run_path, state_path
 
@@ -203,6 +204,7 @@ UPGRADE_EXTRA_SERVICES = (
     "vaelor-hardware-bridge.service",
     "vaelor-application-research.service",
     "vaelor-host-desktop.service",
+    "vaelor-tls-authority.service",
 )
 #: The privileged brokers an upgrade must NOT restart, stated explicitly so the
 #: exclusion is documented rather than accidental. ``vaelor-appliance-upgrade``
@@ -757,6 +759,8 @@ def perform_upgrade_apply(
             wheel, plan, stage_root, verified_dir=verified_dir
         )
         _pip_reinstall(runner, verified)
+        install_unmet(lambda a: _run(runner, a, 1800), VENV_ROOT + "/bin/python", PIP,
+                      normalize=[*NORMALIZE_PERMS, VENV_ROOT])  # R19 / R23
         # Install any changed systemd unit files from the just-installed wheel
         # and daemon-reload BEFORE the restart, or the restart picks up the OLD
         # unit and a release that changed a .service silently keeps the stale one

@@ -22,6 +22,11 @@ systemd_dir="${VAELOR_SYSTEMD_DIR:-/etc/systemd/system}"
 # Vaelor is never removed. Its absence means an appliance installed before Vaelor
 # recorded this, and the teardown falls back with a warning.
 installed_marker="${VAELOR_INSTALLED_MARKER:-/usr/lib/vaelor/release/installed-by-vaelor}"
+# The mark a controller leaves on a machine it enrolled as a cluster worker
+# (worker_profile.MARKER_PATH, retyped because bash cannot import it;
+# tests/test_uninstall_leftovers.py compares the two). Overridable for the same
+# ONE reason as the two above.
+worker_profile_marker="${VAELOR_WORKER_PROFILE_MARKER:-/etc/vaelor/worker-profile.json}"
 units=(
   vaelor-control-plane.service
   vaelor-credential-broker.service
@@ -33,9 +38,17 @@ units=(
   vaelor-appliance-recovery.service
   vaelor-appliance-upgrade.service
   vaelor-application-research.service
+  vaelor-tls-authority.service
   vaelor-vnc-gateway.service
   vaelor-vnc-tls-proxy.service
 )
+# The household certificate authority's root in this machine's OS trust store
+# (VD-212): vaelor-household-<id>.crt on a controller, vaelor-household-root.crt
+# on a worker - tls_paths.CONTROLLER_OS_TRUST_TEMPLATE and WORKER_OS_TRUST_FILE,
+# retyped because bash cannot import them; tests/test_installer_provisioning.py
+# compares the two. Overridable for the same ONE reason as the paths above.
+os_trust_dir="${VAELOR_OS_TRUST_DIR:-/usr/local/share/ca-certificates}"
+os_trust_glob="vaelor-household-*.crt"
 
 usage() {
   cat <<'EOF'
@@ -61,7 +74,10 @@ workers and gates, the model-pull oneshots, and the balancer container - so no
 LLM is left answering on the LAN after Vaelor is gone. A worker node's own
 replicas and gates are removed by that worker's uninstall, not this one. Without
 --purge-data it keeps users, credentials, models, workloads, chats, settings,
-and every container image, so a reinstall is fast.
+and every container image, so a reinstall is fast. It also keeps the household
+certificate authority (/etc/vaelor/authority) and its place in this machine's
+trust store, so after a reinstall the devices that trusted this console still
+do.
 
 Every uninstall also removes the GPU memory pool setting Vaelor wrote
 (/etc/modprobe.d/vaelor-gpu-memory.conf) and rebuilds the boot image. The
@@ -73,8 +89,34 @@ the two gfx1151 serving images, the LLM Server's nginx and the multi-node vLLM
 image, each removed by the exact reference pinned in the installed Vaelor
 package (by digest, the form a pinned pull is stored under). It also removes the
 browser-desktop account (vaelor-desktop) with its home and the VNC display it
-enabled. Images Vaelor did not pull, and Docker itself, are left alone. It
-requires the exact destructive confirmation phrase.
+enabled, ending any process still running as a Vaelor account first. It
+removes the household certificate authority with the rest of /etc/vaelor, and
+takes its root out of this machine's trust store
+(/usr/local/share/ca-certificates/vaelor-household-*.crt, on a controller or a
+worker); a later install creates a new authority, which every device must trust
+again, unless one exported earlier is imported. Images Vaelor did not pull, and
+Docker itself, are left alone. It requires the exact destructive confirmation
+phrase.
+
+--purge-data also removes the cluster services Vaelor created (the Docker Swarm
+services labelled vaelor.managed=true, on a manager) and then leaves the Docker
+Swarm - as a manager or as a worker - when that Swarm is Vaelor's: Docker was
+installed by Vaelor (docker.io in the installed-by-vaelor marker below), or the
+machine is a worker a Vaelor controller enrolled (/etc/vaelor/worker-profile.json).
+A Swarm on a Docker that was here before Vaelor may predate it, so it is left
+alone and named, with the command that leaves it. Without --purge-data the
+Swarm stays, together with the cluster record that describes it, so a reinstall
+finds both.
+
+Every uninstall removes every vaelor-* systemd unit and drop-in it finds on the
+machine, not only the ones the installer wrote - the worker telemetry agent and
+GPU sampler a controller installs at enrolment, and any custom-agent unit - and
+no unit whose name does not start with vaelor-. This includes a keep-data
+uninstall: on a former cluster worker the telemetry agent's unit and program
+files go too, so after a keep-data reinstall that machine sends no telemetry
+until it is installed again from its card on the controller's Fleet page.
+Custom agents come back by themselves: the reinstalled executor re-creates the
+unit of every agent the kept record holds as healthy within about 30 seconds.
 
 --bare-os additionally removes the OS stack the installer added - Docker and
 containerd with their whole image stores (/var/lib/docker AND
@@ -163,6 +205,70 @@ purge_os_packages() {
         ;;
     esac
   done
+}
+
+# End every process an account still runs, and wait - bounded, about ten
+# seconds - for them to be gone. The v1.5 cold install's data purge printed
+# "userdel: user vaelor-desktop is currently used by process 657704" and kept
+# the account, although seconds later nothing ran as it: the browser desktop's
+# session was still exiting when userdel asked. So the session is ended
+# (loginctl, then the account's systemd user manager), every process is sent
+# TERM, and after half the wait KILL. Never fails: userdel is the judge, and
+# its failure is what gets reported.
+end_account_processes() {
+  local user="$1" uid waited
+  uid="$(id -u "${user}" 2>/dev/null || true)"
+  loginctl terminate-user "${user}" >/dev/null 2>&1 || true
+  if [[ -n "${uid}" ]]; then
+    systemctl stop "user@${uid}.service" >/dev/null 2>&1 || true
+  fi
+  pkill -TERM -u "${user}" >/dev/null 2>&1 || true
+  for ((waited = 0; waited < 20; waited++)); do
+    pgrep -u "${user}" >/dev/null 2>&1 || return 0
+    if ((waited == 10)); then
+      pkill -KILL -u "${user}" >/dev/null 2>&1 || true
+    fi
+    sleep 0.5
+  done
+  return 0
+}
+
+# Delete one Vaelor account ($1; any further arguments are userdel options,
+# e.g. -r for the home), ending its processes first and trying a second time
+# once if userdel still refuses. An account that survives both is named on
+# stderr with the commands that finish it - never left silently.
+remove_vaelor_account() {
+  local user="$1" attempt
+  shift
+  id -u "${user}" >/dev/null 2>&1 || return 0
+  for attempt in 1 2; do
+    end_account_processes "${user}"
+    if userdel "$@" "${user}"; then
+      return 0
+    fi
+  done
+  echo "The account ${user} could not be removed; a process may still run as" \
+    "it. Finish with: pkill -KILL -u ${user}; userdel $* ${user}" >&2
+  return 1
+}
+
+# Whether the Docker Swarm this machine is in is Vaelor's to leave. Nothing in
+# Vaelor records "I created this Swarm": the console's initialise step adopts a
+# Swarm that is already there as readily as it creates one. What IS recorded
+# is who installed Docker. A Swarm on a Docker the installer added cannot
+# predate Vaelor, and a machine a controller enrolled as a worker was joined to
+# its Swarm by that controller (which force-leaves any earlier Swarm first). On
+# a Docker that was here before Vaelor neither holds, so the Swarm is not
+# Vaelor's to touch. Without the marker (an appliance installed before Vaelor
+# recorded what it added) only --bare-os counts it as Vaelor's: that mode
+# already purges Docker and its stores as Vaelor's, Swarm state included.
+swarm_is_vaelors() {
+  [[ -e "${worker_profile_marker}" ]] && return 0
+  if [[ -s "${installed_marker}" ]]; then
+    grep -qxF docker.io "${installed_marker}"
+    return
+  fi
+  ((bare_os))
 }
 
 # `id -u` rather than bash's own EUID for one reason: EUID is set by the shell
@@ -359,6 +465,50 @@ for item in items:
         -f /var/lib/vaelor/workloads/system-web-research/compose.yaml \
         down --remove-orphans || true
     fi
+    # The Docker Swarm. The v1.5 cold install found the Z2 still a Swarm manager
+    # after a data purge (the worker still listed under it): the fresh console
+    # then read the live Swarm as "Controller active" while its new cluster
+    # record was empty, and refused to join a worker. A data purge deletes that
+    # record, so it leaves the Swarm the record described - its Vaelor services
+    # first, on a manager, so their containers stop cleanly - but only a Swarm
+    # that is Vaelor's (swarm_is_vaelors). A keep-data uninstall keeps both the
+    # record and the Swarm, so a reinstall finds them still agreeing.
+    if ((purge)) && command -v docker >/dev/null; then
+      swarm_state="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
+      swarm_state="${swarm_state//[[:space:]]/}"
+      if [[ -n "${swarm_state}" && "${swarm_state}" != inactive ]]; then
+        swarm_role="worker"
+        swarm_manager="$(docker info --format '{{.Swarm.ControlAvailable}}' 2>/dev/null || true)"
+        if [[ "${swarm_manager//[[:space:]]/}" == true ]]; then
+          swarm_role="manager"
+          mapfile -t swarm_services < <(
+            docker service ls -q --filter label=vaelor.managed=true 2>/dev/null || true
+          )
+          if ((${#swarm_services[@]})); then
+            if docker service rm "${swarm_services[@]}" >/dev/null 2>&1; then
+              echo "Removed ${#swarm_services[@]} Vaelor cluster service(s)."
+            else
+              echo "Could not remove every Vaelor cluster service; finish with:" \
+                "docker service rm \$(docker service ls -q --filter" \
+                "label=vaelor.managed=true)" >&2
+            fi
+          fi
+        fi
+        if swarm_is_vaelors; then
+          if docker swarm leave --force >/dev/null 2>&1; then
+            echo "Left the Docker Swarm this machine was a ${swarm_role} of."
+          else
+            echo "Could not leave the Docker Swarm this machine is a" \
+              "${swarm_role} of. Finish with: docker swarm leave --force" >&2
+          fi
+        else
+          echo "This machine is still a ${swarm_role} in a Docker Swarm. Docker" \
+            "was not installed by Vaelor here, so that Swarm may predate Vaelor" \
+            "and was left alone. If it is Vaelor's, leave it with:" \
+            "docker swarm leave --force" >&2
+        fi
+      fi
+    fi
     if ((purge)) && command -v docker >/dev/null; then
       # The container images Vaelor pulled are Vaelor's data, so a data purge
       # removes them - by the pinned reference the package holds, which is the
@@ -444,6 +594,43 @@ for item in items:
       /usr/local/lib/vaelor/vaelor-gpu-sampler.pyz \
       /usr/local/lib/vaelor/.vaelor-gpu-sampler.pyz.new
     # --- END w3-perf (VD-147): the worker GPU sampler -------------------------
+    # Every other vaelor-* unit and drop-in on the machine. The list above is
+    # what the installer writes; a controller writes more at worker enrolment
+    # (the telemetry agent beside the sampler), and the console writes a unit
+    # per custom agent and a slice per cluster deployment. The v1.5 cold
+    # install found vaelor-telegraf.service still on a former worker after a
+    # data purge, because no list here named it. So the unit directory is
+    # swept by NAME PREFIX: only a name starting with vaelor- is Vaelor's,
+    # and no other unit - nor a vaelor-*.conf drop-in inside another unit's
+    # .d directory, such as the one that keeps InfluxDB on loopback while
+    # InfluxDB stays - is touched. Each unit is stopped and disabled before
+    # its file goes, so no enablement link is left pointing at nothing.
+    swept_units=()
+    for unit_path in "${systemd_dir}"/vaelor-*; do
+      [[ -e "${unit_path}" || -L "${unit_path}" ]] || continue
+      unit="$(basename "${unit_path}")"
+      case "${unit}" in
+        *.d) rm -rf "${unit_path}" ;;
+        *.service | *.socket | *.timer | *.path | *.slice | *.mount | *.target)
+          systemctl disable --now "${unit}" >/dev/null 2>&1 || true
+          rm -f "${unit_path}"
+          swept_units+=("${unit}")
+          ;;
+      esac
+    done
+    for unit_path in "${systemd_dir}"/*.wants/vaelor-* "${systemd_dir}"/*.requires/vaelor-*; do
+      if [[ -L "${unit_path}" ]]; then
+        rm -f "${unit_path}"
+      fi
+    done
+    if ((${#swept_units[@]})); then
+      echo "Removed ${#swept_units[@]} more Vaelor unit(s): ${swept_units[*]}"
+    fi
+    # The worker telemetry agent's program files, beside the sampler's
+    # (worker_telemetry_config.TELEGRAF_BINARY_PATH and EMITTER_PATH): program
+    # files, not data, so every mode removes them; the directory goes if empty.
+    rm -f /usr/local/lib/vaelor/telegraf /usr/local/lib/vaelor/vaelor-telemetry-emitter.pyz
+    rmdir /usr/local/lib/vaelor >/dev/null 2>&1 || true
     systemctl daemon-reload
     systemctl reset-failed
     if ((purge)); then
@@ -452,15 +639,40 @@ for item in items:
       # managed account it created and that account's home. The account name is
       # `host_desktop_vnc.MANAGED_DESKTOP_USER`, retyped here because bash
       # cannot import it; tests/test_installer_provisioning.py compares the two.
+      # The desktop and VNC units (vaelor-host-desktop, vaelor-vnc-gateway,
+      # vaelor-vnc-tls-proxy) were stopped with the rest of Vaelor at the top;
+      # the display instance is stopped here, and remove_vaelor_account ends
+      # whatever session is still exiting before userdel asks.
       systemctl disable --now 'tigervncserver@:1.service' >/dev/null 2>&1 || true
-      loginctl terminate-user vaelor-desktop >/dev/null 2>&1 || true
-      id -u vaelor-desktop >/dev/null 2>&1 && userdel -r vaelor-desktop || true
+      remove_vaelor_account vaelor-desktop -r || true
       rm -rf /var/lib/vaelor /var/log/vaelor /run/vaelor /etc/vaelor
-      for user in vaelor-research vaelor-vnc vaelor-secrets vaelor-workloads vaelor; do
-        id -u "${user}" >/dev/null 2>&1 && userdel "${user}" || true
+      # The household root (VD-212) goes from the OS trust store with the
+      # authority that signed it: a root whose key is gone would stay trusted
+      # by this machine for nothing. --fresh rebuilds the bundle from what is
+      # left, so no copy of the root survives in /etc/ssl/certs either; it runs
+      # even when no file is found, so a purge that stopped after the rm above
+      # is finished by the next one. Removed by name pattern, so a controller's
+      # per-root file and a worker's fixed name both go, and no other
+      # certificate is touched.
+      for trust_file in "${os_trust_dir}"/${os_trust_glob}; do
+        [[ -e "${trust_file}" ]] || continue
+        rm -f "${trust_file}"
       done
+      if command -v update-ca-certificates >/dev/null 2>&1; then
+        update-ca-certificates --fresh >/dev/null 2>&1 || echo "The trust" \
+          "store could not be rebuilt after removing Vaelor's household" \
+          "certificate authority. Finish with: update-ca-certificates --fresh" >&2
+      fi
+      for user in vaelor-research vaelor-vnc vaelor-secrets vaelor-workloads vaelor; do
+        remove_vaelor_account "${user}" || true
+      done
+      # Groups after every account: a group that is still some account's
+      # primary group cannot be deleted, so an account that survived above is
+      # why its group survives here - and both are named, not left silently.
       for group in vaelor-bridge vaelor-vnc vaelor-credentials vaelor-jobs vaelor; do
-        getent group "${group}" >/dev/null && groupdel "${group}" || true
+        getent group "${group}" >/dev/null || continue
+        groupdel "${group}" || echo "The group ${group} could not be removed." \
+          "Finish with: groupdel ${group}" >&2
       done
       if ((bare_os)); then
         # Return the machine to its pre-Vaelor state. Every step is best-effort:

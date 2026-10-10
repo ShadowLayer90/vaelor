@@ -39,6 +39,11 @@ EMITTER_PATH = TELEGRAF_LIB_DIR + "/vaelor-telemetry-emitter.pyz"
 #: Config and cert root, root-owned. The config is ``0600`` (it carries the key).
 CONFIG_DIR = "/etc/vaelor"
 CONFIG_PATH = CONFIG_DIR + "/telegraf.conf"
+#: What the agent pins (``tls_ca``): the controller's household certificate
+#: authority's trust bundle - the root, plus the certificate still served while
+#: an existing install migrates - one or more PEM certificates (VD-212). The
+#: name predates the authority and is kept so a worker's file is replaced in
+#: place, not orphaned.
 CONTROLLER_CA_PATH = CONFIG_DIR + "/controller-ca.pem"
 
 #: The systemd unit name. One agent per worker.
@@ -141,7 +146,7 @@ def ingest_url(address: str, port: int) -> str:
     """The controller's keyed ingest URL a worker posts to.
 
     ``https`` because the appliance serves TLS; the worker verifies it against
-    the pinned controller certificate (see :func:`render_config`).
+    the household authority's trust bundle it pins (see :func:`render_config`).
     """
     clean = str(address or "").strip()
     if not clean:
@@ -241,11 +246,16 @@ def render_config(
     * ``[[inputs.exec]]`` runs the emitter and parses its ``influx`` output.
     * ``[[outputs.http]]`` POSTs to the keyed ingest route; the key is the
       ``Authorization: Bearer`` header, and it appears **only** here.
-    * TLS: the controller's cert is self-signed, so verification is pinned to the
-      shipped controller CA (``tls_ca``). Only when no CA path is available and
-      the caller has explicitly allowed it does this fall back to
-      ``insecure_skip_verify`` — and it says so in a comment, flagged as a
-      follow-up. It never silently disables verification.
+    * TLS: verification is pinned to the household authority's trust bundle
+      shipped beside the config (``tls_ca``; VD-212). Go reads every
+      certificate in that file, so the root and, while an existing install
+      migrates, the certificate still served are both trusted, and nothing in
+      the system store is. ``insecure_skip_verify`` is written only when no CA
+      path is given AND the caller explicitly opts in, which only a
+      development box does: an installed controller with nothing to pin
+      refuses before rendering (`WorkerTelemetryRuntime.install`, the profile's
+      ``telegraf-config``; `cluster_worker_profile.NOTHING_TO_PIN`). It never
+      silently disables verification.
     * A commented ``[[inputs.prometheus]]`` placeholder marks where E4's local
       vLLM/llama.cpp ``/metrics`` scrape will go. It is not wired now.
     """
@@ -282,15 +292,16 @@ def render_config(
     ]
     if tls_ca_path:
         lines += [
-            "  # Self-signed appliance cert, pinned: verify against the controller",
-            "  # CA shipped beside this config rather than trusting the system store.",
+            "  # Pinned: verify the controller against its household certificate",
+            "  # authority's trust bundle shipped beside this config, not the system",
+            "  # trust store.",
             '  tls_ca = "{}"'.format(tls_ca_path),
         ]
     elif allow_insecure_tls:
         lines += [
-            "  # FOLLOW-UP (E2b): no controller CA was pinned, so certificate",
-            "  # verification is disabled here. Ship and point tls_ca at the",
-            "  # controller cert to close this — do not leave it in production.",
+            "  # Development box only: this controller had nothing to pin, so",
+            "  # certificate verification is disabled. An installed controller",
+            "  # refuses to write this (VD-212); never leave it on a real machine.",
             "  insecure_skip_verify = true",
         ]
     else:

@@ -53,6 +53,7 @@ import time
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from .agent_backing import backing_identity, surface_digest
+from . import agent_memory
 from .agent_memory import memory_client_config, mint_memory_key
 from .agent_runtime_gate import AgentRuntimeGateError, assert_read_only, build_mcp_grant_gate
 from .agent_wake import wake_endpoint
@@ -750,6 +751,11 @@ class AgentPoolOperations:
             "pairs": [list(pair) for pair in surface["pairs"]],
             "servers": surface["servers"],
             "backing": identity,
+            # VD-212: what the agent pins for the control plane - the household
+            # root, and while an install migrates the certificate still served -
+            # so a new root, its first appearance, and the end of the migration
+            # each re-render the agent's pin (and its hostname check).
+            "controller_pin": agent_memory.pin_digest(agent_memory.controller_certificate_pem()),
         })
 
     def _build_config(

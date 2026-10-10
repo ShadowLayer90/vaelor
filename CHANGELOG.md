@@ -1,5 +1,74 @@
 # Change log
 
+## 1.5.1
+
+A fix release after 1.5: the console's certificate now comes from a household
+certificate authority, so the browser stops warning once you trust it, and the
+defects found by installing 1.5 cold from GitHub on fresh machines are fixed.
+
+### Household certificate authority
+
+- **The console's certificate comes from a household certificate authority.**
+  Each install creates its own root, which can vouch only for private
+  addresses and local names, and signs the console's certificate with it. The
+  installer no longer makes a self-signed certificate. At the end of the install
+  it prints the root's fingerprints and one command per operating system that
+  installs the root on your own devices only if the fingerprint matches.
+  Vaelor's own machines trust the root automatically. See `SECURE_ACCESS.md`.
+- **Renewed without a restart.** A new root service, `vaelor-tls-authority`,
+  renews the console's certificate before it expires and when the machine's
+  addresses change. The console and the browser desktop serve the new
+  certificate from the next connection. A console update installs and starts the
+  service too.
+- **Existing installs switch over safely.** Workers get the root first. The
+  console keeps its previous certificate until every worker the controller
+  reached recently holds the root (or up to 24 hours when there is no record of
+  the workers), then switches. An online worker without the root holds it up;
+  `vaelor.tls_authority promote` switches anyway. See `SECURE_ACCESS.md`.
+- **Keeping the root.** A keep-data uninstall keeps the root. A data purge
+  removes it, and also takes it out of the machine's trust store on a controller
+  or a worker. `install-vaelor.sh --import-authority FILE` restores a root
+  exported earlier, so your devices stay trusted (`--replace-authority` replaces
+  a different one already on the machine).
+- The installer checks the console's certificate against the root after the
+  health check. A mismatch is reported but does not fail the install.
+- The trust commands the installer prints use the console address it reports
+  (the machine's IP address), not its hostname, which other devices often cannot
+  resolve.
+
+### Cold-install fixes
+
+Found by wiping both machines and installing the published 1.5 release from
+GitHub as a first-time owner would.
+
+- **A leftover Docker Swarm no longer confuses the cluster.** The console, joining
+  a worker, app placement, capacity and the cluster manager now share one answer
+  to "is this machine the controller?". A Swarm left behind without Vaelor's
+  controller record shows as not set up, and **Review controller setup** adopts
+  it.
+- **Uninstall leaves less behind.** A data purge takes the machine out of a
+  Docker Swarm only when the Swarm is Vaelor's: Vaelor installed Docker, the
+  machine is an enrolled worker, or the purge is a bare-OS one. Any other Swarm
+  is left alone, and the command to leave it is printed. Uninstall also stops a
+  Vaelor account's processes before removing the account, and removes every
+  `vaelor-*` service, drop-in and leftover enablement link, and nothing else.
+- **A worker's GPU memory pool reading** is dated only by checks that actually
+  reached the worker, so a **Recheck** updates it instead of leaving it "not
+  read yet".
+- **The NPU model folder is readable after every install path.** Fetching the
+  model, the console's Install button and re-running the installer all leave it
+  `0755`/`0644`, with a test that keeps the three in step, and re-running the installer repairs a
+  folder an earlier release left unreadable.
+- The README says that the first visit creates the administrator account.
+
+### Licensing
+
+- **The Assistant's NPU model names its licence: Apache-2.0**, the licence of
+  Qwen3.5-4B and of FastFlowLM's NPU conversion it is built on.
+  `THIRD_PARTY_NOTICES.md` lists what Vaelor changed (the fine-tuned language
+  weights), and the release now carries `qwen35-4b-npu2.LICENSE.txt` beside the
+  model parts.
+
 ## 1.5
 
 The first release since 1.0 Beta 2. Vaelor grows from one appliance into a

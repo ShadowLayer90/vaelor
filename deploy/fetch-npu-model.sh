@@ -19,12 +19,12 @@
 #
 # Usage:  deploy/fetch-npu-model.sh
 # Env:    VAELOR_REPO (default ShadowLayer90/vaelor)
-#         VAELOR_RELEASE_TAG (default v1.5)
+#         VAELOR_RELEASE_TAG (default v1.5.1)
 #         FLM_MODELS_DIR (default /var/lib/vaelor/flm/models)
 set -Eeuo pipefail
 
 REPO="${VAELOR_REPO:-ShadowLayer90/vaelor}"
-TAG="${VAELOR_RELEASE_TAG:-v1.5}"
+TAG="${VAELOR_RELEASE_TAG:-v1.5.1}"
 MODELS_DIR="${FLM_MODELS_DIR:-/var/lib/vaelor/flm/models}"
 MODEL_NAME="Qwen3.5-4B-NPU2"
 PART_GLOB="qwen35-4b-npu2.tar.part*"
@@ -44,6 +44,22 @@ run_privileged() {
   else
     echo "ERROR: writing ${MODELS_DIR} needs root; re-run as root or install sudo." >&2
     exit 1
+  fi
+}
+
+# Give one installed model entry the modes the console needs to read it: every
+# directory 0755 and every file 0644. A symlink is skipped, and find does not
+# follow one below it, so nothing outside the entry changes. The installer's
+# normalise_npu_model_modes applies the same two modes to a model that is
+# already installed; tests/test_npu_model_modes.py holds the two together.
+normalise_model_modes() {
+  local entry="$1"
+  [[ -L "${entry}" ]] && return 0
+  if [[ -d "${entry}" ]]; then
+    run_privileged find "${entry}" -type d -exec chmod 0755 {} +
+    run_privileged find "${entry}" -type f -exec chmod 0644 {} +
+  elif [[ -f "${entry}" ]]; then
+    run_privileged chmod 0644 "${entry}"
   fi
 }
 
@@ -197,6 +213,21 @@ echo "Installing into ${MODELS_DIR} ..."
 # `npu_model_present()` check reads an empty/inaccessible dir and the model looks
 # absent. `install -d -m 0755` fixes the mode regardless of umask.
 run_privileged install -d -m 0755 "$MODELS_DIR"
-run_privileged tar -C "$MODELS_DIR" -xf "${tmp}/model.tar"
+# The archive's own modes are not the install's: the v1.5 release tar stores the
+# model folder 0770, and `tar -xf` as root keeps archived modes (and owners), so
+# the folder landed drwxrwx--- root:root and the console - user vaelor - could
+# not measure it ("Size unknown"). Extract without the archive's owners and
+# permissions, then set every entry the archive placed (read from tar's own
+# verbose list, so nothing else under ${MODELS_DIR} is touched) to 0755 for a
+# directory and 0644 for a file, whatever the umask was.
+# The list goes to a file, not a process substitution, so a failed extraction
+# still stops this script under `set -e`.
+run_privileged tar --no-same-owner --no-same-permissions \
+  -C "$MODELS_DIR" -xvf "${tmp}/model.tar" >"${tmp}/extracted.list"
+mapfile -t extracted < <(sed -e 's#^\./##' -e 's#/.*##' "${tmp}/extracted.list" | sort -u)
+for entry in "${extracted[@]}"; do
+  [[ -n "${entry}" && "${entry}" != "." && "${entry}" != ".." ]] || continue
+  normalise_model_modes "${MODELS_DIR}/${entry}"
+done
 
 echo "Done. NPU model installed at ${MODELS_DIR}/${MODEL_NAME}."

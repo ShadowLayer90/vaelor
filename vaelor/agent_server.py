@@ -152,21 +152,38 @@ def _memory_failure_reason(error: BaseException) -> str:
     return "the call raised {}".format(type(error).__name__)
 
 
-def pinned_certificate_context(ca_pem: str) -> ssl.SSLContext:
-    """A TLS client context that trusts exactly one certificate: the control plane's.
+def pinned_certificate_context(ca_pem: str, check_hostname: bool = True) -> ssl.SSLContext:
+    """A TLS client context that trusts only what the deploy pinned: the control plane's.
 
-    The deploy hands the agent the controller's own serving certificate (leaf
-    only). Trusting only that certificate - no system roots - is an exact pin:
-    no other key can complete the handshake, so a hostname comparison adds
-    nothing and is switched off. That keeps memory working when the advertise
-    address is not one of the names the certificate was minted for.
-    ``VERIFY_X509_PARTIAL_CHAIN`` lets a CA-issued leaf be the trust anchor too.
+    The deploy hands the agent every certificate of the controller's household
+    authority bundle (VD-212): the root, and while an existing install migrates
+    the certificate still served. No system roots. With the root pinned, the
+    controller's name is checked too (``check_hostname``): the authority's
+    console certificate carries the advertise address as an IP name, and the
+    check keeps any other certificate the root signs from passing as the
+    control plane. ``check_hostname=False`` only when the deploy said so for
+    a pre-VD-212 self-signed certificate (`agent_memory.pin_checks_hostname`),
+    which is an exact pin of one key. ``VERIFY_X509_PARTIAL_CHAIN`` lets that
+    pinned leaf be its own trust anchor.
     """
     context = ssl.create_default_context(cadata=ca_pem)
-    context.check_hostname = False
+    context.check_hostname = bool(check_hostname)
     context.verify_mode = ssl.CERT_REQUIRED
     context.verify_flags |= getattr(ssl, "VERIFY_X509_PARTIAL_CHAIN", 0)
     return context
+
+
+def pin_section_checks_hostname(section: Mapping[str, Any]) -> bool:
+    """The deploy's ``check_hostname`` for a memory or wake block (VD-212).
+
+    A block without it was rendered before VD-212 for an exact pin of the
+    served certificate, so it keeps that behaviour until the agent is
+    re-rendered (its surface digest carries the pinned set). Any other value
+    than an explicit ``False`` checks the name - the stricter answer.
+    """
+    if "check_hostname" not in section:
+        return False
+    return section.get("check_hostname") is not False
 
 
 class AgentServerConfigError(ValueError):
@@ -415,7 +432,7 @@ def build_memory_client(section: Any) -> Optional[AgentMemoryClient]:
     ca_pem = str(section.get("ca_pem") or "").strip()
     if ca_pem and urllib.parse.urlsplit(endpoint).scheme == "https":
         try:
-            context = pinned_certificate_context(ca_pem)
+            context = pinned_certificate_context(ca_pem, pin_section_checks_hostname(section))
         except (ssl.SSLError, ValueError):
             LOGGER.warning(_MEMORY_DISABLED_ON_BAD_BLOCK)
             return None

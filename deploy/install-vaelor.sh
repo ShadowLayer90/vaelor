@@ -34,6 +34,19 @@ hat_variant=""
 hat_installed=0
 migration_applied=0
 migration_complete=0
+# The household authority (VD-212): a root unique to this install signs the
+# console's certificate. --import-authority restores one the owner exported from
+# an earlier install, so the devices that already trust it stay trusted;
+# --replace-authority lets that import overwrite a different root kept here.
+import_authority=""
+replace_authority=0
+# The appliance venv's interpreter, which runs the authority and prints the
+# trust commands. The two paths below are vaelor/tls_paths.py's PUBLIC_ROOT and
+# PENDING_DIR, retyped because bash cannot import them;
+# tests/test_installer_provisioning.py compares the two.
+vaelor_venv_python="/opt/vaelor/venv/bin/python"
+household_public_root="/opt/vaelor/tls/household-root.crt"
+household_pending_dir="/opt/vaelor/tls/pending"
 # A cluster worker's controller manages its software (VD-194): the profile it
 # lays down leaves this marker, and a full install refuses while it is there
 # (refuse_full_install_on_worker). --leave-worker-role with the exact phrase
@@ -62,6 +75,7 @@ vaelor_units=(
   vaelor-application-research.service
   vaelor-workload-broker.service
   vaelor-workload-executor.service
+  vaelor-tls-authority.service
   vaelor-control-plane.service
   vaelor-vnc-gateway.service
   vaelor-vnc-tls-proxy.service
@@ -123,6 +137,17 @@ Usage: install-vaelor.sh [--wheel FILE] [options]
                        Accept SunFounder's terms (GPL-2.0, and what its
                        install.sh does - see the offer text) up front, so the
                        HAT offer needs no interactive consent.
+  --import-authority FILE
+                       Restore the household certificate authority exported
+                       from an earlier install (vaelor.tls_authority export), so
+                       the devices that already trust it keep trusting this
+                       console. Asks for its passphrase, or reads
+                       VAELOR_AUTHORITY_PASSPHRASE (run sudo with -E to pass
+                       it). Without this, a fresh install creates a new
+                       authority and keeps an existing one.
+  --replace-authority  With --import-authority: replace a DIFFERENT authority
+                       already on this machine. Every device that trusted the
+                       old one must trust the imported one instead.
 
 "User installs stock Ubuntu, we handle the rest": this installer provisions
 InfluxDB 1.x for telemetry retention and Docker for container workloads by
@@ -147,6 +172,8 @@ while (($#)); do
     --hat-variant) hat_variant="${2:-}"; shift 2 ;;
     --accept-sunfounder-terms) accept_sunfounder_terms=1; shift ;;
     --leave-worker-role) leave_worker_role="${2:-}"; shift 2 ;;
+    --import-authority) import_authority="${2:-}"; shift 2 ;;
+    --replace-authority) replace_authority=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -156,6 +183,17 @@ done
   echo "Run this installer as root." >&2
   exit 1
 }
+
+# Checked before anything is installed: an unreadable export found an hour into
+# an install would fail it after every package had already gone on.
+if [[ -n "${import_authority}" && ! -r "${import_authority}" ]]; then
+  echo "--import-authority: cannot read ${import_authority}; nothing was changed." >&2
+  exit 1
+fi
+if ((replace_authority)) && [[ -z "${import_authority}" ]]; then
+  echo "--replace-authority only applies with --import-authority FILE; nothing was changed." >&2
+  exit 1
+fi
 
 # Take the worker profile's own pieces off, marker last: the telemetry agent
 # and GPU sampler with their files, and the amd-smi preferences and holds. The
@@ -259,7 +297,7 @@ if [[ -z "${wheel}" ]]; then
     }
   fi
   wheel_repo="${VAELOR_REPO:-ShadowLayer90/vaelor}"
-  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5}"
+  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5.1}"
   wheel_dl_dir="$(mktemp -d)"
   echo "No local wheel; downloading it from ${wheel_repo} release ${wheel_tag} ..."
   wheel="$(VAELOR_REPO="${wheel_repo}" VAELOR_TAG="${wheel_tag}" \
@@ -925,6 +963,11 @@ fi
 install -d -m 0770 -o vaelor -g vaelor \
   /var/lib/vaelor/cluster /var/lib/vaelor/kvm
 install -d -m 0770 -o vaelor-vnc -g vaelor-vnc /var/lib/vaelor/vnc
+# The control plane's advisory record of which workers hold the household
+# trust bundle (tls_paths.FLEET_TRUST_STATE, VD-212). The control plane writes
+# it; the root authority service only reads it, to decide WHEN to promote a new
+# console certificate - never what to sign.
+install -d -m 0750 -o vaelor -g vaelor /var/lib/vaelor/tls
 install -d -m 0700 -o vaelor-secrets -g vaelor-credentials \
   /var/lib/vaelor/credentials
 # /run/vaelor is Vaelor's runtime directory: the credential-broker and workload
@@ -1155,36 +1198,37 @@ if [[ ! -f /etc/vaelor/credentials/master-key.cred ]]; then
 fi
 
 install -d -m 0750 -o root -g vaelor /opt/vaelor/tls
-# The appliance's self-signed cert MUST carry a subjectAltName, not a bare CN.
-# Modern TLS clients ignore CN entirely: Chrome shows a Privacy-error interstitial
-# without a SAN, and Go's crypto/tls (the worker telemetry agent, Telegraf)
-# refuses a cert for an IP address unless that IP is an IP SAN - so a CN-only cert
-# silently blocks every worker's keyed telemetry POST (VD-128 E2). The SAN covers
-# the hostname, localhost, and every global IPv4 this controller holds, so a
-# worker reaching it by its LAN IP and a browser reaching it by name both verify.
-_cert_san_list() {
-  local san="DNS:$(hostname),DNS:localhost,IP:127.0.0.1"
-  local fqdn ip
-  fqdn="$(hostname -f 2>/dev/null || true)"
-  [[ -n "${fqdn}" && "${fqdn}" != "$(hostname)" ]] && san="${san},DNS:${fqdn}"
-  while read -r ip; do
-    [[ -n "${ip}" ]] && san="${san},IP:${ip}"
-  done < <(ip -o -4 addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | sort -u)
-  printf '%s' "${san}"
+# The console's certificate comes from the household authority (VD-212): a root
+# unique to this install, name-constrained to private addresses and local names,
+# whose key is systemd-creds encrypted to this host under /etc/vaelor/authority.
+# `ensure` creates the root (or keeps the one a keep-data uninstall left),
+# issues or keeps the console's certificate - every name and address this
+# machine answers on, the same identity the authority service renews - and adds
+# the root to this machine's own trust store.
+#
+# **Fail loud, never fall back.** The self-signed certificate this used to make
+# with openssl is not a fallback for a failed authority: a console that quietly
+# served one would leave every device the owner trusted the root on facing a
+# warning, and every worker pinned to the root refusing it (LESSONS 1).
+establish_household_authority() {
+  if [[ -n "${import_authority}" ]]; then
+    local -a import_args=(import "${import_authority}")
+    ((replace_authority)) && import_args+=(--replace)
+    if ! "${vaelor_venv_python}" -m vaelor.tls_authority "${import_args[@]}"; then
+      echo "The household certificate authority in ${import_authority} could not" \
+        "be imported; the console was not given a certificate. See the message" \
+        "above." >&2
+      return 1
+    fi
+  fi
+  if ! "${vaelor_venv_python}" -m vaelor.tls_authority ensure; then
+    echo "The household certificate authority could not create or keep the" \
+      "console's certificate, so the install stops here rather than serve a" \
+      "certificate no device trusts. See the message above." >&2
+    return 1
+  fi
 }
-if [[ ! -f /opt/vaelor/tls/vaelor.crt ]]; then
-  # NOTE: only generated when absent. An appliance installed before this carried a
-  # CN-only cert; regenerate it WITH this SAN and re-pin its workers (reinstall
-  # worker telemetry, which re-ships the controller CA) to close the same gap.
-  openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 825 \
-    -subj "/CN=$(hostname)" \
-    -addext "subjectAltName=$(_cert_san_list)" \
-    -keyout /opt/vaelor/tls/vaelor.key \
-    -out /opt/vaelor/tls/vaelor.crt
-  chown root:vaelor /opt/vaelor/tls/vaelor.key /opt/vaelor/tls/vaelor.crt
-  chmod 0640 /opt/vaelor/tls/vaelor.key
-  chmod 0644 /opt/vaelor/tls/vaelor.crt
-fi
+establish_household_authority
 
 for unit in "${script_dir}"/systemd/vaelor-*.service; do
   install -m 0644 "${unit}" "/etc/systemd/system/$(basename "${unit}")"
@@ -1488,6 +1532,23 @@ install_fastflowlm() {
 }
 install_fastflowlm || true
 
+# Give each installed NPU model folder ($@, one per model under the FLM models
+# dir) the modes the console needs to read it: every directory 0755, every file
+# 0644. The same two modes deploy/fetch-npu-model.sh's normalise_model_modes
+# sets on a fresh extraction (tests/test_npu_model_modes.py holds the two
+# together). Only the model folders: the models dir itself, the runtime and
+# everything else under ${FLM_ROOT} keep their modes. A symlinked folder is
+# skipped, and find does not follow a link below one.
+normalise_npu_model_modes() {
+  local folder
+  for folder in "$@"; do
+    folder="${folder%/}"
+    [[ -d "${folder}" && ! -L "${folder}" ]] || continue
+    find "${folder}" -type d -exec chmod 0755 {} + || true
+    find "${folder}" -type f -exec chmod 0644 {} + || true
+  done
+}
+
 # The NPU Assistant model (Qwen3.5-4B-NPU2, ~3.35 GB) FastFlowLM serves. This is
 # the step that used to be a separate `deploy/fetch-npu-model.sh` run; folding it
 # in makes a fresh Strix Halo box turnkey (the owner's ask - one install command,
@@ -1497,7 +1558,8 @@ install_fastflowlm || true
 # Gated exactly like install_fastflowlm above (x86_64 with a neural-accelerator
 # device bound), so a host with no NPU never pulls 3.35 GB it cannot use. Opt out
 # with --without-npu-model to defer the large download. Idempotent: a model
-# already unpacked into the FLM models dir is left alone. Skipped on an offline
+# already unpacked into the FLM models dir is left alone (its modes apart - see
+# normalise_npu_model_modes below). Skipped on an offline
 # native-package install (the image carries the model). NON-FATAL on every
 # failure - an appliance never fails to install because the optional model could
 # not be fetched; the NPU Assistant reports unavailable until it is installed.
@@ -1526,6 +1588,10 @@ install_npu_model() {
   # subdirectory exists" rather than the model name so a future model rename
   # needs no change here.
   if compgen -G "${FLM_ROOT}/models/*/" >/dev/null 2>&1; then
+    # Left alone except for its modes: a model fetched before v1.5's fix kept
+    # the release tar's 0770 folder, which the console cannot read ("Size
+    # unknown"), and re-running the installer is how that box is repaired.
+    normalise_npu_model_modes "${FLM_ROOT}"/models/*/
     echo "An NPU Assistant model is already installed under ${FLM_ROOT}/models; leaving it alone."
     return 0
   fi
@@ -2190,6 +2256,35 @@ if ((healthy_samples < 3)); then
   systemctl status --no-pager "${vaelor_units[@]}" >&2 || true
   exit 1
 fi
+
+# Does the console's certificate verify against the household root, the way a
+# device that trusts the root will check it (VD-212)? The health gate above
+# uses --insecure on purpose - it asks whether Vaelor serves, not whether the
+# chain is right - so this is the one place the chain is actually verified.
+#
+# Non-fatal and said plainly either way: a console that serves is a working
+# install, and an existing install migrating to the household root keeps
+# serving its previous certificate until every worker has the root, which is
+# expected and not a failure.
+check_household_chain() {
+  if curl --fail --silent --show-error --max-time 5 \
+    --cacert "${household_public_root}" \
+    https://127.0.0.1:34001/api/v2/auth/status >/dev/null; then
+    echo "The console's certificate verifies against this install's household" \
+      "certificate authority."
+  elif compgen -G "${household_pending_dir}/*" >/dev/null; then
+    echo "The console still serves its previous certificate: the one the" \
+      "household authority issued is waiting until every worker trusts the" \
+      "authority, and is then swapped in without a restart."
+  else
+    echo "Warning: the console's certificate did not verify against the" \
+      "household certificate authority (${household_public_root}). Vaelor is" \
+      "serving; browsers will warn until this is fixed. Check" \
+      "journalctl -u vaelor-tls-authority." >&2
+  fi
+  return 0
+}
+check_household_chain
 # Re-apply this release's serving settings to models already deployed.
 #
 # The upgrade replaced the code that decides the engine digest, the prompt-cache
@@ -2247,7 +2342,26 @@ fi
 migration_complete=1
 trap - ERR
 
-echo "Vaelor is installed at https://$(hostname -I | awk '{print $1}'):34001/v2/"
+# The one address the owner is told to use: the installed-at line and the
+# trust commands both print it (a bare host name may not resolve on their PC).
+console_address="$(hostname -I | awk '{print $1}'):34001"
+echo "Vaelor is installed at https://${console_address}/v2/"
+
+# How to trust this console on the owner's own computers and phones (VD-212):
+# the root's fingerprint and one command per OS that downloads the root from
+# the console and installs nothing unless the fingerprint matches. The
+# installer cannot do this itself - those devices are not this machine's to
+# change. Printed last so it is what is on screen when the install ends;
+# non-fatal, because the console's Trust this Vaelor panel shows the same.
+print_trust_commands() {
+  echo
+  if ! "${vaelor_venv_python}" -m vaelor.tls_trust_commands --address "${console_address}"; then
+    echo "The trust commands could not be printed here; open the console's" \
+      "Settings > Connections > Trust this Vaelor for the same commands." >&2
+  fi
+  return 0
+}
+print_trust_commands
 
 # The one and only reboot, dead last: after every step above has succeeded (the
 # health gate would have exited non-zero otherwise) and after

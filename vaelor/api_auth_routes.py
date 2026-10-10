@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
-import ssl
 import time
 import uuid
-from pathlib import Path
 
-from flask import Response, g, request, send_file
+from flask import g, request, send_file
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from .appliance_recovery import (
@@ -121,55 +118,6 @@ def register_auth_routes(context: ApiContext) -> None:
     @blueprint.get("/auth/status")
     def auth_status():
         return _payload({"bootstrap_required": not security.has_users()})
-
-    @blueprint.get("/security/transport")
-    @require_auth("viewer")
-    def transport_security():
-        certificate_path = Path(env_value(
-            "VAELOR_TLS_CERT", "PM_TLS_CERT", ""
-        ))
-        fingerprint = ""
-        if certificate_path.is_file():
-            try:
-                pem = certificate_path.read_text(encoding="ascii")
-                fingerprint = hashlib.sha256(
-                    ssl.PEM_cert_to_DER_cert(pem)
-                ).hexdigest()
-            except (OSError, ValueError):
-                fingerprint = ""
-        return _payload({
-            "secure": request.is_secure,
-            "scheme": "https" if request.is_secure else "http",
-            "certificate_managed": bool(fingerprint),
-            "certificate_fingerprint": fingerprint,
-            "vnc_secure": bool(request.is_secure and fingerprint),
-            "remote_ready": bool(request.is_secure and fingerprint),
-        })
-
-    @blueprint.get("/security/certificate")
-    @require_auth("administrator")
-    def transport_certificate():
-        certificate_path = Path(env_value(
-            "VAELOR_TLS_CERT", "PM_TLS_CERT", ""
-        ))
-        try:
-            content = certificate_path.read_bytes()
-        except OSError:
-            return _payload(
-                error={
-                    "code": "certificate_unavailable",
-                    "message": "The local HTTPS certificate is not configured.",
-                },
-                status=404,
-            )
-        return Response(
-            content,
-            mimetype="application/x-pem-file",
-            headers={
-                "Content-Disposition": "attachment; filename=vaelor-local.crt",
-                "Cache-Control": "no-store",
-            },
-        )
 
     @blueprint.post("/auth/bootstrap")
     def bootstrap():

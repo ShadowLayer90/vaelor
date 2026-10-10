@@ -12,7 +12,7 @@ console, all on the box, nothing forced through the cloud. Add a second machine 
 the same console serves models across both.**
 
 ![License](https://img.shields.io/badge/license-GPL--2.0-blue)
-![Release](https://img.shields.io/badge/release-1.5-orange)
+![Release](https://img.shields.io/badge/release-1.5.1-orange)
 ![Flagship](https://img.shields.io/badge/flagship-HP%20Z2%20Mini%20G1a%20·%20Strix%20Halo-orange)
 ![Also runs on](https://img.shields.io/badge/also%20runs%20on-HP%20ZBook%20Ultra%20G1a%20·%20Raspberry%20Pi%205-informational)
 ![Arch](https://img.shields.io/badge/arch-x86--64%20%7C%20ARM64-lightgrey)
@@ -38,6 +38,18 @@ manage from `https://<host>:34001/v2/`.
 The assistant, the chat model, the databases, the search backend, and the credential
 vault all run **on the box**. What leaves the machine leaves only when you ask it to —
 for example when you choose to connect AI Chat to a hosted service.
+
+## 🆕 New in 1.5.1
+
+- **No more certificate warning once you trust your Vaelor.** Each install creates its own
+  household certificate authority, which can vouch only for private addresses and local
+  names, and the console's certificate comes from it. The installer prints one command per
+  operating system that trusts it on your own devices after checking its fingerprint, and
+  **Settings › Connections › Trust this Vaelor** repeats them with a QR code for phones. Workers
+  trust it automatically, and an existing install switches over without interrupting them.
+- **Cold-install fixes** found by installing 1.5 from GitHub on fresh machines: uninstall
+  leftovers, a leftover Docker Swarm, the worker's GPU memory reading and the NPU model
+  folder's permissions. See [CHANGELOG.md](CHANGELOG.md).
 
 ## 🆕 New in 1.5
 
@@ -241,10 +253,17 @@ git clone https://github.com/ShadowLayer90/vaelor.git ~/vaelor
 sudo ~/vaelor/deploy/install-vaelor.sh --unattended
 ```
 
-Then open the console at `https://<host>:34001/v2/`. The installer adopts Docker if it is
-already present and asks before installing it when it is not.
+Then open the console at `https://<host>:34001/v2/`. The installer creates a certificate
+authority unique to this install (the household root) and uses it to sign the console's
+certificate. At the end of the run it prints the root's fingerprint and one command per
+operating system that installs the root on your own computer, but only if the
+fingerprint matches. The console repeats them under **Settings › Connections › Trust
+this Vaelor**, with a QR code for phones. Until a device trusts the root, its browser warns on
+the first visit. See [SECURE_ACCESS.md](SECURE_ACCESS.md). The first visit asks you to
+create the administrator account. The installer adopts Docker if it is already present and asks before installing
+it when it is not.
 
-The installer downloads from the **`v1.5`** release by default. Set `VAELOR_RELEASE_TAG`
+The installer downloads from the **`v1.5.1`** release by default. Set `VAELOR_RELEASE_TAG`
 to install from another release (for example
 `sudo VAELOR_RELEASE_TAG=v1.5 ~/vaelor/deploy/install-vaelor.sh --unattended`), or pass
 `--wheel /path/to/…whl` to install a specific build. `deploy/fetch-npu-model.sh` reads the
@@ -321,7 +340,10 @@ and component boundaries.
 Powered by [FastFlowLM](https://github.com/ROCm/FastFlowLM): on-device inference on the
 Strix Halo NPU runs on it. Its orchestration code and CLI are MIT-licensed; its NPU binary
 kernels are proprietary and carry separate terms — Vaelor ships none of it, and the
-installer downloads the pinned upstream release. Single-machine GPU inference uses ROCm
+installer downloads the pinned upstream release. The Assistant's NPU model is a fine-tune
+of [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) and is licensed under Apache-2.0,
+like the model it is built on; its licence and the list of changes ship beside it on the
+release. Single-machine GPU inference uses ROCm
 builds of `llama.cpp`, including one for AMD's FP4 format; serving across machines uses
 [vLLM](https://github.com/vllm-project/vllm). Read
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) before redistributing anything from those

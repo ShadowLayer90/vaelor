@@ -118,9 +118,26 @@ as split assets on the Vaelor GitHub release (a release asset is capped at
 2 GB) and is verified against a SHA-256 pinned in the Vaelor wheel before it is
 unpacked. It is not part of the wheel or the source tree.
 
-The model is a derivative of Qwen3.5-4B and carries that model's licence terms
-as published by its authors; the converted format is produced with FastFlowLM's
-tooling. Check both sets of terms before redistributing the model yourself.
+**Licence: Apache License, Version 2.0.** It is a modified version of
+[Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) (Copyright 2026 Alibaba
+Cloud, Apache-2.0), built on FastFlowLM's NPU conversion of that model,
+[FastFlowLM/Qwen3.5-4B-NPU2](https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2),
+which is also Apache-2.0. What Vaelor changed:
+
+- `model.q4nx`: the language weights were fine-tuned (full-parameter) on
+  examples of Vaelor's tool calls, then converted to FastFlowLM's q4nx format.
+- `tokenizer.json` differs from FastFlowLM's published file, and `config.json`
+  is FastFlowLM's file with its `flm_version` set to 1.0.2.
+- `vision_weight.q4nx`, `tokenizer_config.json` and `chat_template.jinja` are
+  FastFlowLM's files, unchanged.
+
+The release that carries the model parts also carries
+`qwen35-4b-npu2.LICENSE.txt`: the full licence text, the copyright notice and
+this list of changes. Keep that file with the model if you redistribute it.
+
+The model's licence covers the weights only. Running them on the NPU uses
+FastFlowLM's runtime and its proprietary NPU kernels, whose separate terms are
+described above.
 
 ## Hugeicons
 

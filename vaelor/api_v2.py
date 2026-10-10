@@ -12,6 +12,7 @@ from .api_backup_routes import register_backup_routes
 from .api_workload_act_routes import register_workload_act_routes
 from .api_application_routes import register_application_routes
 from .api_auth_routes import register_auth_routes
+from .api_trust_routes import register_trust_routes
 from .api_common import ApiContext
 from .api_chat_routes import register_chat_routes
 from .api_chat_thinking_routes import register_chat_thinking_routes
@@ -52,6 +53,7 @@ def create_api_v2_blueprint(
     callbacks.setdefault("chat_turn_dedupe", ChatTurnDedupe())
     context = ApiContext(callbacks, store)
     register_auth_routes(context)
+    register_trust_routes(context)
     register_hardware_routes(context)
     register_telemetry_history_routes(context)
     register_telemetry_ingest_routes(context)

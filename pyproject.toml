@@ -24,7 +24,7 @@ dependencies = [
   "influxdb",
   "pyudev",
   "configupdater",
-  "cryptography>=41",
+  "cryptography>=43",
   "packaging",
   "paramiko>=3.4",
   "websockify>=0.12",
@@ -32,6 +32,7 @@ dependencies = [
   "pypdf>=6",
   "xlrd>=2",
   "PyYAML>=6,<7",
+  "segno>=1.6,<2",
 ]
 
 [project.scripts]
@@ -56,7 +57,7 @@ pm_system_update = "pm_dashboard.system_update:main"
 include = ["pm_dashboard*", "vaelor*"]
 
 [tool.setuptools.package-data]
-vaelor = ["www_v2/**/*", "appliance_units/*.service", "build_stamp.json", "worker_profile_keys/*.gpg"]
+vaelor = ["www_v2/**/*", "appliance_units/*.service", "build_stamp.json", "worker_profile_keys/*.gpg", "data/*.txt"]
 
 [tool.setuptools.data-files]
 "share/doc/vaelor" = [

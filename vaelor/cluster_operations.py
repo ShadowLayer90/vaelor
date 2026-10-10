@@ -27,7 +27,9 @@ from .cluster_llm_deploy import (
 )
 from .cluster_eviction import ArchitectureEviction
 from .cluster_node_removal import remove_worker_node
-from .cluster_store import NODE_NOT_FOUND, ClusterStore
+from .cluster_store import (
+    CONTROLLER_NOT_SET_UP, NODE_NOT_FOUND, ClusterStore, controller_recorded,
+)
 from .credential_broker import CredentialBrokerClient
 from .ssh_transport import SshTransport
 from .cluster_app_deploy import (
@@ -197,8 +199,8 @@ class ClusterOperations(ClusterAgentOperationsMixin):
         if node is None:
             raise ValueError(NODE_NOT_FOUND)
         controller = self.store.controller()
-        if not controller.get("initialized") or not controller.get("advertise_address"):
-            raise ValueError("Initialize the head controller before joining workers.")
+        if not controller_recorded(controller):
+            raise ValueError(CONTROLLER_NOT_SET_UP)
         existing_swarm_id = str(node.get("labels", {}).get("swarm_node_id", ""))
         if node.get("state") == "joined" and existing_swarm_id:
             runtime_ids = {
@@ -751,11 +753,9 @@ class ClusterOperations(ClusterAgentOperationsMixin):
         if not (
             status.get("initialized")
             and status.get("control_available")
-            and controller.get("initialized")
+            and controller_recorded(controller)
         ):
-            raise ValueError(
-                "Initialize this controller before placing an LLM server on it."
-            )
+            raise ValueError(CONTROLLER_NOT_SET_UP)
         swarm_node_id = str(
             controller.get("cluster_id") or status.get("node_id") or ""
         )

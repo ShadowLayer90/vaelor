@@ -63,17 +63,29 @@ def plan_initialize(
         raise ClusterPlanError(
             "cluster_controller_address", str(error)
         ) from error
+    runtime = context.summary.get("runtime") or {}
+    # `initialize` adopts a Swarm Docker already runs here rather than creating
+    # one (Docker refuses `swarm init` on a manager), so the plan says so -
+    # an uninstall can leave one behind (v1.5 cold install, LESSONS 6).
+    adopting = bool(runtime.get("swarm_active") and runtime.get("control_available"))
+    steps = [
+        "Adopt the cluster Docker already runs on this node, likely kept "
+        "from an earlier installation, instead of creating a new one.",
+        f"Record {advertise_address} as the address workers join on (TCP 2377).",
+        "Machines that cluster still lists from before are not enrolled; "
+        "add each again with Add machine.",
+    ] if adopting else [
+        "Enable Docker Swarm manager mode on this Vaelor node.",
+        f"Advertise {advertise_address} on TCP 2377 for worker joins.",
+        "Keep workload traffic inside Docker's encrypted node control plane.",
+    ]
     return {
         # "Pi" is a board name, and this plan is read on x86 workstations too;
         # "this node" is the machine-class-neutral term the rest of the cluster
         # copy already uses ("make this node the head controller"), so it stays
         # correct on every machine instead of asserting a Raspberry Pi.
         "title": "Initialize this node as the head controller",
-        "steps": [
-            "Enable Docker Swarm manager mode on this Vaelor node.",
-            f"Advertise {advertise_address} on TCP 2377 for worker joins.",
-            "Keep workload traffic inside Docker's encrypted node control plane.",
-        ],
+        "steps": steps,
         "impact": "Existing standalone Compose apps remain standalone and are not migrated.",
         "approval_required": True,
     }
