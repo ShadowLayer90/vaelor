@@ -42,18 +42,23 @@ from .cluster_placement import (
 from .gpu_model_catalog import GPU_MODEL_CATALOG
 from .bridge_transport import default_bridge_transport
 from .gpu_pool_pull import (
-    PULL_INCOMPLETE_MESSAGE, PULL_TRANSPORT_FAILURES, classify_pull,
+    DRAFT_PULL_LABEL, PULL_INCOMPLETE_MESSAGE, PULL_TRANSPORT_FAILURES, classify_pull,
 )
 from .gpu_pool_runtime import GpuPoolRuntime
 from .hf_model_source import resolve_model_source
 from .ssh_transport import SshTransport, SshTransportError
+from .vllm_drafters import DRAFTERS, Drafter, drafters_for
 from .vllm_images import download_line
+from .vllm_serve_advanced import default_drafter
 
 #: The phases the launcher may report, in the order they occur. Used here only to
 #: give an honest message when no percent has been written yet; whether the pull
 #: is OVER is `GpuPoolRuntime.pull_verdict`'s call, which asks systemd first and
 #: only then lets the phase corroborate a clean exit.
 _PULL_PHASES = ("starting", "fetching", "verifying", "done", "error")
+
+#: What a cache row says between its pull unit starting and its first poll.
+_PULL_STARTING = "Pull starting"
 
 
 class GpuModelLibrary:
@@ -156,6 +161,12 @@ class GpuModelLibrary:
         ]
         report = progress or (lambda _percent, _message: None)
         transports = {node["id"]: self._transport(node) for node in nodes}
+        # VD-214: the draft model a default deploy of this model serves with,
+        # fetched here too so a pre-downloaded model deploys without waiting
+        # on it. ``None`` for a model with none: nothing else is fetched.
+        drafter = default_drafter(repo)
+        band = _bands(repo, drafter)
+        images: Dict[str, str] = {}
 
         started: Dict[str, str] = {}
         revision_key = revision or ""
@@ -172,6 +183,7 @@ class GpuModelLibrary:
                 # none downloads the default, and the job says so.
                 transport = transports[node["id"]]
                 image = self.runtime.pull_image_key(transport)
+                images[node["id"]] = image
                 self.runtime.ensure_image(
                     transport, image=image,
                     on_download=lambda profile, node=node, index=index: report(
@@ -184,7 +196,7 @@ class GpuModelLibrary:
                 )
                 self.store.put_model_cache(
                     node_id=node["id"], repo=repo, revision=revision_key,
-                    state="pulling", unit=info["unit"], message="Pull starting",
+                    state="pulling", unit=info["unit"], message=_PULL_STARTING,
                 )
                 started[node["id"]] = info["unit"]
         except Exception:
@@ -194,7 +206,69 @@ class GpuModelLibrary:
             # mirroring the B1 deploy rollback.
             self._rollback_started(transports, started, repo, revision_key)
             raise
-        return self._poll(nodes, transports, started, repo, revision_key, report)
+        result = self._poll(
+            nodes, transports, started, repo, revision_key, report, band[0],
+        )
+        result["drafter"] = None
+        if drafter is not None:
+            result["drafter"] = self._pull_drafter(
+                nodes, transports, images, result, drafter, report, band[1],
+            )
+        report(100, f"Model cache pull finished for {repo}")
+        return result
+
+    def _pull_drafter(
+        self, nodes, transports, images, result, drafter: Drafter, report, band,
+    ) -> Dict[str, Any]:
+        """Fetch ``drafter`` at its pinned commit onto the nodes that cached the model.
+
+        The same runtime start/poll pair and the same poll loop as the model's
+        own pull, in the image that pull ran in, so the drafter lands in the
+        same hub cache the deploy's fetch (`gpu_pool_pull`) would put it in. A
+        node whose model pull failed gets no drafter: it has nothing to draft
+        for. Its rows are ordinary cache rows, so the library lists, sizes and
+        removes it like any model.
+        """
+        ready = {entry["node_id"] for entry in result["nodes"] if entry["state"] == "ready"}
+        targets = [node for node in nodes if node["id"] in ready]
+        started: Dict[str, str] = {}
+        try:
+            for node in targets:
+                info = self.runtime.start_model_pull(
+                    transports[node["id"]], repo=drafter.repo,
+                    revision=drafter.revision, image=images[node["id"]],
+                )
+                self.store.put_model_cache(
+                    node_id=node["id"], repo=drafter.repo, revision=drafter.revision,
+                    state="pulling", unit=info["unit"], message=_PULL_STARTING,
+                )
+                started[node["id"]] = info["unit"]
+        except (SshTransportError, ValueError, RuntimeError) as error:
+            # Adversarial review 1: a drafter that cannot START is the same
+            # outcome as one whose download fails - the model is cached and
+            # its draft model is not - so it is recorded the same way, as
+            # error rows the job message reads, never as a failed job over
+            # weights that are on disk.
+            self._rollback_started(transports, started, drafter.repo, drafter.revision)
+            reason = DRAFTER_START_FAILED.format(error=error)
+            outcome = []
+            for node in targets:
+                if node["id"] not in started:
+                    self.store.put_model_cache(
+                        node_id=node["id"], repo=drafter.repo,
+                        revision=drafter.revision, state="error", message=reason,
+                    )
+                outcome.append({"node_id": node["id"], "name": node["name"],
+                                "state": "error", "message": reason})
+            return dict(_drafter_summary(drafter), nodes=outcome,
+                        ready_node_count=0, failed_node_count=len(outcome))
+        label = DRAFT_PULL_LABEL.format(gb=round(drafter.weight_bytes / 1e9, 1))
+        polled = self._poll(
+            targets, transports, started, drafter.repo, drafter.revision, report,
+            band, label=label,
+        )
+        polled.update(_drafter_summary(drafter))
+        return polled
 
     def _rollback_started(self, transports, started, repo, revision_key) -> None:
         for node_id, unit in started.items():
@@ -209,7 +283,8 @@ class GpuModelLibrary:
             )
 
     def _poll(
-        self, nodes, transports, started, repo, revision_key, report,
+        self, nodes, transports, started, repo, revision_key, report, band,
+        *, label: str = "",
     ) -> Dict[str, Any]:
         by_id = {node["id"]: node for node in nodes}
         remaining = dict(started)
@@ -248,8 +323,8 @@ class GpuModelLibrary:
                 percents[node_id] = _progress_percent(progress_data)
                 phase = _progress_phase(progress_data)
                 report(
-                    _overall_percent(percents),
-                    f"{node['name']}: {_phase_message(phase, percents[node_id])}",
+                    _overall_percent(percents, band),
+                    f"{node['name']}: {label}{_phase_message(phase, percents[node_id])}",
                 )
                 if state in {"pending", "running"}:
                     self.store.put_model_cache(
@@ -287,7 +362,9 @@ class GpuModelLibrary:
             )
             results[node_id] = {"node_id": node_id, "state": "error", "message": reason}
 
-        report(100, f"Model cache pull finished for {repo}")
+        for node in nodes:
+            # The job message names machines, not ids (:func:`pull_job_message`).
+            results[node["id"]]["name"] = node["name"]
         ready = [r for r in results.values() if r["state"] == "ready"]
         return {
             "repo": repo,
@@ -389,6 +466,10 @@ class GpuModelLibrary:
         The pull units are stopped *before* the ``rm -rf``: a still-running pull
         writes into the very directory being cleared, so removing first would
         race a live downloader and leave it re-creating what was just deleted.
+
+        VD-214: each node's entry also says what became of the model's draft
+        models (``drafters_removed``, ``drafters_kept`` with the reason) - see
+        :meth:`_remove_drafters`.
         """
         if payload.get("confirm") != "remove-cluster-model":
             raise ValueError("Confirm the reviewed cached-model removal.")
@@ -423,10 +504,55 @@ class GpuModelLibrary:
                     pass
             path = self.runtime.remove_model_cache(transport, repo)
             rows_removed = self.store.delete_model_cache_repo(node_id, repo)
-            removed.append(
-                {"node_id": node_id, "path": path, "rows_removed": rows_removed}
-            )
+            entry = {"node_id": node_id, "name": node.get("name", node_id),
+                     "path": path, "rows_removed": rows_removed}
+            entry.update(self._remove_drafters(transport, node_id, repo))
+            removed.append(entry)
         return {"repo": repo, "removed": removed}
+
+    def _remove_drafters(self, transport, node_id, repo) -> Dict[str, Any]:
+        """Remove the draft models ``repo`` used on ``node_id`` that nothing there still needs.
+
+        VD-214: the library's download fetched the drafter beside the model,
+        and a deploy may have fetched it with no cache row at all, so it is
+        removed by repo whether or not a row names it - a removal is ``rm -rf``
+        of one hub directory, harmless when absent. It stays while another
+        model on the machine it drafts for is cached, or while a deployment
+        there serves with it (:func:`_drafter_kept_reason`).
+
+        Adversarial review 1: the cache rows and the deployments are read
+        HERE, after the model's own removal and just before the drafter's,
+        not reused from :meth:`remove`'s check - a deploy of another model
+        it drafts for may have started in between. Deployments that cannot
+        be read keep the drafter: not known is never "unused".
+        """
+        done: Dict[str, List[Dict[str, Any]]] = {
+            "drafters_removed": [], "drafters_kept": [],
+        }
+        drafters = drafters_for(repo)
+        if not drafters:
+            return done
+        rows = list(self.store.list_model_cache())
+        deployments = self._read_deployments()
+        for drafter in drafters:
+            users = _deployments_using(deployments, drafter.repo, node_id)
+            reason = DRAFTER_KEPT_UNKNOWN if users is None else _drafter_kept_reason(
+                drafter, repo, node_id, rows, users,
+            )
+            if reason:
+                done["drafters_kept"].append({"repo": drafter.repo, "reason": reason})
+                continue
+            for unit in self._units_for(node_id, drafter.repo):
+                try:
+                    self.runtime.stop_pull_unit(transport, unit)
+                except (SshTransportError, ValueError):
+                    pass
+            done["drafters_removed"].append({
+                "repo": drafter.repo,
+                "path": self.runtime.remove_model_cache(transport, drafter.repo),
+                "rows_removed": self.store.delete_model_cache_repo(node_id, drafter.repo),
+            })
+        return done
 
     def _read_deployments(self) -> Optional[List[Mapping[str, Any]]]:
         """Every deployment row, read ONCE per listing or removal; ``None`` if unreadable."""
@@ -495,6 +621,13 @@ class GpuModelLibrary:
             using = _deployments_using(deployments, row["repo"], row["node_id"])
             row["in_use_known"] = using is not None
             row["in_use_by"] = using or []
+            # VD-214: a draft model's row says which models it drafts for, so
+            # the library does not list 1.4 GB of unexplained weights.
+            drafts_for = [
+                list(item.targets) for item in DRAFTERS.values() if item.repo == row["repo"]
+            ]
+            if drafts_for:
+                row["draft_model_for"] = drafts_for[0]
             entry["models"].append(row)
         return {"models": rows, "nodes": list(by_node.values())}
 
@@ -545,6 +678,84 @@ IN_USE_REFUSAL = (
 )
 
 
+#: A drafter download that could not be started on a machine (VD-214).
+DRAFTER_START_FAILED = "The draft model's download could not be started: {error}"
+
+
+def _drafter_summary(drafter: Drafter) -> Dict[str, Any]:
+    return {"repo": drafter.repo, "revision": drafter.revision,
+            "weight_bytes": drafter.weight_bytes}
+
+
+def _machines(entries: List[Mapping[str, Any]]) -> str:
+    return ", ".join(str(entry.get("name") or entry["node_id"]) for entry in entries)
+
+
+def pull_job_message(result: Mapping[str, Any]) -> str:
+    """The pull job's last line: where the model and its draft model are cached, and where not.
+
+    VD-214 (adversarial review 1): one verdict however the draft model's
+    download failed, said in the operation dialog the library's job shows,
+    with what it means - a deploy there fetches it then. A model cached
+    nowhere is never called cached (LESSONS 1).
+    """
+    entries = list(result.get("nodes") or [])
+    ready = [entry for entry in entries if entry["state"] == "ready"]
+    failed = [entry for entry in entries if entry["state"] != "ready"]
+    if not ready:
+        return PULL_CACHED_NOWHERE.format(machines=_machines(failed))
+    words = [PULL_CACHED_ON.format(machines=_machines(ready))]
+    if failed:
+        words.append(PULL_NOT_CACHED_ON.format(machines=_machines(failed)))
+    drafter = result.get("drafter")
+    if drafter:
+        missing = [entry for entry in drafter["nodes"] if entry["state"] != "ready"]
+        words.append(DRAFTER_NOT_CACHED_ON.format(
+            machines=_machines(missing),
+            gb=round(int(drafter.get("weight_bytes") or 0) / 1e9, 1),
+        ) if missing else DRAFTER_CACHED_TOO)
+    return " ".join(words)
+
+
+def remove_job_message(result: Mapping[str, Any]) -> str:
+    """The remove job's last line, saying what became of the draft model on each machine."""
+    words = [REMOVED_WEIGHTS]
+    for entry in result.get("removed") or []:
+        name = entry.get("name") or entry["node_id"]
+        if entry.get("drafters_removed"):
+            words.append(DRAFTER_REMOVED_ON.format(machine=name))
+        for kept in entry.get("drafters_kept") or []:
+            words.append(DRAFTER_KEPT_ON.format(machine=name, reason=kept["reason"]))
+    return " ".join(words)
+
+
+PULL_CACHED_ON = "Model weights cached on {machines}."
+PULL_NOT_CACHED_ON = "They were not cached on {machines}; the model library shows why."
+PULL_CACHED_NOWHERE = (
+    "The model weights were not cached on {machines}; the model library shows why."
+)
+DRAFTER_CACHED_TOO = "Its draft model was cached beside them."
+DRAFTER_NOT_CACHED_ON = (
+    "Its draft model was not cached on {machines}, so a deploy there fetches "
+    "it then ({gb} GB); the model library shows why."
+)
+REMOVED_WEIGHTS = "Cached model weights removed."
+DRAFTER_REMOVED_ON = "Its draft model was removed from {machine} too."
+DRAFTER_KEPT_ON = "Its draft model stays on {machine}. {reason}"
+
+#: Why a removed model's draft model stayed on the machine (VD-214).
+DRAFTER_KEPT_UNKNOWN = (
+    "Kept: Vaelor could not read the cluster's deployments, so it cannot tell "
+    "whether one serves with it. Remove it from the library later."
+)
+DRAFTER_KEPT_FOR_MODEL = (
+    "Kept: it also drafts for {models}, still cached on this machine."
+)
+DRAFTER_KEPT_FOR_DEPLOYMENT = (
+    "Kept: {users} serves with it on this machine."
+)
+
+
 def _progress_percent(progress_data: Dict[str, Any]) -> Optional[int]:
     """The launcher's reported percent, clamped to 0-100, or ``None`` if absent.
 
@@ -578,21 +789,48 @@ def _phase_message(phase: str, percent: Optional[int]) -> str:
     return f"fetching weights ({percent}%)"
 
 
-def _overall_percent(percents: Dict[str, Optional[int]]) -> int:
-    """A truthful aggregate percent for the job checkpoint (a 15-95 band).
+#: The job checkpoint's band for a pull: never 0 while work runs, never 100
+#: before the poll records completion.
+_PULL_BAND = (15, 95)
+
+
+def _bands(repo: str, drafter: Optional[Drafter]):
+    """``(model band, drafter band)``: the pull band shared by bytes, so progress never runs back.
+
+    VD-214: with a draft model the library makes two downloads, one after the
+    other. Each gets the share of the band its weights are of the whole, from
+    the catalog's measured size - a model with a default drafter is always a
+    catalog entry - so the checkpoint climbs once from 15 to 95.
+    """
+    if drafter is None:
+        return _PULL_BAND, None
+    low, high = _PULL_BAND
+    model_bytes = next(
+        (int(entry["weight_bytes"]) for entry in GPU_MODEL_CATALOG.values()
+         if entry["repo"] == repo), 0,
+    )
+    total = model_bytes + drafter.weight_bytes
+    split = low + int((high - low) * (model_bytes / total if total else 0.5))
+    return (low, split), (split, high)
+
+
+def _overall_percent(percents: Dict[str, Optional[int]], band=_PULL_BAND) -> int:
+    """A truthful aggregate percent for the job checkpoint, inside ``band``.
 
     Averages only the nodes that have actually reported a percent, and maps that
-    into a 15-95 band so the checkpoint never claims 0 while work is running nor
-    100 before the poll records completion. Nodes with no report yet count as 0
-    of their own progress, so the band cannot run ahead of the slowest launcher.
+    into the band (15-95 for the whole pull, :func:`_bands`) so the checkpoint
+    never claims 0 while work is running nor 100 before the poll records
+    completion. Nodes with no report yet count as 0 of their own progress, so
+    the band cannot run ahead of the slowest launcher.
     """
+    low, high = band
     if not percents:
-        return 15
+        return low
     known = [value for value in percents.values() if value is not None]
     if not known:
-        return 15
+        return low
     average = sum(known) / len(percents)
-    return 15 + int(80 * max(0.0, min(100.0, average)) / 100)
+    return low + int((high - low) * max(0.0, min(100.0, average)) / 100)
 
 
 def _deployments_using(
@@ -604,7 +842,9 @@ def _deployments_using(
     ``model_id``) and places a part on the node, in a state that will read
     the weights again: serving, loading, or paused (a paused deployment is
     the scale-to-zero rest state, woken on the next request). A failed or
-    removed one does not hold them. ``None`` when the deployments could not
+    removed one does not hold them. VD-214: a deployment that serves WITH a
+    draft model reads the drafter's weights on that wake too, so it holds
+    the drafter's repo as it holds its model's. ``None`` when the deployments could not
     be read: not known, and never "unused".
     """
     if deployments is None:
@@ -617,8 +857,42 @@ def _deployments_using(
         state = str(record.get("state", ""))
         if state not in _HOLDING_STATES:
             continue
-        named = str(units.get("repo") or record.get("model_id") or "")
-        if named == repo and node_id in list(record.get("node_ids") or []):
+        named = {str(units.get("repo") or record.get("model_id") or ""),
+                 _served_drafter_repo(units)}
+        if repo in named and node_id in list(record.get("node_ids") or []):
             users.append({"name": str(record.get("name", "")), "state": state,
                           "state_label": _HOLDING_STATES[state]})
     return users
+
+
+def _served_drafter_repo(units: Mapping[str, Any]) -> str:
+    """The repo of the draft model a deployment's recorded options serve with, or ``""``."""
+    options = units.get("vllm_options")
+    chosen = options.get("drafter") if isinstance(options, Mapping) else None
+    key = chosen.get("key") if isinstance(chosen, Mapping) else None
+    drafter = DRAFTERS.get(key) if isinstance(key, str) else None
+    return drafter.repo if drafter is not None else ""
+
+
+def _drafter_kept_reason(
+    drafter: Drafter, removed_repo: str, node_id: str,
+    rows: List[Mapping[str, Any]], users: List[Dict[str, str]],
+) -> str:
+    """Why ``drafter`` stays on ``node_id`` once ``removed_repo`` goes, or ``""`` to remove it.
+
+    VD-214: kept while another cached (or caching) model on the machine is one
+    it drafts for - a deploy of that model would fetch it again - or while a
+    deployment there serves with it (``users``, :func:`_deployments_using`).
+    """
+    others = sorted({
+        str(row["repo"]) for row in rows
+        if row["node_id"] == node_id and row["repo"] != removed_repo
+        and row["repo"] in drafter.targets and row.get("state") in {"ready", "pulling"}
+    })
+    if others:
+        return DRAFTER_KEPT_FOR_MODEL.format(models=", ".join(others))
+    if users:
+        return DRAFTER_KEPT_FOR_DEPLOYMENT.format(users="; ".join(
+            "'{}' ({})".format(user["name"], user["state_label"]) for user in users
+        ))
+    return ""

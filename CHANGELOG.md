@@ -1,5 +1,146 @@
 # Change log
 
+## 1.5.2
+
+A speed release for the cluster's recommended model, Qwen3-30B-A3B, on the AMD
+Strix Halo GPU. For one person it now writes about two and a half to three
+times as fast as in 1.5.1, long prompts are read more than twice as fast, and
+accuracy on a standard coding test is unchanged. The model speed figures below
+were measured on the HP Z2 Mini G1a.
+
+### Upgrading from 1.5.1
+
+- **Re-run the installer** (`git pull` in the clone, then
+  `sudo ~/vaelor/deploy/install-vaelor.sh --unattended`). The installer
+  downloads vLLM's attention fix (below) and builds the speed-up pieces on each
+  machine; the console's update installs 1.5.2 but does not download that fix,
+  and without it the model serves without its guesser. A cluster model that is
+  serving is reloaded by the installer, which takes it offline for a minute or
+  two. Each worker gets its own copies when the controller next installs its
+  serving software.
+- **A 30B deployed under 1.5.1 keeps most of the settings it was deployed
+  with**, since a deployment serves again the way it was made (a Load only adds
+  the step merging on a Strix Halo GPU). To get the guesser, Vaelor's GPU
+  routines and the new defaults, remove that deployment and deploy the model
+  again from the console after re-running the installer. Its first start uses
+  the full-size guesser while the 4-bit copy is built in the background; Unload
+  and Load it once afterwards to switch to the 4-bit copy.
+
+### The cluster model is faster
+
+One person, measured on the Z2 Mini, 1.5.1 against 1.5.2:
+
+- a short coding test (the first ten HumanEval problems) as run by the Ornith
+  project: about 52 to 164 tokens (word pieces) a second;
+- short coding answers: about 52 to 172 tokens a second;
+- long answers: about 52 to 122 tokens a second;
+- the first word for a 6,400-token prompt: about 5.3 to 2.0 seconds.
+
+Two to eight people at once also get faster. Accuracy is unchanged:
+on HumanEval (164 coding problems, graded by their official tests) the model
+passes 153 or 154, against 154 without any of this; a few borderline problems
+flip between any two runs.
+
+What does it:
+
+- **A small "guesser" model.** The 30B now serves with a small draft model
+  (RedHat's DFlash guesser for this model, about 1.4 GB, downloaded when you
+  deploy it) that proposes the next few tokens; the big model checks them in a
+  single step and keeps only the tokens it agrees with. At most eight
+  requests run at once per machine, and the guesser looks further ahead when
+  fewer people are using it. The model library downloads the guesser with the
+  model, and Remove deletes it too unless a deployment still uses it.
+- **An Advanced section in the deploy form** for the request limit, how much
+  is read per step, the guesser, how far it looks ahead, and vLLM's newer
+  runner (vLLM's newer way of running each step, which keeps the GPU's
+  recorded replay of a whole step working with the guesser). It starts from
+  the model's recommended values.
+- **Long prompts stay fast with the guesser.** vLLM's attention code slowed
+  down sharply on long prompts when checking guesses. The installer downloads
+  an upstream vLLM fix (pull request #59448) and applies it on each machine to
+  that machine's own copy of vLLM, with Vaelor's own changes on top, and uses
+  the result only if its fingerprint (SHA-256) matches. Vaelor ships no vLLM
+  code. A machine that cannot get the fix serves without the guesser, and the
+  console says why.
+- **Vaelor's own GPU routines.** The model's heaviest parts (its expert layers,
+  its 4-bit dense layers and its attention) run on routines Vaelor wrote for
+  Strix Halo. One of them is built on each machine inside a locked-down
+  container (no network, no GPU, read-only), checked by fingerprint before
+  every use; if anything is refused, the next-best routine serves and the log
+  says why. They switch on only on gfx1151 (the Radeon 8060S graphics in AMD
+  Strix Halo); any other GPU uses vLLM's own.
+- **Faster prompt reading.** New routines for reading the prompt make long
+  prompts more than twice as fast to read as in 1.5.1.
+- **Step merging.** Two small GPU steps in each attention layer are now done
+  as one, so each word needs fewer separate GPU jobs.
+- **A 4-bit guesser, built on your machine.** The installer makes a 4-bit copy
+  of the downloaded guesser on each machine, inside the same kind of
+  locked-down container, so the guesser reads less memory per step. Every file
+  must match its pinned fingerprint, or the full-size guesser serves instead
+  with a plain reason; it never stops the model from serving. Nothing extra is
+  downloaded, and Vaelor ships no model file.
+- **Old copies are cleaned up.** The installer removes retired versions of
+  these routines, never one that a running model or a deployment still uses.
+
+The last batch of this work, compared with the build before it: one person's
+writing steps are 6 to 8% faster, the Ornith coding test rose from 152 to 164
+tokens a second, short prompts are read about 20 milliseconds sooner, and
+accuracy is unchanged.
+
+### Conversations reuse what the model already read
+
+- **Agents, research and planning keep to one machine.** With a model served on
+  two machines, Vaelor's multi-step work (the agent tool loop, custom agents,
+  application research, the search planner and the Assistant) now tags its
+  requests so each one returns to the machine that already read its earlier
+  steps, instead of starting over on the other. A six-step tool loop went from
+  12.3 to 9.4 seconds (measured on the ZBook with two copies of the model).
+  The tag is a code derived from the task, never its text, and is sent only to
+  models this appliance serves.
+- **AI Chat's history is kept in steady blocks.** The instructions at the top
+  of a chat are now the same on every turn, and older messages drop off four at
+  a time, so the model can reuse what it read last turn. The next turn's first
+  word came about twice as fast in testing on the ZBook (424 to 197
+  milliseconds without a document collection; with one, about 1.5 to 1.4
+  seconds on every other turn). AI Chat now keeps 8 to 11 recent messages
+  instead of 8, and temporary chats use the same window.
+
+### Performance tab and fixes
+
+- **GPU timing per routine on demand.** A profile can now restart the cluster
+  model with GPU tracing switched on, for a limited time only; it returns to
+  normal serving by itself when the time is up or the capture ends, whichever
+  comes first.
+- A profile in the Performance tab shows how many of the guesser's proposals
+  are kept.
+- While a guesser serves, writing speed is counted in tokens, not steps (each
+  step can write several).
+- A profile reads only its own trace files, old ones can be cleared, and the
+  trace reader refuses links and limits how much it reads and for how long.
+- Found while installing this release on the test machines: the speed-ups
+  stayed off after a model was loaded, because the load runs in a sandbox that
+  is not allowed to read the GPU's type. Vaelor now reads it from the graphics
+  core's version instead, so a load switches them on.
+
+### Not verified in this release
+
+- **1.5.2 has not had a cold install.** It was installed in place on the existing
+  test machines, not on wiped ones, so the first-start builds that a fresh
+  machine runs have not been run live.
+- **The ZBook worker's build of the 4-bit guesser has run live only once.**
+- The background build of the 4-bit guesser that a first start runs has not
+  been run live.
+- The upgrade from the published 1.5.1 has not been run: the test machines
+  already held the vLLM fix and the guesser from development builds, so a first
+  download of the fix, a first guesser download and the remove-and-redeploy
+  step were not exercised.
+- The console's own update to 1.5.2 has not been run live.
+- The model speed figures are from the Z2 Mini; the tool-loop and AI Chat
+  timings are from the ZBook. The ZBook Ultra runs the model more slowly.
+- Known gap: AI Chat does not yet trim a conversation to fit the context
+  window a connection declares, and keeping a few more messages widens that
+  existing gap slightly.
+
 ## 1.5.1
 
 A fix release after 1.5: the console's certificate now comes from a household

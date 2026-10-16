@@ -1,6 +1,7 @@
 import type { WorkerSoftware } from "./WorkerSoftwareRow";
 import { formatQuantity } from "../lib/format";
 import type { GpuClusterIntent } from "../lib/gpuServingMode";
+import type { GpuServingAdvanced } from "../lib/gpuServeAdvanced";
 
 /**
  * How the head controller names itself as a placement target, matching
@@ -254,6 +255,14 @@ export interface FleetSummary {
         gate?: string;
         alive: boolean;
         reachable?: boolean;
+        /**
+         * VD-215/VD-216: which set-up this copy serves without, and why - the
+         * draft model's speed fix, Vaelor's expert kernel. Whole sentences,
+         * naming the machine; absent when the copy serves as deployed.
+         */
+        serving_note?: string;
+        /** The same note on a row written before VD-216 renamed it. */
+        speed_fix_missing?: string;
       }>;
       /** The balancer's port on a `replicated` record. */
       port?: number;
@@ -779,6 +788,8 @@ export interface GpuServingChoices {
   /** `suggested_tokens` is the draft count that was measured; absent on an older backend. */
   mtp: { available: boolean; max_tokens: number; suggested_tokens?: number; detail: string };
   text_only: { applies: boolean; detail: string };
+  /** VD-213 Advanced serving settings; absent on an older backend, which hides the section. */
+  advanced?: GpuServingAdvanced | null;
 }
 
 /** What the deploy form may offer about thinking for one model (owner decision 2026-09-29). */
@@ -815,6 +826,8 @@ export interface ClusterModel {
   in_use_by?: ClusterModelUser[];
   /** False when the deployments could not be read: use is then unknown, not "none". */
   in_use_known?: boolean;
+  /** VD-214: set on a draft model's row - the models it drafts for. */
+  draft_model_for?: string[];
 }
 
 /** One node's slice of the library: what it holds and how much root space is

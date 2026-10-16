@@ -12,7 +12,7 @@ console, all on the box, nothing forced through the cloud. Add a second machine 
 the same console serves models across both.**
 
 ![License](https://img.shields.io/badge/license-GPL--2.0-blue)
-![Release](https://img.shields.io/badge/release-1.5.1-orange)
+![Release](https://img.shields.io/badge/release-1.5.2-orange)
 ![Flagship](https://img.shields.io/badge/flagship-HP%20Z2%20Mini%20G1a%20·%20Strix%20Halo-orange)
 ![Also runs on](https://img.shields.io/badge/also%20runs%20on-HP%20ZBook%20Ultra%20G1a%20·%20Raspberry%20Pi%205-informational)
 ![Arch](https://img.shields.io/badge/arch-x86--64%20%7C%20ARM64-lightgrey)
@@ -38,6 +38,22 @@ manage from `https://<host>:34001/v2/`.
 The assistant, the chat model, the databases, the search backend, and the credential
 vault all run **on the box**. What leaves the machine leaves only when you ask it to —
 for example when you choose to connect AI Chat to a hosted service.
+
+## 🆕 New in 1.5.2
+
+- **The cluster's recommended model is about three times as fast on coding tasks for one person.** On the
+  Z2 Mini, Qwen3-30B-A3B now writes about 164 word pieces (tokens) a second on a coding
+  test where 1.5.1 managed about 52. A small "guesser" model proposes the next few tokens
+  and the big model checks them in one step, so accuracy is unchanged.
+  Vaelor's own GPU routines, written for Strix Halo, run the model's heaviest layers.
+- **Long prompts are read more than twice as fast**, and stay fast to answer: a 6,400-token
+  prompt gets its first word after about 2 seconds instead of about 5.
+- **Conversations reuse what the model already read.** AI Chat keeps its history in steady
+  blocks, and Vaelor's agents, research and planning tag their requests, so a follow-up
+  lands on the machine that already holds the conversation and starts sooner.
+- **Re-run the installer to upgrade** from 1.5.1, and remove and redeploy a 30B deployed
+  under 1.5.1: the installer downloads and builds the speed-up pieces on each machine. See [CHANGELOG.md](CHANGELOG.md) for the details and for what
+  was not run live.
 
 ## 🆕 New in 1.5.1
 
@@ -124,7 +140,9 @@ and driven from one clean web UI. One appliance, many tools, no cloud tax.
   down.
 - **More people at once:** one copy of the model per machine behind a balancer; each
   conversation stays on one copy. The recommended cluster model is Qwen3-30B-A3B-Instruct
-  in 4-bit weights.
+  in 4-bit weights, served with a small guesser model that speeds up writing with
+  accuracy unchanged, and with Vaelor's own GPU routines on Strix Halo. Its serving
+  settings have an **Advanced** section in the deploy form.
 - **A model bigger than one machine:** split it across machines over a dedicated link
   (such as a Thunderbolt cable), fenced so nothing else on your network can reach the
   link's ports. *Experimental in 1.5 — see [SUPPORTED_PLATFORMS.md](SUPPORTED_PLATFORMS.md).*
@@ -145,7 +163,8 @@ and driven from one clean web UI. One appliance, many tools, no cloud tax.
 Real-time CPU / GPU / NPU / memory / storage / network / fan telemetry for the controller
 and every worker, with a health view that tells you *why* something is flagged. The
 Performance dashboard shows only measured values: request health for every way in (time to
-first word and writing speed), the serving engine's own metrics, on-demand profiling, and
+first word and writing speed), the serving engine's own metrics, on-demand profiling (with
+a time-limited per-routine GPU timing mode for the cluster model), and
 per-request traces in a local Arize Phoenix. A Prometheus/OpenMetrics endpoint at
 `/api/v2/metrics` feeds your own dashboards.
 
@@ -263,9 +282,9 @@ the first visit. See [SECURE_ACCESS.md](SECURE_ACCESS.md). The first visit asks 
 create the administrator account. The installer adopts Docker if it is already present and asks before installing
 it when it is not.
 
-The installer downloads from the **`v1.5.1`** release by default. Set `VAELOR_RELEASE_TAG`
+The installer downloads from the **`v1.5.2`** release by default. Set `VAELOR_RELEASE_TAG`
 to install from another release (for example
-`sudo VAELOR_RELEASE_TAG=v1.5 ~/vaelor/deploy/install-vaelor.sh --unattended`), or pass
+`sudo VAELOR_RELEASE_TAG=v1.5.1 ~/vaelor/deploy/install-vaelor.sh --unattended`), or pass
 `--wheel /path/to/…whl` to install a specific build. `deploy/fetch-npu-model.sh` reads the
 same variable.
 

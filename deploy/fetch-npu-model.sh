@@ -19,12 +19,12 @@
 #
 # Usage:  deploy/fetch-npu-model.sh
 # Env:    VAELOR_REPO (default ShadowLayer90/vaelor)
-#         VAELOR_RELEASE_TAG (default v1.5.1)
+#         VAELOR_RELEASE_TAG (default v1.5.2)
 #         FLM_MODELS_DIR (default /var/lib/vaelor/flm/models)
 set -Eeuo pipefail
 
 REPO="${VAELOR_REPO:-ShadowLayer90/vaelor}"
-TAG="${VAELOR_RELEASE_TAG:-v1.5.1}"
+TAG="${VAELOR_RELEASE_TAG:-v1.5.2}"
 MODELS_DIR="${FLM_MODELS_DIR:-/var/lib/vaelor/flm/models}"
 MODEL_NAME="Qwen3.5-4B-NPU2"
 PART_GLOB="qwen35-4b-npu2.tar.part*"

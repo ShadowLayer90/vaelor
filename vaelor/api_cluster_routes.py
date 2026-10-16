@@ -11,6 +11,7 @@ from .credential_broker import CredentialError
 from .cluster_driver import ClusterDriverError
 from .ssh_transport import SshTransportError
 from .cluster_gpu_sizing import INTENT_CAPACITY, build_model_spec, fit_decision
+from .cluster_gpu_model_spec import with_decided_drafter
 from .gpu_memory_pool import pool_fit_hint
 from .hf_cached_config import source_repo, with_cached_config
 from .vllm_serve_options import serving_choices
@@ -159,7 +160,10 @@ def register_cluster_routes(context: ApiContext) -> None:
             cached_repo, cached_revision = source_repo(body.get("model_source"))
             # Read and built ONCE: the fit sizes this spec, and the form's
             # serving choices come from the same config.json facts.
-            sized = build_model_spec(with_cached_config(spec, cached_repo, cached_revision))
+            # VD-213: charged for the draft model the body's serving choices
+            # decide, by the deploy's own derivation (`with_decided_drafter`).
+            sized = with_decided_drafter(build_model_spec(
+                with_cached_config(spec, cached_repo, cached_revision)), cached_repo, body)
             def decide(over):
                 return fit_decision(
                     spec, over, built=sized,

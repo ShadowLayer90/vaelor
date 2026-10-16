@@ -161,8 +161,13 @@ def with_cached_config(
     spec_body: Mapping[str, Any], repo: Optional[str], revision: Optional[str] = None,
     *, store: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """``spec_body`` with ``hf_config`` from the cache added, unless one was given."""
+    """``spec_body`` with ``hf_config`` from the cache added, unless one was given.
+
+    A draft model's bytes are never taken from the body: they are the decided
+    serving options' (VD-213, `cluster_gpu_model_spec.with_decided_drafter`).
+    """
     body = dict(spec_body or {})
+    body.pop("draft_weight_bytes", None)
     if body.get("hf_config") is None and repo:
         config = cached_config(repo, revision, store=store)
         if config is not None:

@@ -202,6 +202,14 @@ export function ClusterModels({ session, pullTargets, reloadKey, onPull, onRemov
                               : model.message || model.state}
                           </span>
                         </span>
+                        {model.draft_model_for?.length ? (
+                          // VD-214: the library fetches a model's draft model
+                          // beside it, so its row says what it is for.
+                          <span>
+                            {`Draft model for ${model.draft_model_for.join(" or ")}. `
+                              + "Removing its model removes it too when nothing else here uses it."}
+                          </span>
+                        ) : null}
                         {use.note && <span className={use.blocked === "unknown" ? "cl-warn-text" : "cl-lib-use"} id={noteId}>{use.note}</span>}
                       </div>
                       <StatusPill

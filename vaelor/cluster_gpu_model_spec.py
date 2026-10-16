@@ -201,6 +201,9 @@ class GpuModelSpec:
     kv_block_tokens: int = 0
     #: The draft tokens of multi-token prediction this launch runs with.
     draft_tokens: int = 0
+    #: A separate draft model's weight bytes, kept on every machine that
+    #: holds a whole copy (VD-213, :func:`draft_note`).
+    draft_weight_bytes: int = 0
 
     def kv_cache_bytes(self) -> int:
         """The minimum KV budget: the whole context window at ``slots`` slots.
@@ -259,13 +262,49 @@ class GpuModelSpec:
             + max(1, int(stages)) * self.runtime_reserve_bytes()
         )
         margin = int(kv * (1 / CONTEXT_MARGIN - 1))
+        # A draft model is loaded beside a whole copy only: a split runs none.
+        draft = int(self.draft_weight_bytes) if max(1, int(stages)) == 1 else 0
         return {
             "weight_bytes": weights,
+            "draft_weight_bytes": draft,
             "kv_cache_bytes": kv,
             "overhead_bytes": overhead,
             "margin_bytes": margin,
-            "required_bytes": weights + kv + overhead + margin,
+            "required_bytes": weights + draft + kv + overhead + margin,
         }
+
+
+#: What a fit says when it kept room for a draft model (VD-213). True of a
+#: drafter the owner chose and of one a catalog default turned on alike.
+DRAFT_ROOM_NOTE = (
+    " This counts {gb} GB on each machine for the draft model these serving "
+    "settings load."
+)
+
+
+def with_decided_drafter(
+    spec: "GpuModelSpec", repo: Any, payload: Any, gpu_targets: Iterable[Any] = (),
+) -> "GpuModelSpec":
+    """``spec`` charged for the draft model this deploy's serving options decide (VD-213).
+
+    The one derivation the fit preview, the deploy and its refit share
+    (LESSONS 6): the options a whole copy of the model would be served with
+    (`vllm_serve_options.payload_draft_bytes`) - a whole copy because only one
+    runs a drafter, and :meth:`GpuModelSpec.required_bytes` charges none to a
+    split. A payload that turns the drafter off is charged nothing.
+    """
+    from .vllm_serve_options import payload_draft_bytes
+
+    return replace(spec, draft_weight_bytes=payload_draft_bytes(
+        repo, spec.facts, payload or {}, gpu_targets,
+    ))
+
+
+def draft_note(spec: "GpuModelSpec", split: bool) -> str:
+    """:data:`DRAFT_ROOM_NOTE` for a whole-copy fit of a model with a draft model, else ``""``."""
+    if split or spec.draft_weight_bytes <= 0:
+        return ""
+    return DRAFT_ROOM_NOTE.format(gb=round(spec.draft_weight_bytes / 1e9, 1))
 
 
 def with_speculation(spec: GpuModelSpec, mtp_tokens: Any) -> GpuModelSpec:
@@ -474,6 +513,8 @@ def build_model_spec(spec: Dict[str, Any]) -> GpuModelSpec:
             )
         )
 
+    raw_draft = spec.get("draft_weight_bytes")
+    draft_weight = 0 if raw_draft in (None, 0) else _positive_int(raw_draft, "draft_weight_bytes")
     weight_estimated = False
     per_parameter: Optional[float] = None
     raw_weight = spec.get("weight_bytes")
@@ -515,4 +556,5 @@ def build_model_spec(spec: Dict[str, Any]) -> GpuModelSpec:
         kv_layers=kv_layers,
         recurrent_state_bytes=facts.recurrent_state_bytes if facts is not None else 0,
         facts=facts,
+        draft_weight_bytes=draft_weight,
     )

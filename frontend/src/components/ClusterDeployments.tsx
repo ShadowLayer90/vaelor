@@ -375,6 +375,27 @@ function ReplicaNote({
   );
 }
 
+/**
+ * VD-215/VD-216: a machine that could not set up the draft model's speed fix,
+ * or Vaelor's expert kernel, serves its copy without it, and the row says
+ * which machine and why, in the backend's own sentence
+ * (`units.replicas[].serving_note`; `speed_fix_missing` on an older row).
+ * Slower than the other copies, not broken, so a warning.
+ */
+function ServingNote({ deployment }: { deployment: PooledDeployment }) {
+  const notes = (servingReplicas(deployment) ?? [])
+    .map((replica) => (replica.serving_note ?? replica.speed_fix_missing ?? "").trim())
+    .filter(Boolean);
+  if (!notes.length) return null;
+  return (
+    <SubRow severity="warning">
+      {notes.length === 1 ? notes[0] : (
+        <ul>{notes.map((note) => <li key={note}>{note}</li>)}</ul>
+      )}
+    </SubRow>
+  );
+}
+
 /** The thinking pill's words, or null when the model answers without thinking. */
 function thinkingLabel(deployment: { engine?: string; thinking?: boolean | null; thinking_switch?: boolean }): string | null {
   if (deployment.engine !== "vllm" || !deployment.thinking_switch) return null;
@@ -619,6 +640,7 @@ export function ClusterDeployments({
                     )}
                   />
                   <ReplicaNote deployment={deployment} ledger={ledger} />
+                  <ServingNote deployment={deployment} />
                   <DegradedNote deployment={deployment} />
                   <FailureNote deployment={deployment} />
                   <FenceNotes deployment={deployment} />

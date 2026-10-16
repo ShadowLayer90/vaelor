@@ -204,7 +204,8 @@ export interface PerformanceWhy {
  */
 export interface ServingMetrics {
   // Per-stream decode speed: how fast a request's tokens arrive while it is
-  // generating (llama.cpp's own gauge, or vLLM's inter-token latency).
+  // generating (llama.cpp's own gauge, or vLLM's decode-step tokens over its
+  // inter-token seconds - tokens, not steps, under a drafter: VD-213).
   decode_tokens_per_second: number | null;
   prompt_tokens_per_second: number | null;
   // vLLM cluster only: tokens counted over the last scrape interval and summed
@@ -509,6 +510,51 @@ export interface GpuKernelResult {
   rows: GpuKernelRow[];
   categories?: GpuKernelCategory[];
   note?: string;
+  /** Old traces the bridge could not clear; the capture read none of them (VD-214). */
+  stale_traces_kept?: number;
+  /** Traces the bounded reader would not read, each with its reason (VD-214). */
+  traces_refused?: { name: string; reason: string }[];
+}
+
+/**
+ * What the GPU kernel profile's restarts did (VD-214): whether the model served
+ * with GPU tracing on for the capture, and whether it was restarted normally.
+ */
+export interface KernelProfileOutcome {
+  deadline_seconds: number;
+  tracing_confirmed?: boolean;
+  reverted: boolean;
+  serving_again?: boolean;
+  tracing_off_confirmed?: boolean;
+  revert_note: string;
+}
+
+/** One lookahead slot of the draft model: how often its guess was kept, per draft. */
+export interface SpecDecodingPosition {
+  position: number;
+  accepted: number;
+  rate: number;
+}
+
+/**
+ * The draft model's acceptance over the profile window (VD-213), from the
+ * vLLM replica's own counters read at the window's start and end. Present only
+ * when a drafter made at least one guess in the window; otherwise the capture
+ * is not available and its `reason` says why, never a zero acceptance.
+ * `mean_acceptance_length` is vLLM's own figure: `accepted_per_step` plus the
+ * one token the model writes itself every step.
+ */
+export interface SpecDecodingResult {
+  kind: "speculative_decoding";
+  window_seconds: number;
+  drafts: number;
+  drafted_tokens: number;
+  accepted_tokens: number;
+  accepted_per_step: number;
+  mean_acceptance_length: number;
+  acceptance_rate?: number;
+  positions: SpecDecodingPosition[];
+  note?: string;
 }
 
 export interface ProfileCapture {
@@ -516,7 +562,7 @@ export interface ProfileCapture {
   label: string;
   available: boolean;
   reason: string;
-  result?: CpuProfileResult | GpuProfileResult | EbpfProfileResult | GpuKernelResult;
+  result?: CpuProfileResult | GpuProfileResult | EbpfProfileResult | GpuKernelResult | SpecDecodingResult;
 }
 
 export interface ServingProfile {
@@ -526,6 +572,7 @@ export interface ServingProfile {
   perf_event_paranoid: number | null;
   generated_at: number;
   captures: ProfileCapture[];
+  kernel_profile?: KernelProfileOutcome;
 }
 
 /**
@@ -538,6 +585,27 @@ export function runServingProfile(csrfToken: string): Promise<ServingProfile> {
   return apiRequest<ServingProfile>(
     "/cluster/performance/profile",
     { method: "POST", body: "{}", cache: "no-store" },
+    csrfToken,
+  );
+}
+
+/**
+ * How long the console waits for a GPU kernel profile (VD-214): the bridge's
+ * own bound, `gpu_kernel_profile.REQUEST_SECONDS` (1,479 s: the bridge's computed worst case and a
+ * minute), and a little more
+ * for the reply. `tests/test_gpu_kernel_profile_console.py` ties the two.
+ */
+export const KERNEL_PROFILE_TIMEOUT_MS = 1_500_000;
+
+/**
+ * Restart this controller's copy of the model with GPU tracing on, profile it,
+ * and restart it normally (VD-214, administrator + CSRF). Minutes long; the
+ * tracing serve's own time limit does not depend on this request.
+ */
+export function runGpuKernelProfile(csrfToken: string): Promise<ServingProfile> {
+  return apiRequest<ServingProfile>(
+    "/cluster/performance/kernel-profile",
+    { method: "POST", body: "{}", cache: "no-store", timeoutMs: KERNEL_PROFILE_TIMEOUT_MS },
     csrfToken,
   );
 }

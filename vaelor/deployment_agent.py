@@ -54,6 +54,7 @@ from .deployment_plan_router import policy_plan
 from .inference_client import (
     MAX_INFERENCE_SECONDS,
     allowed_inference_endpoint as _allowed_inference_endpoint,
+    appliance_session_headers,
     chat_completion as _chat_completion,
     inference_timeout as _inference_timeout,
     parse_model_object as _parse_model_object,
@@ -83,6 +84,7 @@ from .model_profiles import (
 from .specialist_baseline import baseline_review
 from .specialist_model import specialist_review
 from .runtime_paths import env_value
+from .session_affinity import new_session_key
 
 MAX_MESSAGE_LENGTH = 4000
 #: What the status says when no model is pinned: the server's first offered
@@ -467,6 +469,12 @@ class DeploymentAgent:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if connection.get("api_key"):
             headers["Authorization"] = "Bearer {}".format(connection["api_key"])
+        # VD-216 fix 1: `local_answer` re-sends this request once when the reply
+        # is degenerate; one key for the answer keeps the retry on the replica
+        # that already read the prompt. Per answer, not per conversation: the
+        # earlier turns ride inside the user message (`local_turn`), so a later
+        # turn could share at most the system brief.
+        headers.update(appliance_session_headers(connection, new_session_key()))
         if not model:
             model_request = urllib.request.Request(
                 "{}/models".format(connection["base_url"]), headers=headers

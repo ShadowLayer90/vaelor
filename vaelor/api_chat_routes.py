@@ -32,12 +32,17 @@ from .chat_grounding import (
 )
 from .chat_agent_proposals import agent_proposal, proposal_text
 from .api_chat_thinking_routes import thinking_choice
-from .chat_inference import ChatInferenceError
+from .chat_inference import HISTORY_DROP_BLOCK, ChatInferenceError
 from .chat_turn_dedupe import IN_FLIGHT_STATUS, in_flight_error
 from .document_text import SUPPORTED_EXTENSIONS
 from .rag_chat import AGENT_ROUTER_AUTHOR, MAX_DOCUMENT_BYTES, RagChatError
 from .session_affinity import conversation_session_key, opening_session_key
 
+
+#: The most earlier messages a temporary chat's turn reads from what the client
+#: sent. Only a bound on the work: `chat_inference.history_window` picks the
+#: 8-11 the model sees, and needs the conversation's own positions to do it.
+TEMPORARY_HISTORY_LIMIT = 64
 
 #: What the active connection says about where prompts go while the GPU
 #: cluster serves AI Chat (its address is the controller's balancer).
@@ -803,6 +808,11 @@ def register_chat_routes(context: ApiContext) -> None:
                         collections=collection_ids,
                     ))
             if temporary:
+                sent = body.get("history") if isinstance(body.get("history"), list) else []
+                # VD-216 fix 2: cut only in the window's own blocks. A plain
+                # [-8:] here slid the window one exchange every turn, so the
+                # prefix cache reused only the system prompt (kb R75).
+                surplus = max(0, len(sent) - TEMPORARY_HISTORY_LIMIT)
                 history = [
                     {
                         "role": item.get("role"),
@@ -811,7 +821,7 @@ def register_chat_routes(context: ApiContext) -> None:
                         # answer; `conversational_history` leaves it out.
                         "failed": item.get("failed") is True,
                     }
-                    for item in body.get("history", [])[-8:]
+                    for item in sent[surplus - surplus % HISTORY_DROP_BLOCK:]
                     if isinstance(item, dict)
                     and item.get("role") in {"user", "assistant"}
                 ]

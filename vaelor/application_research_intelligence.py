@@ -36,10 +36,9 @@ from .container_registry import (
 )
 from .web_research import WebResearchError, WebResearchManager
 from .inference_client import (
-    allowed_inference_endpoint,
-    chat_completion,
-    inference_timeout,
+    allowed_inference_endpoint, appliance_session_headers, chat_completion, inference_timeout,
 )
+from .session_affinity import work_session_key
 from .model_profiles import with_structured_response_format
 from .research_json import extract_json_document
 from .provider_runtime import (
@@ -274,6 +273,11 @@ def validate_source_discovery(value: Any) -> Dict[str, Any]:
     }
 
 
+def _research_key(draft: Mapping[str, Any]) -> str:
+    """VD-216 fix 1: one key for every model call of one draft's research."""
+    return work_session_key("application-research", draft.get("id"))
+
+
 class ApplicationResearchIntelligence:
     """Orchestrate model discovery around the isolated evidence broker."""
 
@@ -289,22 +293,17 @@ class ApplicationResearchIntelligence:
         self.broker_client = broker_client
         self.connection_resolver = connection_resolver
         self.search_client = search_client or SearxSearchClient()
-        # #247r: the lifecycle owner used to auto-provision guarded web research
-        # at point of use. Left None (the default for tests and injected
-        # adapters) the provisioning gate is a no-op and behavior is exactly the
-        # pre-feature "try the search, degrade if it is down". Production wires a
-        # real WebResearchManager here (executor, control plane) so a custom app
-        # or internet-parsing agent brings the owned SearXNG backend up on demand
-        # instead of dead-ending at a manual "Set up web research" button.
+        # #247r: None (tests, injected adapters) makes the provisioning gate a
+        # no-op: "try the search, degrade if it is down". Production wires a real
+        # WebResearchManager (executor, control plane) so a custom app or agent
+        # brings the owned SearXNG backend up on demand, not via a manual button.
         self.web_research = web_research
         self._provision_lock = threading.Lock()
         self._provisioning = False
         # #247r (review finding 2): the OUTCOME of the last COMPLETED background
-        # provision. None means "no completed attempt has left the backend
-        # unusable" (fresh, in flight, or the last attempt ended ready); a
-        # message means "an attempt finished and the backend is still not
-        # returning results" - so the agent path stops repeating the optimistic
-        # "try again in a minute" forever and surfaces an actionable repair.
+        # provision. None: no completed attempt left the backend unusable; a
+        # message: one finished and search still returns nothing - so the agent
+        # path surfaces a repair instead of "try again in a minute" forever.
         # Guarded by `_provision_lock`.
         self._last_provision_error: str | None = None
         self.timeout_seconds = max(10, min(int(timeout_seconds), 90))
@@ -708,7 +707,7 @@ class ApplicationResearchIntelligence:
                         (contract.get("manifest") or {}).get("compatibility", {})
                         .get("architectures", ["unknown"])[0]
                     ),
-                    model_call=lambda request: self._interpret(request, connection),
+                    model_call=lambda request: self._interpret(request, connection, _research_key(draft)),
                 )
             except (KeyError, OSError, RuntimeError, ValueError) as error:
                 raise ResearchWorkflowError(
@@ -783,7 +782,7 @@ class ApplicationResearchIntelligence:
                         "Find authoritative sources needed to verify and deploy this application."
                     ),
                 },
-                max_tokens=320,
+                max_tokens=320, session_key=_research_key(draft),
             )
             return validate_source_discovery(raw)
         except (ResearchModelError, ValueError):
@@ -846,7 +845,7 @@ class ApplicationResearchIntelligence:
                 ),
                 "candidates": candidates,
             },
-            max_tokens=240,
+            max_tokens=240, session_key=_research_key(draft),
         )
         if not isinstance(value, dict) or set(value) != {
             "selected_indexes", "limitations"
@@ -916,21 +915,22 @@ class ApplicationResearchIntelligence:
         }
 
     def _interpret(
-        self, request: Dict[str, Any], connection: Dict[str, str],
+        self, request: Dict[str, Any], connection: Dict[str, str], session_key: str,
     ) -> Dict[str, Any]:
         return self._call_json(
             connection, str(request["system_prompt"]), request["input"],
-            max_tokens=420,
+            max_tokens=420, session_key=session_key,
         )
 
     def _call_json(
         self, connection: Dict[str, str], system_prompt: str, value: Any, *,
-        max_tokens: int,
+        max_tokens: int, session_key: str,
     ) -> Dict[str, Any]:
         model = str(connection.get("model", ""))
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if connection.get("api_key"):
             headers["Authorization"] = "Bearer {}".format(connection["api_key"])
+        headers.update(appliance_session_headers(connection, session_key))
         if not model:
             request = urllib.request.Request(
                 "{}/models".format(connection["base_url"]), headers=headers,

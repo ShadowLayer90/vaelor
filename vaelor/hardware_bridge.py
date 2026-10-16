@@ -20,6 +20,7 @@ from .hardware_bridge_host_settings import (
 from .bridge_peers import BRIDGE_SOCKET_GROUP, admit, admitted_uids, socket_group
 from .state_root_layout import start_layout_unit
 from .hardware_bridge_profile import ServingProfileMixin
+from .hardware_bridge_kernel_profile import KernelProfileMixin
 from .host_power import POWER_ACTION_REFUSAL
 from .hardware_bridge_client import (  # noqa: F401 - the wire contract, re-exported
     AF_UNIX,
@@ -76,7 +77,8 @@ MAX_FAMILY_LOCKS = 128
 
 
 class _HardwareRuntime(
-    ServingProfileMixin, ControllerCommandsMixin, AgentBridgeVerbs, HostSettingVerbs,
+    ServingProfileMixin, KernelProfileMixin, ControllerCommandsMixin, AgentBridgeVerbs,
+    HostSettingVerbs,
 ):
     """Own PMAuto without starting the legacy web dashboard.
 
@@ -755,6 +757,13 @@ class _Handler(socketserver.StreamRequestHandler):
                 # (no profiling an attacker-named process). The window is clamped
                 # and every capture is bounded inside the runtime (#178).
                 data = runtime.run_serving_profile(payload.get("seconds"))
+            elif action == "run_gpu_kernel_profile":
+                if not isinstance(payload, dict):
+                    raise ValueError("Invalid GPU kernel profile request.")
+                # VD-214: the window alone crosses; the unit, its text and the
+                # tracing serve are all derived root-side, and the deadline
+                # that reverts it is armed before anything changes.
+                data = runtime.run_gpu_kernel_profile(payload.get("seconds"))
             elif action in HOST_SETTING_ACTIONS:
                 # The GPU memory pool (VD-161): one whole number, or nothing,
                 # crosses the socket; path, line and command are root-side.

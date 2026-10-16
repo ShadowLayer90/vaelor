@@ -110,6 +110,34 @@ def opening_session_key(owner: Any, messages: Optional[Iterable[Any]]) -> str:
     return ""
 
 
+def work_session_key(kind: str, identity: Any) -> str:
+    """A stable key for one piece of model work Vaelor runs itself (VD-216).
+
+    An agent task or a research run makes several model calls that re-send a
+    prefix an earlier call already computed: a tool loop's growing prompt, a
+    retry of the same prompt, a planner's second pass. Keyed alike, they reach
+    the replica that holds it. ``kind`` says what sort of work, ``identity``
+    which one (a task's text, a draft's id). Whitespace in ``identity`` is
+    folded, so every module that derives the key from the same task reaches
+    the same key without being handed it. ``""`` when there is nothing to name.
+
+    Two pieces of work with the same identity share a key - the same task
+    text sent twice, say. That costs nothing: they share the prompt that
+    would be cached, and otherwise only a machine.
+    """
+    return conversation_session_key(kind, "work", " ".join(str(identity or "").split()))
+
+
+def agent_task_session_key(task: Any) -> str:
+    """The key every model call of one agent task names, from the task's text.
+
+    The text is the one thing the tool loop, the one-shot run that shares its
+    system prompt, and the search planner's two passes all receive, so each
+    derives this key on its own and they agree.
+    """
+    return work_session_key("agent-task", task)
+
+
 def only_header_value(values: Optional[Iterable[Any]]) -> str:
     """The header's value when it was sent exactly once, else ``""``.
 

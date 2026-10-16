@@ -238,6 +238,7 @@ _WEB_RESEARCH = "Web research"
 FIXED_TARGETS: Dict[str, str] = {
     "agent.plan": "Deployment plan",
     "assistant.preference.update": "Assistant intelligence setting",
+    "cluster.performance.kernel-profile": "GPU kernel profile of this controller's model",
     "cluster.performance.profile": "GPU serving profile",
     "cluster.ssh.inspect": "A machine's SSH sign-in",
     "fan.case.update": "Case fan",

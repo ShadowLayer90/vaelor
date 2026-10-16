@@ -11,7 +11,8 @@ bounded root subprocesses and the torch trace file - lives in
 The four captures: CPU (``perf`` top symbols), GPU snapshot (``amd-smi`` power/
 temp/clock and the process GTT share), GPU kernel trace (vLLM's built-in torch
 profiler, driven on demand on the vLLM cluster - available only in Mode B), and
-eBPF (``bpftrace`` OFF-CPU blocking). Every capture that cannot run states why,
+eBPF (``bpftrace`` OFF-CPU blocking); a fifth, the draft model's acceptance,
+lives in :mod:`vaelor.serving_profiler_spec` (VD-213). Every capture that cannot run states why,
 naming the real blocker; a box where none can profile shows the reasons and no
 fabricated data.
 """
@@ -79,6 +80,17 @@ PROFILE_COMPLETION_TOKENS = 16
 PROFILE_COMPLETION_PROMPT = "Vaelor GPU kernel profile warmup."
 GPU_KERNEL_TRACE_SUFFIX = ".pt.trace.json.gz"
 GPU_KERNEL_TRACE_WAIT_SECONDS = 6.0
+#: How long the poll keeps waiting while a trace is STILL BEING WRITTEN (a gzip
+#: that has not ended), measured on the Z2 (VD-216 housekeeping, 2026-10-14):
+#: vLLM writes the worker's trace after the profiler stops - the console's own
+#: 3.5 MB trace was whole 2.1 s after the stop, the largest bench trace (26.6 MB,
+#: 466 MB unpacked) 14 s after - and answers ``/stop_profile`` only after
+#: printing its table (40-88 s), so the stop's curl is cut at its 10 s and the
+#: poll starts while a large trace is still being written. 16 s from there
+#: covers about 1.8 times that trace, within the capture allowance's spare
+#: seconds (`gpu_kernel_profile`); one still unfinished is named, not "absent".
+GPU_KERNEL_TRACE_WRITING_WAIT_SECONDS = 16.0
+GPU_KERNEL_TRACE_UNFINISHED = "not read: still being written after the reader waited {:.0f} s"
 GPU_KERNEL_POLL_INTERVAL_SECONDS = 0.5
 GPU_KERNEL_TOP_ROWS = 12
 
@@ -172,6 +184,24 @@ GPU_KERNEL_NO_TRACE = (
 )
 GPU_KERNEL_EMPTY_NOTE = (
     "Captured, but no GPU kernels ran during the profiling window."
+)
+#: A complete worker trace with NO GPU-side category: the GPU was not traced,
+#: which is not "no kernels ran" (LESSONS 8; live 2026-10-12, VD-165 Limits).
+#: The first states only what was observed; the second is used only when the
+#: serving process's own environment shows VD-165's switch (LESSONS 9).
+GPU_KERNEL_NOT_TRACED_NOTE = (
+    "The trace recorded CPU activity only - no GPU events at all - so per-kernel "
+    "GPU time is not available from this capture; nothing was fabricated."
+)
+GPU_KERNEL_TRACING_OFF_NOTE = (
+    "The trace recorded CPU activity only: the serving container runs with GPU "
+    "tracing switched off, which this vLLM image does so that a profiler thread "
+    "does not hold a CPU core at 100% while serving (VD-165). Per-kernel GPU "
+    "time is not available from this capture; nothing was fabricated."
+)
+GPU_KERNEL_NO_WORKER_TRACE = (
+    "No complete trace from the vLLM worker - the process that runs the GPU "
+    "work - could be read within the wait window, so GPU kernel time is unknown."
 )
 GPU_KERNEL_FAILED = (
     "The GPU kernel trace could not be captured from the live vLLM server."
@@ -509,6 +539,8 @@ def capture_profile(
     sleep: Callable[[float], None] = time.sleep,
 ) -> Dict[str, Any]:
     """Run whichever captures the probe allows and assemble one honest result."""
+    from .serving_profiler_spec import open_window  # VD-213: the drafter's acceptance over this window
+    spec_window = open_window(probe, run, torch_ports, curl_path, clock, NO_SERVING_PROCESS)
     serving_pid = probe.get("serving_pid")
     cpu_result = None
     gpu_result = None
@@ -525,15 +557,16 @@ def capture_profile(
             gpu_result = _run_gpu_capture(run, amd_smi_path, serving_pid, _integrated_or_unknown(gpu_integrated))
         elif capture["id"] == CAPTURE_GPU_KERNEL:
             gpu_kernel_result = _run_gpu_kernel_capture(
-                run, seconds, torch_ports, profiles_dir, curl_path, sleep, clock
+                run, seconds, torch_ports, profiles_dir, curl_path, sleep, clock,
+                serving_pid=serving_pid if isinstance(serving_pid, int) else None,
             )
         elif capture["id"] == CAPTURE_EBPF and isinstance(serving_pid, int):
             ebpf_result = _run_ebpf_capture(run, serving_pid, seconds, bpftrace_path)
-    return build_profile(
+    return spec_window.close(build_profile(
         probe, cpu=cpu_result, gpu=gpu_result, ebpf=ebpf_result,
         gpu_kernel=gpu_kernel_result,
         seconds=seconds, generated_at=clock(),
-    )
+    ))
 
 
 def _run_cpu_capture(
@@ -677,6 +710,12 @@ def build_profile(
             elif capture["id"] == CAPTURE_EBPF and ebpf is not None:
                 entry["result"] = dict(ebpf)
             elif capture["id"] == CAPTURE_GPU_KERNEL and gpu_kernel is not None:
+                if gpu_kernel.get("gpu_traced") is False or gpu_kernel.get("worker_trace") is False:
+                    # Not traced, or unknown: say so as Not available, never
+                    # "Captured" over an empty table (LESSONS 5/8, VD-165).
+                    # The result stays: it records the request the capture drove.
+                    entry["available"] = False
+                    entry["reason"] = gpu_kernel.get("note") or GPU_KERNEL_NOT_TRACED_NOTE
                 entry["result"] = dict(gpu_kernel)
         captures.append(entry)
     return {
@@ -693,15 +732,24 @@ def build_profile(
 #: Plain-English kernel categories ``(id, label, description, patterns)``, ordered so
 #: the FIRST case-insensitive substring match wins - one source of truth for the spec.
 _KERNEL_CATEGORIES = (
+    # First, so an expert kernel is never read as another category's pattern
+    # (VD-216: the profile filed vLLM's ``fused_moe_kernel_gptq_awq`` under
+    # "Other"; Vaelor's own kernels are all ``vaelor_moe_*``).
+    ("experts", "Experts (MoE)", "The mixture-of-experts layers: each token's chosen experts, their 4-bit weights read and multiplied, and the bookkeeping that routes tokens to them.", ("fused_moe", "vaelor_moe", "moe_align", "moe_sum")),
     ("attention", "Attention", "How each token attends to the others - the model's context mixing.", ("paged_attention", "flash_attn", "flashattention", "_fwd_kernel", "attention", "_attn", "scaled_dot")),
     ("kv_cache", "KV cache", "Storing and fetching past tokens so they aren't recomputed, plus the paged-KV bookkeeping.", ("reshape_and_cache", "copy_blocks", "kv_cache", "concat_and_cache", "cache_kernel", "slot_mapping", "_apply_write", "_post_update", "_prepare_pos", "seq_lens", "block_table")),
     ("norm", "Normalization", "Keeping activations stable between layers (RMS / layer norm).", ("rms_norm", "rmsnorm", "_add_rms", "layernorm", "layer_norm")),
     ("activation", "Activation & elementwise", "Activation functions, rotary position encoding, and fused elementwise math.", ("silu", "gelu", "swiglu", "rotary", "rope", "pos_encoding", "act_and_mul", "_fused_mul", "_fused_silu", "triton_poi", "triton_red", "elementwise")),
     ("sampling", "Sampling", "Turning the model's scores into the next token (temperature, top-k/top-p, softmax).", ("rocprim", "topk", "top_k", "top_p", "argmax", "sample", "temperature", "cumsum", "softmax", "logits", "sort", "scan")),
-    ("matmul", "Matrix multiply", "The model's dense layers - attention projections and the MLP. The core math run for every token, so this dominating is normal and healthy.", ("wvsplitk", "splitk", "cijk", "gemm", "matmul", "tensile", "hgemm", "mfma", "_mm_")),
+    ("matmul", "Matrix multiply", "The model's dense layers - attention projections and the MLP. The core math run for every token, so this dominating is normal and healthy.", ("wvsplitk", "splitk", "cijk", "gemm", "matmul", "tensile", "hgemm", "mfma", "_mm_", "w4a16_skinny", "vaelor_dense")),
     ("memory", "Memory & data movement", "Copying, filling and reshaping tensors on the GPU.", ("memcpy", "memset", "fill", "copy", "cat_", "index", "reshape", "transpose", "gather", "scatter", "arange", "trampoline")),
     ("other", "Other", "Kernels outside the common categories.", ()),
 )
+#: Kineto's GPU-side ``cat`` values (device work, and the runtime/driver calls
+#: that launch it). A trace holding none of them did not trace the GPU at all.
+_GPU_SIDE_TRACE_CATEGORIES = frozenset(
+    ("kernel", "gpu_memcpy", "gpu_memset", "cuda_runtime", "cuda_driver", "ac2g",
+     "gpu_user_annotation"))
 
 
 def parse_torch_kernel_trace(
@@ -710,7 +758,8 @@ def parse_torch_kernel_trace(
     """Top GPU kernels and their device time from a torch Chrome trace.
 
     ``trace`` is the ``*.pt.trace.json.gz`` the vLLM torch profiler writes on
-    ``/stop_profile`` (gzipped bytes, plain JSON bytes or a JSON string). The
+    ``/stop_profile`` (gzipped bytes, plain JSON bytes or a JSON string), or the
+    bounded reader's per-file summaries (`serving_profile_traces`, VD-214). The
     ``traceEvents`` with ``cat == "kernel"`` carry a long ``name`` (the
     ``Cijk_..._ISA1151_...`` kernels) and a microsecond DEVICE ``dur``; this sums
     ``dur`` by name, counts calls, and returns the hottest ``limit`` rows. Bad
@@ -721,25 +770,23 @@ def parse_torch_kernel_trace(
     calls: Dict[str, int] = {}
     cat_us: Dict[str, int] = {}
     total = 0
+    gpu_side = worker = False
     # A profiling run writes one Chrome trace PER process: the worker
-    # ``rank*`` trace carries the GPU kernels, the API-server ``async_llm``
-    # trace carries none. Aggregate ACROSS all of them so the kernels are
-    # never missed by picking the wrong (newest) single file.
+    # ``rank*`` trace carries the GPU kernels (and ``cpu_op`` rows), the
+    # API-server ``async_llm`` trace carries neither. Aggregate ACROSS all of
+    # them so the kernels are never missed by picking the wrong single file.
     traces = trace if isinstance(trace, (list, tuple)) else [trace]
+    from .serving_profile_traces import is_summary, summarise_events  # VD-214: streamed reads
     for one in traces:
-      for event in _kernel_events(one):
-        if not isinstance(event, dict) or event.get("cat") != "kernel":
-            continue
-        name = event.get("name")
-        micros = _as_int(event.get("dur"))
-        if not isinstance(name, str) or not name or micros is None:
-            continue
-        totals[name] = totals.get(name, 0) + micros
-        calls[name] = calls.get(name, 0) + 1
-        total += micros
-        low = name.lower()
-        cid = next((c[0] for c in _KERNEL_CATEGORIES if any(p in low for p in c[3])), "other")
-        cat_us[cid] = cat_us.get(cid, 0) + micros
+        part = one if is_summary(one) else summarise_events(_kernel_events(one) or [])
+        gpu_side, worker = gpu_side or part["gpu_side"], worker or part["worker"]
+        for name, (micros, count) in part["kernels"].items():
+            totals[name] = totals.get(name, 0) + micros
+            calls[name] = calls.get(name, 0) + count
+            total += micros
+            low = name.lower()
+            cid = next((c[0] for c in _KERNEL_CATEGORIES if any(p in low for p in c[3])), "other")
+            cat_us[cid] = cat_us.get(cid, 0) + micros
     rows = sorted(
         ({"name": n, "total_us": us, "calls": calls[n]} for n, us in totals.items()),
         key=lambda row: row["total_us"], reverse=True,
@@ -753,67 +800,114 @@ def parse_torch_kernel_trace(
         "kind": "gpu_kernels", "window_seconds": int(seconds),
         "total_us": int(total), "rows": rows, "categories": cats,
     }
-    if not rows:
+    if rows:
+        return result
+    if gpu_side:  # the GPU WAS traced; the window really ran no kernels
         result["note"] = GPU_KERNEL_EMPTY_NOTE
+    elif worker:  # a complete worker trace with no GPU event: the GPU was not traced
+        result["note"], result["gpu_traced"] = GPU_KERNEL_NOT_TRACED_NOTE, False
+    else:  # only the API-server trace, or a worker trace read mid-write
+        result["note"], result["worker_trace"] = GPU_KERNEL_NO_WORKER_TRACE, False
     return result
 
 
-def _kernel_events(trace: Any) -> List[Any]:
-    """The ``traceEvents`` list from a torch Chrome trace, tolerant of the form."""
+def _kernel_events(trace: Any) -> Optional[List[Any]]:
+    """The ``traceEvents`` list from a torch Chrome trace; ``None`` if unreadable.
+
+    A gzip cut short (a file still being written) is unreadable, never "empty".
+    """
     if isinstance(trace, (bytes, bytearray)):
         raw = bytes(trace)
         try:
             raw = gzip.decompress(raw)
-        except (OSError, EOFError, ValueError):
-            pass  # not gzipped, or already-decompressed bytes
+        except EOFError:
+            return None  # a truncated gzip: the writer has not finished
+        except (OSError, ValueError):
+            pass  # not gzipped: plain JSON bytes
         trace = raw.decode("utf-8", errors="replace")
     if not isinstance(trace, str) or not trace.strip():
-        return []
+        return None
     try:
         data = json.loads(trace)
     except (ValueError, TypeError):
-        return []
+        return None
     events = data.get("traceEvents") if isinstance(data, dict) else None
-    return events if isinstance(events, list) else []
+    return events if isinstance(events, list) else None
+
+
+def _registration_off(pid: Any, read_environ: Optional[Callable[[int], bytes]]) -> bool:
+    """Whether the serving process's own environment carries VD-165's switch."""
+    try:  # an image that no longer defines the switch: the cause is unconfirmed
+        from .vllm_images import VLLM_027_ROCM10
+        switch = next(e for e in VLLM_027_ROCM10.environment if e.startswith("ROCPROFILER_"))
+        reader = read_environ or _read_proc_environ
+        return switch.encode() in reader(int(pid)).split(b"\0")
+    except Exception:  # noqa: BLE001 - unreadable means unchecked, never assumed
+        return False
+
+
+def _read_proc_environ(pid: int) -> bytes:
+    with open("/proc/{}/environ".format(pid), "rb") as handle:
+        return handle.read()
 
 
 def _run_gpu_kernel_capture(
     run: Callable[..., Any], seconds: int, ports: Sequence[int], profiles_dir: str,
     curl_path: str, sleep: Callable[[float], None], clock: Callable[[], float],
     trace_reader: Optional[Callable[[], Optional[bytes]]] = None,
+    serving_pid: Optional[int] = None, read_environ: Optional[Callable[[int], bytes]] = None,
 ) -> Dict[str, Any]:
     """Drive the live vLLM's torch profiler and parse its kernel trace.
 
     Best-effort and bounded: discover the local replica via ``/v1/models`` on
     each candidate loopback port (the first that answers gives the served model),
     clear the host dir, POST ``/start_profile``, drive ONE short completion, POST
-    ``/stop_profile``, poll for the newest trace and parse it. Any failure is an
-    honest note on an empty result and NEVER a raise, so the deepest capture
-    cannot crash a profile. The profiler perturbs latency during the window.
+    ``/stop_profile``, poll until a complete worker trace is read, and parse it.
+    ``request_driven`` records whether that completion was sent - its own fact,
+    not inferred from kernel rows (the drafter capture reads it, VD-213). Any
+    failure is an honest note on an empty result and NEVER a raise.
     """
+    driven = False
     empty = {"kind": "gpu_kernels", "window_seconds": int(seconds), "total_us": 0, "rows": []}
     try:
         endpoint = _resolve_vllm_endpoint(run, ports, curl_path)
         if endpoint is None:
-            return dict(empty, note=GPU_KERNEL_NO_ENDPOINT)
+            return dict(empty, note=GPU_KERNEL_NO_ENDPOINT, request_driven=False)
         base, model = endpoint
-        _prepare_profiles_dir(profiles_dir)
+        # Never trust the cleanup: read only names this capture adds (live Z2, VD-128).
+        stale = _prepare_profiles_dir(profiles_dir)
         started = run(_curl_post(base + "/start_profile", curl_path), timeout=PROFILE_HTTP_TIMEOUT_SECONDS)
         if getattr(started, "returncode", 1) != 0:
-            return dict(empty, note=_tool_stderr(started) or GPU_KERNEL_FAILED)
+            return dict(empty, note=_tool_stderr(started) or GPU_KERNEL_FAILED, request_driven=False)
+        driven = True
         run(_curl_completion(base, model, curl_path), timeout=PROFILE_COMPLETION_TIMEOUT_SECONDS)
         run(_curl_post(base + "/stop_profile", curl_path), timeout=PROFILE_HTTP_TIMEOUT_SECONDS)
-        reader = trace_reader or (lambda: _all_trace_bytes(profiles_dir))
-        deadline = clock() + GPU_KERNEL_TRACE_WAIT_SECONDS
+        refused: List[Dict[str, str]] = []  # traces the bounded reader would not read (VD-214)
+        writing: List[str] = []  # traces still being written at the last read (VD-216)
+        reader = trace_reader or (lambda: _read_traces(profiles_dir, stale, refused, writing))
+        waiting_since = clock()
         raw = reader()
-        while not raw and clock() < deadline:
+        # Wait out a missing file AND a partial read (API-server trace only, or
+        # the worker's gzip mid-write): either would read as "not traced". A
+        # trace the reader saw mid-write is waited for longer (measured above).
+        while ((not raw or parse_torch_kernel_trace(raw).get("worker_trace") is False)
+               and clock() < waiting_since + (GPU_KERNEL_TRACE_WRITING_WAIT_SECONDS if writing
+                                              else GPU_KERNEL_TRACE_WAIT_SECONDS)):
             sleep(GPU_KERNEL_POLL_INTERVAL_SECONDS)
             raw = reader()
+        kept: Dict[str, Any] = {"stale_traces_kept": len(stale)} if stale else {}  # reported, never swallowed
+        unfinished = [{"name": name, "reason": GPU_KERNEL_TRACE_UNFINISHED.format(
+            clock() - waiting_since)} for name in writing]
+        if refused or unfinished:
+            kept["traces_refused"] = list(refused) + unfinished
         if not raw:
-            return dict(empty, note=GPU_KERNEL_NO_TRACE)
-        return parse_torch_kernel_trace(raw, seconds=seconds)
+            return dict(empty, note=GPU_KERNEL_NO_TRACE, request_driven=True, **kept)
+        result = dict(parse_torch_kernel_trace(raw, seconds=seconds), request_driven=True, **kept)
+        if result.get("gpu_traced") is False and _registration_off(serving_pid, read_environ):
+            result["note"] = GPU_KERNEL_TRACING_OFF_NOTE  # the cause, checked (LESSONS 9)
+        return result
     except Exception:  # noqa: BLE001 - the deepest capture must never crash a profile
-        return dict(empty, note=GPU_KERNEL_FAILED)
+        return dict(empty, note=GPU_KERNEL_FAILED, request_driven=driven)
 
 
 def _resolve_vllm_endpoint(run: Callable[..., Any], ports: Sequence[int], curl_path: str):
@@ -860,36 +954,38 @@ def _curl_completion(base: str, model: str, curl_path: str) -> List[str]:
             "-H", "Content-Type: application/json", "-d", body]
 
 
-def _prepare_profiles_dir(profiles_dir: str) -> None:
-    """Ensure the host profiles dir exists and clear stale traces (root, in-process)."""
+def _prepare_profiles_dir(profiles_dir: str) -> set:
+    """Ensure the host profiles dir exists and clear stale traces (root, in-process).
+
+    Returns the trace names it could NOT remove (EROFS under a sandbox that does
+    not list the folder), so the reader skips them and the result reports them.
+    """
+    left: set = set()
     try:
         os.makedirs(profiles_dir, exist_ok=True)
-        for name in os.listdir(profiles_dir):
-            if name.endswith(GPU_KERNEL_TRACE_SUFFIX):
-                try:
-                    os.remove(os.path.join(profiles_dir, name))
-                except OSError:
-                    pass
     except OSError:
         pass
-
-
-def _all_trace_bytes(profiles_dir: str) -> List[bytes]:
-    """EVERY torch Chrome trace in the dir as bytes. A run writes one per
-    process (worker ``rank*`` has the kernels, API-server ``async_llm`` has
-    none), so all are returned and the parser aggregates - robust to which
-    file is newest. Empty list when the dir is missing or has no trace."""
-    out: List[bytes] = []
     try:
-        names = sorted(os.listdir(profiles_dir))
+        names = os.listdir(profiles_dir)
     except OSError:
-        return out
+        return left
     for name in names:
-        if not name.endswith(GPU_KERNEL_TRACE_SUFFIX):
-            continue
-        try:
-            with open(os.path.join(profiles_dir, name), "rb") as handle:
-                out.append(handle.read())
-        except OSError:
-            pass
-    return out
+        if name.endswith(GPU_KERNEL_TRACE_SUFFIX):
+            try:
+                os.remove(os.path.join(profiles_dir, name))
+            except OSError:
+                left.add(name)
+    return left
+
+
+def _read_traces(profiles_dir: str, skip: Any, refused: List[Dict[str, str]],
+                 writing: Optional[List[str]] = None) -> List[bytes]:
+    """Every trace this capture wrote, read bounded and no-follow; ``refused`` is
+    set to the files the reader would not read, ``writing`` to those still being
+    written (`serving_profile_traces`)."""
+    from .serving_profile_traces import read_traces
+    read = read_traces(profiles_dir, skip)
+    refused[:] = read.refused
+    if writing is not None:
+        writing[:] = read.pending
+    return read.blobs

@@ -57,7 +57,7 @@ pm_system_update = "pm_dashboard.system_update:main"
 include = ["pm_dashboard*", "vaelor*"]
 
 [tool.setuptools.package-data]
-vaelor = ["www_v2/**/*", "appliance_units/*.service", "build_stamp.json", "worker_profile_keys/*.gpg", "data/*.txt"]
+vaelor = ["www_v2/**/*", "appliance_units/*.service", "build_stamp.json", "worker_profile_keys/*.gpg", "data/*.txt", "vllm_moe_plugin/*.py", "vllm_moe_plugin/*.hip", "vllm_moe_plugin/*.dist-info/*"]
 
 [tool.setuptools.data-files]
 "share/doc/vaelor" = [

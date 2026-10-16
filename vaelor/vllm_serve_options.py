@@ -64,7 +64,16 @@ is WRITTEN with the six fields an older bridge knows (:meth:`ServeOptions.
 as_record`): every deployment that does not need the new switches loads
 against an older bridge exactly as before. One that does need them is refused
 by that bridge, and the refusal is said as what to do about it
-(:data:`BRIDGE_TOO_OLD`).
+(:data:`BRIDGE_TOO_OLD`). The Advanced settings (VD-213: request cap, batch
+budget, draft model, newer runner; `vllm_serve_advanced`) follow the same
+rule: each is written only when it is set, so a value without them is the
+record an older bridge accepts byte for byte. So does the patched-attention
+overlay a draft model serves with (VD-215, `vllm_overlays`): decided for a new
+deployment, kept as recorded on a Load. So does Vaelor's expert kernel (VD-216,
+`vllm_moe_kernels`). So do VD-216 work order item 2's two speed-ups - the
+qk-norm/RoPE fusion (`vllm_serve_advanced`) and the 4-bit guesser
+(`vllm_guesser_build`) - which are also ADDED at a Load where they were
+measured (:func:`with_measured_speedups`), never removed by one.
 """
 
 from __future__ import annotations
@@ -72,7 +81,25 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from .gpu_model_catalog import served_repo
+from .vllm_drafters import drafter_profile
 from .vllm_entry_program import TUNED_FOLDER_ENV
+from .vllm_serve_advanced import (
+    ADVANCED_FIELDS, FUSION_FIELD, NOTHING, SPLIT_REFUSED, Advanced, advanced_choices,
+    advanced_environment, advanced_for, advanced_from_record, advanced_record, advanced_words,
+    decide_fusion, fusion_words, require_fusion,
+)
+from .vllm_guesser_build import (
+    CONTAINER_DIR as GUESSER_CONTAINER_DIR, GUESSER_FIELD, GuesserBuild, decide_guesser,
+    refused_fields, require_guesser,
+)
+from .vllm_overlays import (
+    OVERLAY_FIELD, VllmOverlay, decide_overlay, overlay_environment, overlay_words,
+    require_overlay,
+)
+from .vllm_moe_kernels import (
+    MOE_KERNEL_FIELD, VllmMoeKernel, decide_moe_kernel, kernel_environment, require_moe_kernel,
+)
 from .vllm_images import (
     DEFAULT_IMAGE_KEY, IMAGE_FIELD, IMAGES, RECORDED_IMAGE_KEY, VllmImage,
     all_rdna3_family, gfx_family_major, image_profile,
@@ -140,6 +167,21 @@ class ServeOptions:
     bf16_attention: bool = False
     #: The aligned prefix cache of a hybrid model (:func:`hybrid_cache`).
     aligned_prefix_cache: bool = False
+    #: The Advanced settings (VD-213), `vllm_serve_advanced.Advanced`:
+    #: request cap, batch budget, draft model and its lookahead table, newer
+    #: runner. All off is a unit as it was before they existed.
+    advanced: Advanced = NOTHING
+    #: The patched-attention overlay a draft model serves with (VD-215,
+    #: `vllm_overlays`), by its table key; ``None`` is the image's own file.
+    attention_overlay: Optional[str] = None
+    #: Vaelor's expert-kernel plugin (VD-216, `vllm_moe_kernels`), by its
+    #: table key; ``None`` is vLLM's own expert kernel.
+    moe_kernel: Optional[str] = None
+    #: vLLM's fused qk-norm/RoPE step (VD-216 item 2, `vllm_serve_advanced`).
+    qk_norm_rope_fusion: bool = False
+    #: The 4-bit guesser build (VD-216 item 2, `vllm_guesser_build`), by its
+    #: table key; ``None`` is the pinned bf16 drafter itself.
+    guesser: Optional[str] = None
 
     def as_record(self) -> Dict[str, Any]:
         """The value as a unit parameter and a record field: plain JSON types.
@@ -149,9 +191,22 @@ class ServeOptions:
         what a bridge from before the switches accepts (module docstring).
         """
         record = asdict(self)
+        del record["advanced"]
+        # Written only when set (VD-215), as the Advanced settings are: a
+        # deployment without it is the record an older bridge accepts.
+        if self.attention_overlay is None:
+            del record[OVERLAY_FIELD]
+        if self.moe_kernel is None:
+            del record[MOE_KERNEL_FIELD]
+        # VD-216 item 2, the same rule: absent unless set.
+        if not self.qk_norm_rope_fusion:
+            del record[FUSION_FIELD]
+        if self.guesser is None:
+            del record[GUESSER_FIELD]
         if not (self.bf16_attention or self.aligned_prefix_cache):
             for field in _CACHE_FIELDS:
                 del record[field]
+        record.update(advanced_record(self.advanced))
         return record
 
 
@@ -178,7 +233,8 @@ def require_options(value: Any) -> ServeOptions:
         value = value.as_record()
     if not isinstance(value, Mapping):
         raise ValueError("The vLLM serving options must be named values.")
-    keys = set(str(key) for key in value)
+    keys = set(str(key) for key in value) - set(ADVANCED_FIELDS) - {
+        OVERLAY_FIELD, MOE_KERNEL_FIELD, FUSION_FIELD, GUESSER_FIELD}
     if keys not in (set(_FIELDS), set(_FIELDS + _CACHE_FIELDS)):
         raise _refuse(", ".join(sorted(
             keys.symmetric_difference(_FIELDS + _CACHE_FIELDS)
@@ -217,11 +273,32 @@ def require_options(value: Any) -> ServeOptions:
         raise _refuse("bf16_attention")
     if aligned and (not bf16 or tokens):
         raise _refuse("aligned_prefix_cache")
+    # The Advanced settings' one rule (`vllm_serve_advanced.check_advanced`),
+    # the same the deploy decided them with.
+    advanced = advanced_from_record(value, image=image, mtp_tokens=tokens)
+    # VD-215: a stored overlay key, present only when set; a present null is
+    # refused rather than read as off, like the Advanced fields.
+    if OVERLAY_FIELD in value and value[OVERLAY_FIELD] is None:
+        raise _refuse(OVERLAY_FIELD)
+    overlay = require_overlay(value.get(OVERLAY_FIELD), image=image, drafter=advanced[2])
+    # VD-216: the same rule for Vaelor's expert kernel.
+    if MOE_KERNEL_FIELD in value and value[MOE_KERNEL_FIELD] is None:
+        raise _refuse(MOE_KERNEL_FIELD)
+    kernel = require_moe_kernel(value.get(MOE_KERNEL_FIELD), image=image)
+    # VD-216 item 2: present only when set, and a present null is refused.
+    for field in (FUSION_FIELD, GUESSER_FIELD):
+        if field in value and value[field] is None:
+            raise _refuse(field)
+    fusion = require_fusion(value.get(FUSION_FIELD), image=image)
+    guesser = require_guesser(value.get(GUESSER_FIELD), image=image, drafter=advanced[2])
     return ServeOptions(
         tool_call_parser=tool_parser, reasoning_parser=reasoning,
         mtp_tokens=tokens, text_only=value["text_only"],
         tuned_moe=value["tuned_moe"], vllm_image=image.key,
-        bf16_attention=bf16, aligned_prefix_cache=aligned,
+        bf16_attention=bf16, aligned_prefix_cache=aligned, advanced=advanced,
+        attention_overlay=None if overlay is None else overlay.key,
+        moe_kernel=None if kernel is None else kernel.key,
+        qk_norm_rope_fusion=fusion, guesser=None if guesser is None else guesser.key,
     )
 
 
@@ -259,7 +336,9 @@ def requested_mtp_tokens(raw: Any, mtp_layers: Optional[int]) -> int:
     return raw
 
 
-def _require_replicated(tokens: int, replicated: bool) -> None:
+def _require_replicated(tokens: int, replicated: bool, advanced: Advanced = NOTHING) -> None:
+    if (advanced[2] is not None or advanced[4]) and not replicated:
+        raise ValueError(SPLIT_REFUSED)
     if tokens and not replicated:
         raise ValueError(
             "Multi-token prediction is offered on a one-copy-per-machine "
@@ -384,13 +463,20 @@ def bridge_refusal(error: Any, values: Mapping[str, Any]) -> Optional[str]:
     """
     options = values.get(OPTIONS_FIELD)
     carried = [
-        name for name in _CACHE_FIELDS
+        name for name in _CACHE_FIELDS + ADVANCED_FIELDS + (
+            OVERLAY_FIELD, MOE_KERNEL_FIELD, FUSION_FIELD, GUESSER_FIELD)
         if isinstance(options, Mapping) and name in options
     ]
     if IMAGE_FIELD in values:
         carried.append(IMAGE_FIELD)
     text = str(error)
-    return BRIDGE_TOO_OLD if any(name in text for name in carried) else None
+    # VD-216 item 2 (G64 residue): "guesser" is an ordinary word in the
+    # bridge's own sentences, so item 2's two fields count only when the
+    # refusal LISTS them by name - never because a sentence mentions one.
+    exact = {FUSION_FIELD, GUESSER_FIELD}
+    listed = refused_fields(text)
+    return BRIDGE_TOO_OLD if any(
+        (name in listed) if name in exact else (name in text) for name in carried) else None
 
 
 def options_for(
@@ -417,15 +503,88 @@ def options_for(
     )
     _require_replicated(tokens, replicated)
     bf16, aligned = hybrid_cache(profile.hybrid, image, gpu_targets, tokens)
-    return ServeOptions(
+    # The Advanced settings (VD-213): the payload's, else this repo's catalog
+    # defaults on one copy per machine (`vllm_serve_advanced.advanced_for`).
+    advanced = advanced_for(
+        payload, repo=_payload_repo(payload), image=image, mtp_tokens=tokens,
+        replicated=replicated,
+    )
+    return with_measured_speedups(ServeOptions(
         tool_call_parser=profile.tool_call_parser,
         reasoning_parser=profile.reasoning_parser,
         mtp_tokens=tokens,
         text_only=profile.vision and (raw_text_only is not False),
         tuned_moe=profile.moe and image.moe_entry,
         vllm_image=image.key,
-        bf16_attention=bf16, aligned_prefix_cache=aligned,
-    )
+        bf16_attention=bf16, aligned_prefix_cache=aligned, advanced=advanced,
+        # VD-215: a draft model on one copy per machine serves with the
+        # patched attention file where its image has one (`vllm_overlays`).
+        attention_overlay=decide_overlay(image, advanced[2], replicated),
+        # VD-216: the 30B on one copy per machine serves its small expert
+        # calls with Vaelor's own kernel (`vllm_moe_kernels`).
+        moe_kernel=decide_moe_kernel(image, _payload_repo(payload), replicated),
+    ), _payload_repo(payload), replicated=replicated, gpu_targets=gpu_targets)
+
+
+def with_measured_speedups(
+    options: ServeOptions, repo: Any, *, replicated: bool, gpu_targets: Iterable[Any],
+) -> ServeOptions:
+    """``options`` with VD-216 item 2's speed-ups added where they were measured.
+
+    The qk-norm/RoPE fusion (`vllm_serve_advanced.decide_fusion`) and the
+    4-bit guesser (`vllm_guesser_build.decide_guesser`): the 30B on the 0.27
+    image, one copy per machine, every machine gfx1151 - read from the
+    ``gfx_target_version`` each machine reported, the facts the hybrid cache
+    is decided from. A deploy decides them, and so does every Load, from the
+    machines as they are now: a record made before them gains them (LESSONS
+    22), and one whose machines now READ as another GPU loses them (R86; the
+    Load says so, `gpu_pool_refit`). Only when a machine's GPU cannot be read
+    is the record kept as it is - an unread version is not evidence the GPU
+    changed (LESSONS 8) - and nothing is added either.
+    """
+    targets = list(gpu_targets or ())
+    image = image_profile(options.vllm_image)
+    if not targets or not all(gfx_family_major(target) for target in targets):
+        return options
+    fusion = decide_fusion(image, repo, replicated, targets)
+    guesser = decide_guesser(image, options.advanced[2], replicated, targets, repo=str(repo or ""))
+    if fusion == options.qk_norm_rope_fusion and guesser == options.guesser:
+        return options
+    return replace(options, qk_norm_rope_fusion=fusion, guesser=guesser)
+
+
+def _payload_repo(payload: Mapping[str, Any]) -> Optional[str]:
+    """The repo a deploy payload's ``model_source`` serves, ``None`` when it names none.
+
+    A source the deploy refuses is refused by the deploy's own resolution
+    first; here it only means there are no defaults to read.
+    """
+    if not payload.get("model_source"):
+        return None
+    try:
+        return served_repo(payload.get("model_source"))[0]
+    except ValueError:
+        return None
+
+
+def options_draft_bytes(value: Any) -> int:
+    """The weight bytes of the draft model ``value`` serves with, 0 for none (VD-213)."""
+    key = require_options(value).advanced[2]
+    return drafter_profile(key).weight_bytes if key is not None else 0
+
+
+def payload_draft_bytes(
+    repo: Any, facts: Optional[ModelFacts], payload: Mapping[str, Any],
+    gpu_targets: Iterable[Any] = (),
+) -> int:
+    """The draft model a whole copy of this deploy would load, in bytes (VD-213).
+
+    Decided by :func:`options_for` itself, as a one-copy-per-machine
+    deployment, so the fit charges exactly the drafter the units will run.
+    """
+    return options_draft_bytes(options_for(
+        profile_for(repo, facts), payload, replicated=True, gpu_targets=gpu_targets,
+    ))
 
 
 def options_from_record(
@@ -449,7 +608,9 @@ def options_from_record(
     stored = (units or {}).get(OPTIONS_FIELD)
     if stored is not None:
         options = require_options(stored)
-        _require_replicated(options.mtp_tokens, replicated)
+        _require_replicated(options.mtp_tokens, replicated, options.advanced)
+        if options.qk_norm_rope_fusion and not replicated:
+            raise ValueError(SPLIT_REFUSED)
         return options
     profile = profile_for(repo, None)
     recorded = image_profile(RECORDED_IMAGE_KEY)
@@ -485,7 +646,12 @@ def options_for_load(
     (`gpu_pool_refit.options_for_load_checked`). A record that says nothing
     about the config, or says it was read, is rendered as stored.
     """
-    stored = options_from_record(units, repo, replicated=replicated)
+    # VD-216 item 2: what this release measured, added to the stored options
+    # on the machines as they are now (:func:`with_measured_speedups`).
+    stored = with_measured_speedups(
+        options_from_record(units, repo, replicated=replicated), repo,
+        replicated=replicated, gpu_targets=gpu_targets,
+    )
     if (units or {}).get(CONFIG_READ_FIELD) is not False or facts is None:
         return stored, (units or {}).get(CONFIG_READ_FIELD) is not False
     bf16, aligned = hybrid_cache(
@@ -530,6 +696,15 @@ def serve_arguments(value: Any) -> List[str]:
             "--speculative-config.method=mtp",
             "--speculative-config.num_speculative_tokens={}".format(options.mtp_tokens),
         ]
+    # The Advanced settings (VD-213) after everything else, so a value
+    # without them renders byte for byte as before; then the overlay's
+    # backend (VD-215), never twice.
+    words += advanced_words(options.advanced, drafter_path=(
+        None if options.guesser is None else GUESSER_CONTAINER_DIR))
+    if options.attention_overlay is not None:
+        words += overlay_words(options.bf16_attention)
+    # VD-216 item 2: last, so a value without it renders byte for byte as before.
+    words += fusion_words(options.qk_norm_rope_fusion)
     return words
 
 
@@ -590,6 +765,7 @@ def serving_choices(
     the image the form has chosen and the machines it has selected.
     """
     profile = profile_for(repo, facts)
+    gpu_nodes = list(gpu_nodes or ())
     has_head = profile.config_read and profile.mtp_layers > 0
     images = sorted(IMAGES.values(), key=lambda image: image.key != DEFAULT_IMAGE_KEY)
     return {
@@ -612,14 +788,44 @@ def serving_choices(
             "applies": profile.vision,
             "detail": TEXT_ONLY_OFFERED if profile.vision else "",
         },
+        # VD-213: the Advanced section's choices and defaults for this model
+        # on the image the form has chosen (`vllm_serve_advanced`).
+        "advanced": advanced_choices(repo, image_profile(vllm_image), gpu_nodes),
     }
 
 
 def container_environment(value: Any) -> List[str]:
-    """The container variables ``value`` adds: the tuned-table folder for an MoE model."""
-    if require_options(value).tuned_moe:
-        return [TUNED_FOLDER_ENV]
-    return []
+    """The container variables ``value`` adds: the tuned-table folder for an MoE
+    model, then the newer runner's variable (VD-213)."""
+    options = require_options(value)
+    overlay = overlay_of(options)
+    kernel = moe_kernel_of(options)
+    return ([TUNED_FOLDER_ENV] if options.tuned_moe else []) + advanced_environment(
+        options.advanced) + (
+        [] if overlay is None else overlay_environment(overlay, options.advanced[3])) + (
+        [] if kernel is None else kernel_environment(kernel))
+
+
+def overlay_of(value: Any) -> Optional[VllmOverlay]:
+    """The overlay a unit rendered from ``value`` mounts (VD-215), or ``None``."""
+    options = require_options(value)
+    return require_overlay(
+        options.attention_overlay, image=image_profile(options.vllm_image),
+        drafter=options.advanced[2],
+    )
+
+
+def moe_kernel_of(value: Any) -> Optional[VllmMoeKernel]:
+    """Vaelor's expert-kernel plugin a unit rendered from ``value`` mounts (VD-216), or ``None``."""
+    options = require_options(value)
+    return require_moe_kernel(options.moe_kernel, image=image_profile(options.vllm_image))
+
+
+def guesser_of(value: Any) -> Optional[GuesserBuild]:
+    """The 4-bit guesser build a unit rendered from ``value`` mounts (VD-216 item 2), or ``None``."""
+    options = require_options(value)
+    return require_guesser(options.guesser, image=image_profile(options.vllm_image),
+                           drafter=options.advanced[2])
 
 
 def wants_tuned_tables(value: Any) -> bool:

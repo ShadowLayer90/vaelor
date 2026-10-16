@@ -39,8 +39,11 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from .agent_research_relevance import rank_candidates, shaped_query
 from .assistant_tools import AssistantToolError
-from .inference_client import allowed_inference_endpoint, chat_completion, inference_timeout
+from .inference_client import (
+    allowed_inference_endpoint, appliance_session_headers, chat_completion, inference_timeout,
+)
 from .model_profiles import reasoning_headroom_tokens
+from .session_affinity import agent_task_session_key
 from .provider_runtime import (
     generation_parameters,
     provider_system_prompt,
@@ -158,6 +161,9 @@ def plan_search_query(
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if connection.get("api_key"):
         headers["Authorization"] = "Bearer {}".format(connection["api_key"])
+    # VD-216 fix 1: the reformulation pass re-sends this system prompt and task,
+    # so both passes name the task (the same key the tool loop derives).
+    headers.update(appliance_session_headers(dict(connection), agent_task_session_key(task_text)))
     payload: Dict[str, Any] = {"task": task}
     reformulated = False
     if isinstance(prior, Mapping):

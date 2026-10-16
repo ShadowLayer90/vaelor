@@ -20,6 +20,7 @@ from . import gpu_unit_params as unit_params
 from .gpu_serving_target import SERVER_LOOPBACK_HOST
 from .model_thinking import serve_thinking_arguments
 from .serving_profiler import SERVING_PROFILES_MOUNT
+from .vllm_serve_advanced import SPLIT_REFUSED, require_target
 from .vllm_serve_options import serve_arguments as model_arguments
 
 
@@ -78,7 +79,18 @@ def serve_arguments(
         "--gpu-memory-utilization", f"{utilization:.2f}",
         "--max-model-len", str(context),
     ]
-    parts += model_arguments(unit_params.serve_options(vllm_options))
+    options = unit_params.serve_options(vllm_options)
+    # A draft model drafts only for the targets it is pinned to (VD-213):
+    # checked here, against the repo this unit serves, on both sides of the
+    # root bridge - the deploy checked it against the payload's.
+    require_target(options.advanced[2], served)
+    if distributed and (options.advanced[2] is not None or options.advanced[4]
+                        or options.qk_norm_rope_fusion):
+        # Neither was run across a split (VD-213; VD-216 item 2's fusion was
+        # measured one copy per machine): the deploy refuses it, and so does
+        # the renderer, on both sides of the root bridge.
+        raise ValueError(SPLIT_REFUSED)
+    parts += model_arguments(options)
     parts += [
         # vLLM's torch profiler -> host-mounted dir (VD-128); idle until /start_profile.
         "--profiler-config.profiler=torch",

@@ -4,6 +4,8 @@ import { Button, Input, Notice, SegmentedControl, Select } from "./ui";
 import { OptionCard } from "./ClusterPrimitives";
 import { FitDecision, fitIsServable } from "./FitDecision";
 import { GpuSplitChoice } from "./GpuSplitChoice";
+import { GpuServeAdvanced } from "./GpuServeAdvanced";
+import { advancedServeFields, firstAdvancedError, type AdvancedEdits } from "../lib/gpuServeAdvanced";
 import { apiRequest } from "../lib/api";
 import {
   GPU_MODEL_CATALOG,
@@ -292,6 +294,8 @@ export function GpuServeForm({
   const [imagePick, setImagePick] = useState<{ source: string; key: string } | null>(null);
   const [mtpPick, setMtpPick] = useState<{ source: string; tokens: string } | null>(null);
   const [textOnlyPick, setTextOnlyPick] = useState<{ source: string; value: boolean } | null>(null);
+  // VD-213 Advanced settings: only the fields the owner changed; none sends nothing.
+  const [advancedPick, setAdvancedPick] = useState<{ source: string; edits: AdvancedEdits | null } | null>(null);
   // The choices the last fit offered for a model. Kept while a new fit is in
   // flight or has failed, so the controls stay on screen and a choice the fit
   // refused can be taken back.
@@ -373,6 +377,14 @@ export function GpuServeForm({
   // cache of the image the deploy will launch.
   const imageField = serving && vllmImage && vllmImage !== serving.default_image
     ? { vllm_image: vllmImage } : {};
+  // VD-213: only what the owner changed rides in the fit and the deploy alike
+  // (the drafter's weight is in the fit); an older backend sends no `advanced`.
+  const advancedEdits = advancedPick?.source === modelSource ? advancedPick.edits : null;
+  const advancedResult = serving?.advanced ? advancedServeFields(serving.advanced, advancedEdits, {
+    replicated: intent === INTENT_THROUGHPUT, mtpTokens: mtpOffered ? draftTokens : 0,
+  }) : null;
+  const advancedFields = advancedResult?.fields ?? {};
+  const advancedError = advancedResult ? firstAdvancedError(advancedResult) : "";
   // The split's choices exist only while the preview splits the model: a
   // choice the owner can no longer see is never sent (review). Nothing chosen
   // is a pipeline, so `split_mode` is sent only for tensor.
@@ -402,6 +414,7 @@ export function GpuServeForm({
       ...contextField,
       ...mtpField,
       ...imageField,
+      ...advancedFields,
       node_ids: [...nodeIds].sort(),
     })
     : "";
@@ -472,6 +485,7 @@ export function GpuServeForm({
     ...imageField,
     ...mtpField,
     ...(serving?.text_only.applies ? { text_only: textOnly } : {}),
+    ...advancedFields,
   };
   const sourceReady = path === "easy" ? Boolean(catalogId) : link.trim().length > 0;
   const fits = fitIsServable(fit?.verdict);
@@ -510,6 +524,7 @@ export function GpuServeForm({
     && !fitPending
     && fits
     && !refusal
+    && !advancedError
     && (positive(port) ?? 0) > 0;
   const refusalId = `${formIds}-refusal`;
   const splitReason = fit?.verdict === "distributed" && fit.placement && "parallelism_reason" in fit.placement
@@ -735,6 +750,10 @@ export function GpuServeForm({
           onChange={(event) => setTextOnlyPick({ source: modelSource, value: event.target.checked })}
           title="Serve text only (skip the image reader)" type="checkbox" />
       )}
+      {serving?.advanced && advancedResult && (
+        <GpuServeAdvanced advanced={serving.advanced} edits={advancedEdits} result={advancedResult}
+          onChange={(edits) => setAdvancedPick({ source: modelSource, edits })} />
+      )}
       {/* Thinking is offered only for a model whose template has the switch.
           A model without one (the recommended Instruct model among them) is
           shown no control at all, only the plain sentence that says so: a
@@ -785,6 +804,7 @@ export function GpuServeForm({
     if (fitPending && !fitError) return "Waiting for the fit decision.";
     // The deploy's own refusal (VD-168) is in the fit box.
     if (refusal) return "See why above.";
+    if (advancedError) return `Advanced: ${advancedError}`;
     if (fit?.verdict === "wont_fit") return "This model won't fit on the fleet's GPUs.";
     if (fit?.verdict === "single_refused") return "This model fits one machine, so serve it there as the AI Chat model.";
     // The engine's own sentence for what the intent cannot do here (VD-129:

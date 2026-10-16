@@ -413,6 +413,49 @@ def parse_vllm_serving(text: str) -> Dict[str, Any]:
     return {"aggregate": aggregate, "models": models}
 
 
+#: Every family vLLM declares for speculative decoding starts with this, and
+#: vLLM declares none of them unless a drafter is configured. Matched anywhere
+#: in the body, ``# HELP``/``# TYPE`` lines included, so a declared family with
+#: no sample yet still counts as a drafter.
+SPEC_DECODE_SERIES_PREFIX = "vllm:spec_decode_"
+
+#: What a vLLM performance reading's ``itl_intervals`` counts since VD-213: the
+#: tokens decode steps wrote. Stored with the ledger's baseline so a baseline
+#: taken before (inter-token COUNT, i.e. steps) is never diffed against one
+#: taken after - the difference would be the replica's lifetime of drafted
+#: tokens landing in one bucket (review R47).
+DECODE_BASIS_STEP_TOKENS = "decode_step_tokens"
+
+
+def decode_step_tokens(aggregate: Dict[str, float], body: Any) -> Optional[float]:
+    """The cumulative tokens vLLM's decode steps wrote, or ``None`` when not known (VD-213).
+
+    vLLM 0.27 observes ONE inter-token latency per engine step per request
+    (``vllm/v1/metrics/stats.py``, ``update_from_output``), and a speculative
+    step writes several tokens, so the inter-token COUNT is steps, not tokens:
+    with the drafter on the Z2 it read 7.8 a second where 28.3 tokens were being
+    written. The tokens are every generated token but each request's first,
+    which the prefill step writes and times as time-to-first-token, not as an
+    inter-token latency: ``generation_tokens_total - ttft_seconds_count``. Over
+    the same steps the inter-token SUM times, so their ratio is tokens a second.
+
+    Without those two counters the inter-token count is used only when the body
+    declares no ``vllm:spec_decode_`` family: then a step wrote one token and
+    the count is exact. A drafter with a missing counter is ``None`` - not read,
+    never steps passed off as tokens (LESSONS 1, 5). A negative difference
+    cannot come from one consistent scrape and is ``None`` too, not clamped.
+    """
+    generation = aggregate.get("generation_tokens_total")
+    first_tokens = aggregate.get("ttft_seconds_count")
+    if generation is not None and first_tokens is not None:
+        tokens = generation - first_tokens
+        return tokens if tokens >= 0 else None
+    intervals = aggregate.get("tpot_seconds_count")
+    if intervals is not None and isinstance(body, str) and SPEC_DECODE_SERIES_PREFIX not in body:
+        return intervals
+    return None
+
+
 # --- The per-replica performance reading (VD-147, slice S3) ------------------
 #: The two vLLM histograms that can say how fast requests decode. The
 #: per-request one (``request_time_per_output_token_seconds``: one observation

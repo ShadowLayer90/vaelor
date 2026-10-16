@@ -51,7 +51,7 @@ import sqlite3
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .serving_buckets import bin_increases, span_is_rateable, stamped_span
-from .serving_metrics import FAMILY_PER_REQUEST, SERVING_POLL_SECONDS
+from .serving_metrics import DECODE_BASIS_STEP_TOKENS, FAMILY_PER_REQUEST, SERVING_POLL_SECONDS
 from .usage_rollup import performance_bucket_start, performance_prune_before
 
 #: How a deployment's copies are laid out, as a row records it: one full copy
@@ -61,11 +61,16 @@ from .usage_rollup import performance_bucket_start, performance_prune_before
 PLACEMENT_SINGLE = "single"
 
 #: The cumulative counters a tick's performance reading may carry, each mapped
-#: to the column its increase is added to.
+#: to the column its increase is added to. ``itl_intervals`` holds decode TOKENS
+#: (llama.cpp's tokens predicted; vLLM's decode-step tokens, VD-213), not
+#: inter-token intervals: the name predates speculative decoding.
 COUNTER_COLUMNS = (
     "itl_seconds", "itl_intervals", "prefix_hits", "prefix_queries",
     "preemptions", "prompt_computed", "prompt_cached", "prompt_seconds",
 )
+#: The decode pair: written together, and left out together when their
+#: increase is not a measurement (see :func:`_decode_pair_unusable`).
+_DECODE_PAIR = ("itl_intervals", "itl_seconds")
 #: The usage counters, whose increase the ledger has already worked out.
 _USAGE_COLUMNS = ("prompt_tokens", "completion_tokens", "requests")
 #: The gauges, each kept as the highest reading in the bucket.
@@ -250,6 +255,9 @@ def _reading(performance: Mapping[str, Any], clock: float) -> Dict[str, Any]:
         "created": _number(performance.get("created")),
         "read_at": float(clock),
     }
+    basis = performance.get("decode_basis")
+    if isinstance(basis, str) and basis:
+        reading["decode_basis"] = basis
     session, tick, monotonic = performance.get("session"), performance.get("tick"), _number(performance.get("monotonic"))
     if isinstance(session, str) and isinstance(tick, int) and not isinstance(tick, bool) and monotonic is not None:
         reading.update({"session": session, "tick": tick, "monotonic": monotonic})
@@ -274,10 +282,34 @@ def _restarted(prior: Mapping[str, Any], reading: Mapping[str, Any]) -> bool:
     if before is not None and after is not None and before != after:
         return True
     old = prior.get("counters") or {}
+    # A derived decode-token count, or one on a different basis, says nothing
+    # about a restart (`_decode_pair_unusable`); the real counters do.
+    skip = ("itl_intervals",) if (
+        reading.get("decode_basis") or prior.get("decode_basis")) else ()
     return any(
-        name in old and value < old[name]
+        name in old and name not in skip and value < old[name]
         for name, value in (reading.get("counters") or {}).items()
     )
+
+
+def _decode_pair_unusable(prior: Mapping[str, Any], reading: Mapping[str, Any]) -> bool:
+    """Whether this tick's decode tokens and seconds must be left out (VD-213).
+
+    Two cases, neither a restart. The baselines count different things: a
+    reading stored before VD-213 counted vLLM's inter-token intervals (steps),
+    one after counts decode-step tokens, and their difference is the replica's
+    lifetime of drafted tokens in one bucket - 13,840 tok/s on the Z2 (review
+    R47). Or the derived token count dipped (a request timed to its first token
+    that wrote none, review R48): an increase that is not one. The pair is
+    absent for the tick, never clamped; the next tick diffs on one basis.
+    """
+    if prior.get("decode_basis") != reading.get("decode_basis"):
+        return True
+    if reading.get("decode_basis") != DECODE_BASIS_STEP_TOKENS:
+        return False
+    old, new = prior.get("counters") or {}, reading.get("counters") or {}
+    before, after = old.get("itl_intervals"), new.get("itl_intervals")
+    return before is not None and after is not None and after < before
 
 
 def _histogram_bins(
@@ -364,8 +396,9 @@ def record_tick(
             if column in usage_added:
                 row[column] = float(usage_added[column])
         old = prior.get("counters") or {}
+        skip = _DECODE_PAIR if _decode_pair_unusable(prior, reading) else ()
         for column, value in (reading.get("counters") or {}).items():
-            if column in old:
+            if column in old and column not in skip:
                 row[column] = value - old[column]
         histogram = _histogram_bins(prior, reading)
         if histogram is not None:

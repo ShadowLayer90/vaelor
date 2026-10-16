@@ -16,6 +16,7 @@ from .model_profiles import note_structured_rejection, profile_timeout_floor
 from .runtime_paths import env_value
 from .provider_runtime import managed_local_connection
 from .local_inference_gate import local_inference_slot
+from .session_affinity import session_headers
 
 LOGGER = logging.getLogger(__name__)
 
@@ -316,6 +317,18 @@ def inference_timeout(connection: Dict[str, str], configured: int) -> int:
     else:
         budget = max(budget, remote_inference_budget())
     return min(max(budget, profile_timeout_floor(connection)), MAX_INFERENCE_SECONDS)
+
+
+def appliance_session_headers(connection: Dict[str, str], key: Any) -> Dict[str, str]:
+    """``X-Session-Id`` for a model this appliance serves, else nothing.
+
+    The key only means something to Vaelor's own replica balancer (VD-157), so
+    a hosted service or another machine's endpoint is told nothing about which
+    conversation or task a request belongs to (VD-158). The one rule for every
+    caller that names its work: AI Chat and the multi-call agent, research and
+    Assistant paths (VD-216 fix 1).
+    """
+    return session_headers(key) if managed_local_connection(connection) else {}
 
 
 def chat_completion(

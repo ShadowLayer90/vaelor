@@ -54,6 +54,7 @@ Design constraints carried from DECISIONS.md:
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
@@ -126,7 +127,27 @@ from .bridge_argv_policy import journal_argv
 from .vllm_images import (
     DEFAULT_IMAGE_KEY, IMAGE_FIELD, IMAGES, RECORDED_IMAGE_KEY, image_profile,
 )
-from .vllm_serve_options import image_of
+from .vllm_serve_options import guesser_of, image_of, moe_kernel_of, overlay_of
+#: The patched-attention overlay (VD-215): its mount, and the worker's copy.
+from .vllm_overlays import (
+    ensure_overlay_on_worker, older_bridge_overlay_refusal, overlay_mount, worker_path,
+)
+#: Vaelor's expert-kernel plugin (VD-216): its mount, the worker's copy, and
+#: the one rule both set-up refusals fall back by.
+from .vllm_moe_kernels import (
+    ensure_kernel_on_worker, fallback_step, kernel_mount, older_bridge_refusal,
+    require_kernel_model, worker_dir,
+)
+from .vllm_overlay_prune import prune_worker_after_install, worker_name
+#: VD-216 item 2: the 4-bit guesser - its mount, the worker's build, its fallback.
+from .vllm_guesser_build import (
+    ensure_on_worker as ensure_guesser_on_worker, fallback_step as guesser_fallback_step,
+    guesser_mount, installed_dir as guesser_dir_of, start_refusal as guesser_start_refusal,
+    without_guesser,
+)
+
+LOGGER = logging.getLogger(__name__)
+from .vllm_serve_advanced import SPLIT_REFUSED
 
 #: The 0.22.1 image's entrypoint is a thin ``vllm "$@"``; the 0.27 image has
 #: none (`vllm_images`). So a Ray, shell or Python process is run by naming it,
@@ -308,7 +329,8 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
 
     def render_managed_unit(
         self, kind: Any, values: Any, *, pull_program: Optional[str] = None,
-        entry_program: Optional[str] = None,
+        entry_program: Optional[str] = None, overlay_file: Optional[str] = None,
+        kernel_dir: Optional[str] = None, guesser_dir: Optional[str] = None,
     ) -> Tuple[str, str]:
         """``(unit name, unit text)`` for one managed unit, from its kind and values.
 
@@ -323,7 +345,11 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
         path of the pull program the controller's bridge mounts out of its own
         installed package. It is a keyword the bridge passes itself, and no
         value a client sends can reach it; ``entry_program`` is the same, for
-        the program an MoE model's serving container starts through.
+        the program an MoE model's serving container starts through,
+        ``overlay_file`` for the patched attention file (VD-215) and
+        ``kernel_dir`` for Vaelor's expert-kernel folder (VD-216) and
+        ``guesser_dir`` for the built 4-bit guesser (VD-216 item 2), which only
+        a replica takes.
         """
         allowed = MANAGED_UNIT_PARAMETERS.get(str(kind))
         if allowed is None:
@@ -343,6 +369,10 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
             DISTRIBUTED_LEAD_KIND: self.render_distributed_server,
             RAY_WORKER_KIND: self.render_ray_worker,
         }[str(kind)]
+        if str(kind) == REPLICA_KIND:
+            arguments["overlay_file"] = overlay_file
+            arguments["kernel_dir"] = kernel_dir
+            arguments["guesser_dir"] = guesser_dir
         return renderer(entry_program=entry_program, **arguments)
 
     def _install_unit(self, transport, kind: str, values: Dict[str, Any]) -> str:
@@ -357,14 +387,103 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
         """
         if values.get(OPTIONS_FIELD, False) is None:
             values = {key: value for key, value in values.items() if key != OPTIONS_FIELD}
+        skipped: Dict[str, str] = {}
+        while True:
+            try:
+                unit = self._install_once(transport, kind, values)
+                # VD-216 item 2 (round 1, item 8): a guesser folder gone
+                # between the check and the start is refused by `--mount`;
+                # that copy is installed again with the bf16 guesser.
+                gone = (None if "guesser" in skipped or guesser_of(values.get(OPTIONS_FIELD)) is None
+                        else guesser_start_refusal(self, transport, unit, guesser_dir_of(
+                            guesser_of(values.get(OPTIONS_FIELD)))))
+                if gone:
+                    skipped["guesser"] = gone
+                    values = {**values, OPTIONS_FIELD: without_guesser(values.get(OPTIONS_FIELD))}
+                    continue
+                break
+            except (RuntimeError, SshTransportError) as error:
+                # The owner's rulings: a machine that cannot build or check
+                # the patched attention file serves this copy WITHOUT the
+                # draft model (VD-215, setup A), and one that cannot set up
+                # Vaelor's expert kernel serves it with vLLM's own (VD-216) -
+                # each said, with its reason (LESSONS 1). Nothing was written
+                # before the refusal, on either path. The record keeps the
+                # deployed options; only this unit (and the render ledger's
+                # note of it) is the fallback.
+                # VD-216 item 2: a machine without a checked 4-bit guesser
+                # serves the bf16 drafter, said the same way.
+                step = (fallback_step(error, values.get(OPTIONS_FIELD))
+                        or guesser_fallback_step(error, values.get(OPTIONS_FIELD)))
+                if step is None or step[0] in skipped:
+                    raise
+                skipped[step[0]] = step[1]
+                values = {**values, OPTIONS_FIELD: step[2]}
+                LOGGER.warning("%s: %s", values.get("name"), error)
+        # Served as deployed: an earlier skip on this machine no longer holds.
+        for which, skips in (("overlay", self._overlay_skips()), ("kernel", self._kernel_skips()),
+                             ("guesser", self._guesser_skips()),
+                             ("fusion", self._fusion_skips())):
+            if which in skipped:
+                skips[(id(transport), unit)] = skipped[which]
+            else:
+                skips.pop((id(transport), unit), None)
+        return unit
+
+    def _overlay_skips(self) -> Dict[Tuple[int, str], str]:
+        return self.__dict__.setdefault("_overlay_skipped", {})
+
+    def take_overlay_skip(self, transport: Any, unit: str) -> str:
+        """Why ``unit`` on ``transport``'s machine was started without the draft
+        model (VD-215), ``""`` when it was not; asked once, then forgotten."""
+        return self._overlay_skips().pop((id(transport), unit), "")
+
+    def _kernel_skips(self) -> Dict[Tuple[int, str], str]:
+        return self.__dict__.setdefault("_kernel_skipped", {})
+
+    def take_kernel_skip(self, transport: Any, unit: str) -> str:
+        """Why ``unit`` was started with vLLM's own expert kernel instead of
+        Vaelor's (VD-216), ``""`` when it was not; asked once, then forgotten."""
+        return self._kernel_skips().pop((id(transport), unit), "")
+
+    def _guesser_skips(self) -> Dict[Tuple[int, str], str]:
+        return self.__dict__.setdefault("_guesser_skipped", {})
+
+    def take_guesser_skip(self, transport: Any, unit: str) -> str:
+        """Why ``unit`` was started with the bf16 guesser instead of the 4-bit
+        one (VD-216 item 2), ``""`` when it was not; asked once, then forgotten."""
+        return self._guesser_skips().pop((id(transport), unit), "")
+
+    def _fusion_skips(self) -> Dict[Tuple[int, str], str]:
+        return self.__dict__.setdefault("_fusion_skipped", {})
+
+    def take_fusion_skip(self, transport: Any, unit: str) -> str:
+        """Why ``unit`` was started without the fused qk-norm/RoPE step (an
+        older bridge, VD-216 item 2), ``""`` when it was not; asked once."""
+        return self._fusion_skips().pop((id(transport), unit), "")
+
+    def _install_once(self, transport, kind: str, values: Dict[str, Any]) -> str:
+        """`_install_unit`'s one attempt with these exact values."""
         unit, text = self.render_managed_unit(kind, values)
         if root_renders_units(transport):
             try:
                 transport.install_managed_unit(kind, values)
             except SshTransportError as error:
+                # VD-216 item 2: the bridge's own guesser refusal names the
+                # word "guesser", which `bridge_refusal` would read as an older
+                # bridge refusing the field; it, and an older bridge refusing
+                # the item-2 fields by name, are the fallback's, as they are.
+                if guesser_fallback_step(error, values.get(OPTIONS_FIELD)) is not None:
+                    raise
                 # A bridge still running the previous version refuses a value
                 # it does not know by name: say what to do, not the name.
-                too_old = bridge_refusal(error, values)
+                # VD-216: a bridge that predates the kernel (or this key)
+                # serves this copy with vLLM's own kernel, never fails it; one
+                # that predates this attention file's key serves it without
+                # the draft model (VD-215's fallback), never fails it either.
+                too_old = (older_bridge_refusal(error, values.get(OPTIONS_FIELD))
+                           or older_bridge_overlay_refusal(error, values.get(OPTIONS_FIELD))
+                           or bridge_refusal(error, values))
                 if too_old is None:
                     raise
                 raise RuntimeError(too_old) from error
@@ -375,9 +494,27 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
             write_program_on_worker(
                 transport, _ENTRY_SCRIPT_PATH, ENTRY_SCRIPT, ENTRY_SCRIPT_DIGEST,
             )
+        overlay = overlay_of(values.get(OPTIONS_FIELD))
+        if overlay is not None:
+            # VD-215: the file this unit mounts, built from THIS machine's own
+            # image file, written and checked there before the unit is.
+            ensure_overlay_on_worker(transport, overlay)
+        kernel = moe_kernel_of(values.get(OPTIONS_FIELD))
+        if kernel is not None:
+            # VD-216: the plugin folder, written and read back there first.
+            ensure_kernel_on_worker(transport, kernel)
+        guesser = guesser_of(values.get(OPTIONS_FIELD))
+        if guesser is not None:
+            # VD-216 item 2 (VD-194): built THERE, from that machine's own
+            # drafter and image, and checked against its pins first.
+            ensure_guesser_on_worker(transport, guesser)
         self._write_unit_text(
             transport, unit, text, oneshot=(kind == MODEL_PULL_KIND),
         )
+        if overlay is not None or kernel is not None or guesser is not None:
+            # VD-216: superseded overlay and kernel versions there, never one a
+            # unit, a running container or a record still names; never raises.
+            prune_worker_after_install(transport, worker_name(transport))
         # Noted only once installed, for the upgrade's render check (W4-D1).
         render_ledger.note(transport, kind, values)
         return unit
@@ -421,6 +558,62 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
             raise ValueError("The vLLM entry program path is invalid.")
         return entry_mount(host)
 
+    @staticmethod
+    def _overlay(vllm_options: Any, overlay_file: Optional[str]) -> List[str]:
+        """The read-only mount of the patched attention file (VD-215), or none.
+
+        The controller's bridge passes the installed file it checked; a worker
+        mounts its content-hashed copy (`vllm_overlays.worker_path`).
+        """
+        overlay = overlay_of(vllm_options)
+        if overlay is None:
+            return []
+        host = str(overlay_file or worker_path(overlay))
+        if not re.fullmatch(r"/[A-Za-z0-9._/-]{1,255}", host) or ".." in host:
+            raise ValueError("The patched vLLM attention file's path is invalid.")
+        return overlay_mount(host, overlay)
+
+    @staticmethod
+    def _moe_kernel(vllm_options: Any, kernel_dir: Optional[str], model: Any) -> List[str]:
+        """The read-only mount of Vaelor's expert-kernel folder (VD-216), or none.
+
+        The controller's bridge passes the copy it checked; a worker mounts
+        its content-hashed copy (`vllm_moe_kernels.worker_dir`).
+        """
+        kernel = moe_kernel_of(vllm_options)
+        if kernel is None:
+            return []
+        require_kernel_model(kernel, model)
+        host = str(kernel_dir or worker_dir(kernel))
+        if not re.fullmatch(r"/[A-Za-z0-9._/-]{1,255}", host) or ".." in host:
+            raise ValueError("The expert kernel folder's path is invalid.")
+        return kernel_mount(host, kernel)
+
+    @staticmethod
+    def _guesser(vllm_options: Any, guesser_dir: Optional[str]) -> List[str]:
+        """The read-only mount of the built 4-bit guesser (VD-216 item 2), or none.
+
+        The controller's bridge passes the folder it checked; a worker mounts
+        the same path, built and checked there first.
+        """
+        guesser = guesser_of(vllm_options)
+        if guesser is None:
+            return []
+        host = str(guesser_dir or guesser_dir_of(guesser))
+        if not re.fullmatch(r"/[A-Za-z0-9._/-]{1,255}", host) or ".." in host:
+            raise ValueError("The 4-bit guesser folder's path is invalid.")
+        return guesser_mount(host)
+
+    @staticmethod
+    def _refuse_overlay_on_split(vllm_options: Any) -> None:
+        """A split never carries the overlay (its draft model is refused,
+        VD-213), Vaelor's expert kernel (VD-216: one copy per machine), nor
+        item 2's guesser (its fusion is refused with the serve words,
+        `gpu_serve_arguments`)."""
+        if (overlay_of(vllm_options) is not None or moe_kernel_of(vllm_options) is not None
+                or guesser_of(vllm_options) is not None):
+            raise ValueError(SPLIT_REFUSED)
+
     def render_ray_worker(
         self, *, name: str, head_ip: str, bind_ip: str, interface: str,
         group_ids: Iterable[int], device_count: int = 1, vllm_options: Any = None,
@@ -435,6 +628,7 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
         detect the AMD iGPU in the container, and a node advertising zero GPUs
         takes no placement.
         """
+        self._refuse_overlay_on_split(vllm_options)
         deployment = self._name(name)
         head = self._address(head_ip)
         host = self._address(bind_ip)
@@ -482,6 +676,8 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
         max_model_len: int, group_ids: Iterable[int],
         revision: Optional[str] = None, thinking_default: bool = False,
         vllm_options: Any = None, entry_program: Optional[str] = None,
+        overlay_file: Optional[str] = None, kernel_dir: Optional[str] = None,
+        guesser_dir: Optional[str] = None,
     ) -> Tuple[str, str]:
         """``(unit, text)`` of one REPLICA: a single-node vLLM server container (no Ray).
 
@@ -521,6 +717,8 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
             start = ["--entrypoint", image.server_entrypoint, image.image]
         else:
             start = [image.image]
+        mount = mount + self._overlay(vllm_options, overlay_file) + self._moe_kernel(
+            vllm_options, kernel_dir, model) + self._guesser(vllm_options, guesser_dir)
         command = " ".join(prefix + mount + start + self._serve_arguments(
             model=model, port=port,
             tensor_parallel_size=tensor_parallel_size,
@@ -581,6 +779,7 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
         chooses the degrees - pipeline across nodes, tensor only on a fast,
         KV-head-divisible fabric.
         """
+        self._refuse_overlay_on_split(vllm_options)
         deployment = self._name(name)
         host = self._address(bind_ip)
         nic = self._interface(interface)

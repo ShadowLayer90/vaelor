@@ -32,6 +32,8 @@ import time
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from .ssh_transport import SshTransportError
+from .vllm_drafters import drafter_profile
+from .vllm_serve_options import require_options
 
 
 #: How the deploy's weight pre-fetch is polled: the gap between reads of the
@@ -70,6 +72,10 @@ _PULL_DONE_PHASE = "done"
 PULL_INCOMPLETE_MESSAGE = (
     "The pull unit finished without recording that the weights were cached."
 )
+
+
+#: What a checkpoint says while a node fetches a deployment's draft model.
+DRAFT_PULL_LABEL = "draft model ({gb} GB) - "
 
 
 def classify_pull(properties: Mapping[str, str]) -> str:
@@ -198,8 +204,15 @@ class ModelPullWaiter:
         report: Callable[[int, str], None],
         pulls: Optional[Dict[str, str]] = None,
         image: Optional[str] = None,
+        vllm_options: Any = None,
     ) -> None:
         """Fetch ``repo``'s weights onto one node and wait for the pull to end.
+
+        ``vllm_options`` is the serving options the deploy decided
+        (`vllm_serve_options`): when they carry a draft model it is fetched
+        too, and a failed fetch of it fails the deploy like the model's own -
+        a unit is never started "with a drafter" it does not have. Without
+        one, nothing else is fetched.
 
         The container image ships no weights, and each participating node needs
         its own copy, so the deploy pre-fetches before any server starts. It goes
@@ -211,13 +224,32 @@ class ModelPullWaiter:
         unit in on start and takes it out the moment it is stopped, so what is
         left in it when the deploy fails is exactly the oneshot nobody stopped.
         """
+        tracked = pulls if pulls is not None else {}
+        self._fetch(transport, node, repo, revision, report, tracked, image, "")
+        # VD-213: the draft model the decided options serve with is fetched
+        # onto every machine that serves it, at its pinned commit and into
+        # the same hub cache, so the container reads it as it reads the
+        # model. Its size is said, because it is a second download.
+        key = require_options(vllm_options).advanced[2] if vllm_options is not None else None
+        if key is not None:
+            drafter = drafter_profile(key)
+            self._fetch(
+                transport, node, drafter.repo, drafter.revision, report, tracked,
+                image, DRAFT_PULL_LABEL.format(gb=round(drafter.weight_bytes / 1e9, 1)),
+            )
+
+    def _fetch(
+        self, transport: Any, node: Dict[str, Any], repo: str,
+        revision: Optional[str], report: Callable[[int, str], None],
+        tracked: Dict[str, str], image: Optional[str], label: str,
+    ) -> None:
+        """One repo's supervised pull on one node (:meth:`wait`), ``label`` naming a second one."""
         # In the deployment's own image (``image``), which the deploy made
         # present on this node before calling here.
         info = self.runtime.start_model_pull(
             transport, repo=repo, revision=revision, image=image,
         )
         unit = info["unit"]
-        tracked = pulls if pulls is not None else {}
         node_id = str(node.get("id", ""))
         tracked[node_id] = unit
         deadline = self._monotonic() + PULL_TIMEOUT_SECONDS
@@ -256,7 +288,7 @@ class ModelPullWaiter:
             if state in {"pending", "running"}:
                 report(
                     PULL_CHECKPOINT_PERCENT,
-                    f"{node['name']}: {pull_note(progress)}",
+                    f"{node['name']}: {label}{pull_note(progress)}",
                 )
                 self._sleep(PULL_POLL_SECONDS)
                 continue

@@ -74,28 +74,10 @@ def register_cluster_performance_routes(context: ApiContext) -> None:
     def cluster_performance_profile():
         client = callbacks.get("hardware_bridge_client")
         if client is None or not getattr(client, "available", False):
-            # No fabricated profile: the privileged bridge that runs perf/amd-smi
-            # is the only account that can, so its absence is an honest 503.
-            return _payload(
-                error={
-                    "code": "profiler_unavailable",
-                    "message": (
-                        "The privileged hardware bridge that runs the profiler "
-                        "is not available on this host."
-                    ),
-                },
-                status=503,
-            )
-        now = time.time()
-        with _PROFILE_LOCK:
-            if _PROFILE_STATE["in_flight"]:
-                return _rate_limited("A profile is already running; wait for it to finish.")
-            if now - _PROFILE_STATE["last_finished"] < PROFILE_MIN_INTERVAL_SECONDS:
-                return _rate_limited(
-                    "A profile ran moments ago; profiling is throttled so it "
-                    "cannot peg the box."
-                )
-            _PROFILE_STATE["in_flight"] = True
+            return _no_bridge()
+        busy = _claim_profile()
+        if busy is not None:
+            return busy
         seconds = _requested_seconds()
         try:
             result = client.run_serving_profile(seconds)
@@ -110,14 +92,107 @@ def register_cluster_performance_routes(context: ApiContext) -> None:
                 error={"code": "profiler_failed", "message": str(error)}, status=502
             )
         finally:
-            with _PROFILE_LOCK:
-                _PROFILE_STATE["in_flight"] = False
-                _PROFILE_STATE["last_finished"] = time.time()
+            _release_profile()
         security.audit(
             g.auth_session.username, "cluster.performance.profile", "success",
             target="gpu-serving", remote_addr=request.remote_addr or "",
         )
         return _payload(result)
+
+    @blueprint.post("/cluster/performance/kernel-profile")
+    @require_auth("administrator", csrf=True)
+    def cluster_performance_kernel_profile():
+        """VD-214: restart this controller's copy with GPU tracing on, profile, restart it.
+
+        Disruptive and time-limited: the bridge arms a deadline that reverts
+        the tracing serve whatever becomes of this request. Refused before the
+        bridge is asked when the stored row says it cannot work; the same
+        throttle as the ordinary profile, so the two never overlap.
+        """
+        client = callbacks.get("hardware_bridge_client")
+        if client is None or not getattr(client, "available", False):
+            return _no_bridge()
+        refusal = _kernel_profile_refusal(callbacks)
+        if refusal is not None:
+            return _payload(
+                error={"code": "kernel_profile_refused", "message": refusal}, status=409
+            )
+        busy = _claim_profile()
+        if busy is not None:
+            return busy
+        try:
+            result = client.run_gpu_kernel_profile(_requested_seconds())
+        except HardwareBridgeError as error:
+            security.audit(
+                g.auth_session.username, "cluster.performance.kernel-profile", "failure",
+                target="gpu-serving", remote_addr=request.remote_addr or "",
+            )
+            return _payload(
+                error={"code": "profiler_failed", "message": str(error)}, status=502
+            )
+        finally:
+            _release_profile()
+        security.audit(
+            g.auth_session.username, "cluster.performance.kernel-profile", "success",
+            target="gpu-serving", remote_addr=request.remote_addr or "",
+        )
+        return _payload(result)
+
+
+def _no_bridge():
+    """No fabricated profile: the privileged bridge that runs perf/amd-smi is the
+    only account that can, so its absence is an honest 503."""
+    return _payload(
+        error={
+            "code": "profiler_unavailable",
+            "message": (
+                "The privileged hardware bridge that runs the profiler "
+                "is not available on this host."
+            ),
+        },
+        status=503,
+    )
+
+
+def _claim_profile():
+    """Take the one profile slot, or the 429 that says why not (VD-128)."""
+    now = time.time()
+    with _PROFILE_LOCK:
+        if _PROFILE_STATE["in_flight"]:
+            return _rate_limited("A profile is already running; wait for it to finish.")
+        if now - _PROFILE_STATE["last_finished"] < PROFILE_MIN_INTERVAL_SECONDS:
+            return _rate_limited(
+                "A profile ran moments ago; profiling is throttled so it "
+                "cannot peg the box."
+            )
+        _PROFILE_STATE["in_flight"] = True
+    return None
+
+
+def _release_profile() -> None:
+    with _PROFILE_LOCK:
+        _PROFILE_STATE["in_flight"] = False
+        _PROFILE_STATE["last_finished"] = time.time()
+
+
+def _kernel_profile_refusal(callbacks) -> "str | None":
+    """Why the stored row rules a kernel profile out (VD-214), else ``None``."""
+    from .gpu_cluster_mode_state import MODE_CLUSTER, ClusterModeStore
+    from .gpu_kernel_profile import (
+        DEPLOY_IN_FLIGHT, NO_CLUSTER_MODEL, record_refusal, serving_record,
+    )
+
+    state = ClusterModeStore().read()
+    operations = callbacks.get("cluster_operations")
+    if state.mode != MODE_CLUSTER or operations is None:
+        return NO_CLUSTER_MODEL
+    if state.deploy_in_flight:
+        return DEPLOY_IN_FLIGHT
+    try:
+        records = operations.store.list_pooled_deployments()
+    except (AttributeError, OSError, ValueError):
+        return NO_CLUSTER_MODEL
+    return record_refusal(serving_record(records, state.deployment_name))
 
 
 def _rate_limited(message: str):

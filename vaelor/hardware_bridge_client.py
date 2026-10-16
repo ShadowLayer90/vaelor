@@ -624,6 +624,24 @@ class HardwareBridgeClient:
         )
         return value if isinstance(value, dict) else {}
 
+    def run_gpu_kernel_profile(self, seconds: int | None = None) -> dict[str, Any]:
+        """Restart this controller's copy with GPU tracing on, profile, restart it (VD-214).
+
+        Only the capture window crosses; everything else is root-side
+        (`hardware_bridge_kernel_profile`). The socket waits out both restarts
+        and the capture (`gpu_kernel_profile.REQUEST_SECONDS`); the tracing
+        serve's own deadline does not depend on this wait.
+        """
+        from .gpu_kernel_profile import REQUEST_SECONDS
+
+        payload: dict[str, Any] = {}
+        if seconds is not None:
+            payload["seconds"] = int(seconds)
+        value = self._request(
+            "run_gpu_kernel_profile", payload, socket_timeout=REQUEST_SECONDS
+        )
+        return value if isinstance(value, dict) else {}
+
     def run_serving_profile(self, seconds: int | None = None) -> dict[str, Any]:
         """Run one bounded on-demand profile of the GPU serving process, as root.
 

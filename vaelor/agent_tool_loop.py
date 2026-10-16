@@ -54,9 +54,12 @@ from .custom_agent_model import (
     apply_grounding_policy,
     build_agent_system_prompt,
 )
-from .inference_client import allowed_inference_endpoint, chat_completion, inference_timeout
+from .inference_client import (
+    allowed_inference_endpoint, appliance_session_headers, chat_completion, inference_timeout,
+)
 from .model_profiles import reasoning_headroom_tokens
 from .research_json import extract_json_document
+from .session_affinity import agent_task_session_key
 from .provider_runtime import (
     agent_context_chars,
     generation_parameters,
@@ -417,6 +420,10 @@ def run_agent_tool_loop(
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if connection.get("api_key"):
         headers["Authorization"] = "Bearer {}".format(connection["api_key"])
+    # VD-216 fix 1: every turn re-sends the growing prompt, so every turn (and
+    # the forced synthesis) names the task, and a cluster keeps them on the
+    # replica that holds it. LESSONS 6: the key is derived, never passed.
+    headers.update(appliance_session_headers(connection, agent_task_session_key(task)))
     timeout = inference_timeout(connection, timeout_seconds)
     model = _resolve_model(connection, headers, timeout)
     generation_tokens = reasoning_headroom_tokens(connection, budget.visible_tokens)

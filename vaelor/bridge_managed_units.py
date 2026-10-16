@@ -46,6 +46,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import bridge_safe_fs as safe_fs
@@ -57,8 +58,18 @@ from .gpu_pool_units import (
 )
 from .hardware_bridge_client import RUN_ARGV_TIMEOUT_SECONDS
 from .vllm_entry_program import CONTAINER_ENTRY_PROGRAM
-from .vllm_images import compile_environment
-from .vllm_serve_options import OPTIONS_FIELD, wants_tuned_tables
+from .vllm_images import V2_RUNNER_ENV, compile_environment
+from .vllm_serve_options import (
+    OPTIONS_FIELD, guesser_of, moe_kernel_of, overlay_of, wants_tuned_tables,
+)
+from . import vllm_guesser_build as guesser_build
+from .vllm_moe_hip_build import BUILD_DEFERRED
+from .vllm_overlays import (
+    OVERLAY_ROOT, VllmOverlay, check_overlay_shape, env_in_bounds, mount_pattern,
+    overlay_for_image, root_overlay_file,
+)
+from .vllm_overlay_build import read_image_file
+from . import vllm_moe_kernels as moe_kernels
 from . import gpu_ray_plane as ray_plane
 
 #: Where the controller's managed units live, and the model store the GPU tier
@@ -91,6 +102,28 @@ _START_SLOT = "\x02"
 RAY_PLANE_STEPS = 5
 RAY_PLANE_STEP_SECONDS = 60
 
+#: The bound on the one ``docker run`` that reads a pinned image's own file
+#: (its sha256, or its bytes for a build) before its overlay is mounted
+#: (VD-215). Asked once per image digest for the bridge's life; a container
+#: that only prints one file starts and exits in seconds.
+#:
+#: **It is also the whole pre-start budget** - the client's wait
+#: (`hardware_bridge_client.UNIT_INSTALL_SOCKET_TIMEOUT`) is three 120 s
+#: commands plus these 30 s. The overlay check and the HIP expert kernels'
+#: build (VD-216, `vllm_moe_hip_build`) share it: the build gets what the
+#: overlay check left, less :data:`HIP_REMOVE_SECONDS` kept for stopping its
+#: container on a timeout, and is skipped for this start - recorded, and
+#: retried at the next - when that is under :data:`HIP_BUILD_MIN_SECONDS`;
+#: a skipped build started no container, so it runs no removal either. A
+#: wait for the kernel folder's lock comes out of the same 30 s. So the worst
+#: case stays 30 + 3 x 120 = 390 s, what it was before VD-216.
+OVERLAY_CHECK_SECONDS = 30
+#: The HIP build's least useful window (measured: about a second on the Z2).
+HIP_BUILD_MIN_SECONDS = 5
+#: The bound on ``docker rm -f`` of a build container that timed out: killing
+#: the ``docker`` client does not stop the container it started.
+HIP_REMOVE_SECONDS = 5
+
 #: Characters the template never writes: systemd specifiers and variable
 #: expansion, and the shell words a command could be chained with.
 _FORBIDDEN_UNIT_CHARACTERS = "%$`;|<>\\\x00\r"
@@ -108,6 +141,7 @@ _ENTRYPOINTS = frozenset({
 _FIXED_ENV = frozenset({
     f"HF_HOME={runtime_template.MODELS_MOUNT}",
     runtime_template.TUNED_TABLES_ENV,
+    V2_RUNNER_ENV,
     *ray_plane.RAY_CONTAINER_ENVIRONMENT,
     *(env for image in runtime_template.IMAGES.values() for env in image.environment),
     *(env for image in runtime_template.IMAGES.values()
@@ -120,6 +154,10 @@ _IMAGE_ENV = {
     image.image: frozenset(image.environment) for image in runtime_template.IMAGES.values()
 }
 _ALL_IMAGE_ENV = frozenset(env for envs in _IMAGE_ENV.values() for env in envs)
+#: The images whose vLLM takes the newer model runner's variable (VD-213).
+_V2_RUNNER_IMAGES = frozenset(
+    image.image for image in runtime_template.IMAGES.values() if image.v2_runner
+)
 #: The RCCL/Gloo variables a distributed container carries, whose values are a
 #: validated address or NIC name: plain characters and nothing else.
 _RCCL_ENV = r"(?:VLLM_HOST_IP|NCCL_SOCKET_IFNAME|GLOO_SOCKET_IFNAME)=[A-Za-z0-9._-]{1,64}"
@@ -145,7 +183,7 @@ _RAY_TOKEN_MOUNT = (
 #: The option sequence each unit family carries, as the option names in order.
 _SERVING_OPTIONS = (
     r"--network --device --device(?: --group-add){0,8} --security-opt --ipc "
-    r"--shm-size(?: -e){2,} -v -v -v(?: -v --cgroup-parent)?(?: -v)?(?: --entrypoint)?"
+    r"--shm-size(?: -e){2,} -v -v -v(?: -v --cgroup-parent)?(?: -v){0,3}(?: --mount)?(?: --entrypoint)?"
 )
 _PULL_OPTIONS = r"--network -e -v(?: -v)? --entrypoint"
 
@@ -159,7 +197,8 @@ def _hub_name(model: str) -> str:
     return "models--" + model.replace("/", "--")
 
 
-def check_rendered_unit(unit: str, text: str, *, image: str = None) -> None:
+def check_rendered_unit(unit: str, text: str, *, image: str = None, kernel_dir: str = None,
+                        guesser_dir: str = None) -> None:
     """Refuse ``text`` unless it has the managed template's shape, exactly.
 
     Belt and braces behind the template itself: every value was already
@@ -195,11 +234,22 @@ def check_rendered_unit(unit: str, text: str, *, image: str = None) -> None:
     if words[:5] != [DOCKER, "run", "--rm", "--name", container]:
         raise ValueError("The rendered unit does not run the managed container.")
     options, rest = _split_options(words[5:])
+    # The overlay an image takes (VD-215), if any: only that image's row may
+    # mount over its file, and the image itself is checked below.
+    overlay = overlay_for_image(rest[0]) if rest else None
+    # And Vaelor's expert-kernel folder (VD-216), the same way.
+    kernel = moe_kernels.kernel_for_image(rest[0]) if rest else None
+    # And the built 4-bit guesser (VD-216 item 2), the same way.
+    guesser = guesser_build.guesser_for_image(rest[0]) if rest else None
     # Every Ray container carries the auth mode (`gpu_ray_plane`): a unit that
     # runs one must load its fence and be bound to its slice (review 1).
     if not ray_slice and ("-e", ray_plane.RAY_AUTH_ENVIRONMENT[0]) in options:
         raise ValueError("A split's Ray unit must load its firewall and run in its slice.")
-    _check_options(options, pulling, ray_slice)
+    _check_options(options, pulling, ray_slice, overlay, (kernel, kernel_dir),
+                   (guesser, guesser_dir))
+    check_overlay_shape(options, rest, overlay)
+    moe_kernels.check_kernel_shape(options, None if ray_slice else kernel, kernel_dir)
+    guesser_build.check_guesser_shape(options, rest, None if ray_slice else guesser, guesser_dir)
     if not rest or rest[0] not in ({image} if image is not None else _IMAGES):
         raise ValueError("The rendered unit does not run the pinned image in its place.")
     # An image's own variables only on that image's units (review 2): the 0.27
@@ -208,6 +258,10 @@ def check_rendered_unit(unit: str, text: str, *, image: str = None) -> None:
     if any(name == "-e" and value in _ALL_IMAGE_ENV and value not in own_env
            for name, value in options):
         raise ValueError("The rendered unit carries another image's variable.")
+    # The newer runner only on an image whose vLLM was run with it (VD-213),
+    # the same rule `vllm_serve_advanced.check_advanced` renders by.
+    if ("-e", V2_RUNNER_ENV) in options and rest[0] not in _V2_RUNNER_IMAGES:
+        raise ValueError("The rendered unit selects a vLLM runner its image does not have.")
 
 
 def _match_skeleton(text: str, container: str, pulling: bool) -> Tuple[str, str]:
@@ -273,12 +327,22 @@ def _split_options(words: List[str]) -> Tuple[List[Tuple[str, str]], List[str]]:
     return options, words[index:]
 
 
-def _check_options(options: List[Tuple[str, str]], pulling: bool, ray_slice: str = "") -> None:
+def _check_options(
+    options: List[Tuple[str, str]], pulling: bool, ray_slice: str = "",
+    overlay: Optional[VllmOverlay] = None, kernel: Any = (None, None),
+    guesser: Any = (None, None),
+) -> None:
     """Refuse an option sequence or value the runtime's template never emits.
 
     A ``--cgroup-parent`` is a split's Ray container's alone, and names exactly
-    the slice its unit is bound to (``ray_slice``, ACC-187).
+    the slice its unit is bound to (``ray_slice``, ACC-187). The patched
+    attention file's mount and variable (VD-215) only for the image whose
+    ``overlay`` row it is, never on a split; so ``kernel`` = (row, its one path), VD-216.
     """
+    overlaid = overlay is not None and not ray_slice
+    kernel, kernel_dir = kernel
+    kerneled = kernel is not None and not ray_slice
+    guesser, guesser_dir = guesser
     names = " ".join(name for name, _value in options)
     if not re.fullmatch(_PULL_OPTIONS if pulling else _SERVING_OPTIONS, names):
         raise ValueError("The rendered unit's container options are not the template's.")
@@ -294,6 +358,10 @@ def _check_options(options: List[Tuple[str, str]], pulling: bool, ray_slice: str
         extra = mounts[3:]
         if extra and re.fullmatch(_RAY_TOKEN_MOUNT, extra[0]):
             extra = extra[1:]
+        if kerneled and extra and re.fullmatch(moe_kernels.mount_pattern(kernel, kernel_dir), extra[-1]):
+            extra = extra[:-1]
+        if overlaid and extra and re.fullmatch(mount_pattern(overlay), extra[-1]):
+            extra = extra[:-1]
         allowed_mounts = mounts[:3] == _SERVING_MOUNTS and len(extra) <= 1 and all(
             re.fullmatch(_ENTRY_MOUNT, mount) for mount in extra
         )
@@ -314,9 +382,15 @@ def _check_options(options: List[Tuple[str, str]], pulling: bool, ray_slice: str
         elif name == "--entrypoint":
             ok = value in _ENTRYPOINTS
         elif name == "-e":
-            ok = value in _FIXED_ENV or re.fullmatch(_RCCL_ENV, value) is not None
+            ok = value in _FIXED_ENV or re.fullmatch(_RCCL_ENV, value) is not None or (
+                overlaid and env_in_bounds(overlay, value)) or (
+                kerneled and [value] == moe_kernels.kernel_environment(kernel))
         elif name == "--cgroup-parent":
             ok = value == ray_slice
+        elif name == guesser_build.MOUNT_OPTION:
+            # VD-216 item 2: the built guesser's folder, from its one path only.
+            ok = guesser is not None and not ray_slice and re.fullmatch(
+                guesser_build.mount_pattern(guesser, guesser_dir), value) is not None
         else:
             ok = name == "-v"
         if not ok:
@@ -352,6 +426,7 @@ class ManagedUnits:
         entry_program: Optional[str] = None, token_parent: str = "/etc",
         local_links: Optional[Callable[[], Any]] = None,
         read_text: Optional[Callable[[str], str]] = None,
+        overlay_root: Optional[str] = None, kernel_source: Optional[str] = None,
     ):
         # Every seam exists for the tests, which cannot run as root or write
         # /etc; the bridge builds this with no arguments.
@@ -368,6 +443,8 @@ class ManagedUnits:
         self._run = run
         self._pull_program_path = pull_program
         self._entry_program_path = entry_program
+        self._overlay_root = overlay_root or OVERLAY_ROOT
+        self._kernel_source = kernel_source
         self._owner = (int(owner[0]), int(owner[1]))
         self._start_refusal = start_refusal or state_root_layout.mount_refusal
 
@@ -390,10 +467,46 @@ class ManagedUnits:
             if not pulling and isinstance(values, dict)
             and wants_tuned_tables(values.get(OPTIONS_FIELD)) else None
         )
+        # The patched attention file (VD-215), built here from the fetched
+        # diff when it is missing, then checked - root's alone, the pinned
+        # result, the image's own copy the one the patch was made for - before
+        # anything is written. A refusal starts with `UNAVAILABLE_MARK`, and
+        # the controller then installs this unit without the overlay.
+        served = not pulling and isinstance(values, dict)
+        overlay = overlay_of(values.get(OPTIONS_FIELD)) if served else None
+        # VD-216: Vaelor's expert-kernel folder, checked the same way (`vllm_moe_kernels`).
+        kernel = moe_kernel_of(values.get(OPTIONS_FIELD)) if served else None
+        # VD-216 item 2: the built 4-bit guesser, checked against its pins.
+        guesser = guesser_of(values.get(OPTIONS_FIELD)) if served else None
+        if overlay is not None or kernel is not None or guesser is not None:
+            # Every refusal the template makes - a split's kind above all -
+            # comes BEFORE anything is built or read from the image (review L9).
+            runtime.render_managed_unit(kind, values, entry_program=entry)
+        started = time.monotonic()
+        overlay_file = None if overlay is None else root_overlay_file(
+            overlay, fixed=self._overlay_fixed, owners=self._owners,
+            root=self._overlay_root, owner=self._owner,
+            read_image=lambda item: read_image_file(
+                item, run=self._run or subprocess.run, timeout=OVERLAY_CHECK_SECONDS),
+        )
+        kernel_dir = None if kernel is None else moe_kernels.root_kernel_dir(
+            kernel, owners=self._owners, root=self._overlay_root, owner=self._owner,
+            source=self._kernel_source or moe_kernels.PLUGIN_SOURCE,
+            build=lambda argv: self._hip_step(started, argv),
+            lock_wait=self._hip_lock_wait(started))
+        # Checked only, never built here: the build outlasts this budget. A
+        # refusal starts with `UNAVAILABLE_MARK`, and the controller installs
+        # the unit with the bf16 guesser; one never built here starts the
+        # installer's build in the background for the next Load.
+        guesser_dir = None if guesser is None else guesser_build.root_guesser_dir(
+            guesser, owners=self._owners, root=self._overlay_root,
+            seconds_left=OVERLAY_CHECK_SECONDS - (time.monotonic() - started),
+            start_build=lambda argv: self._bounded_fixed(HIP_REMOVE_SECONDS, *argv))
         unit, text = runtime.render_managed_unit(
             kind, values, pull_program=program, entry_program=entry,
+            overlay_file=overlay_file, kernel_dir=kernel_dir, guesser_dir=guesser_dir,
         )
-        check_rendered_unit(unit, text)
+        check_rendered_unit(unit, text, kernel_dir=kernel_dir, guesser_dir=guesser_dir)
         # Every folder the container mounts, and the hub its weights live in,
         # anchored from `/` so only root can re-point them (ACC-063, review
         # S6) - asked before the store is touched or a unit file written.
@@ -578,6 +691,43 @@ class ManagedUnits:
         if completed.returncode != 0:
             raise RuntimeError(str(completed.stderr or "").strip()[:400] or "The command failed.")
         return str(completed.stdout or "")
+
+    @staticmethod
+    def _hip_lock_wait(started: float) -> float:
+        """How long this start may wait for the kernel folder's lock (R50): what
+        the shared budget has left after keeping a build's least window and
+        its container's removal - so waiting never pushes past the budget."""
+        spent = time.monotonic() - started
+        return max(0.0, OVERLAY_CHECK_SECONDS - spent - HIP_REMOVE_SECONDS - HIP_BUILD_MIN_SECONDS)
+
+    def _hip_step(self, started: float, argv: List[str]) -> str:
+        """One HIP build command inside the shared pre-start budget
+        (:data:`OVERLAY_CHECK_SECONDS`): the build gets what is left, its
+        container's removal its own short bound."""
+        if argv[:3] == ["docker", "rm", "-f"]:
+            return self._bounded_fixed(HIP_REMOVE_SECONDS, *argv)
+        left = int(OVERLAY_CHECK_SECONDS - (time.monotonic() - started)) - HIP_REMOVE_SECONDS
+        if left < HIP_BUILD_MIN_SECONDS:
+            raise RuntimeError(BUILD_DEFERRED)
+        return self._bounded_fixed(left, *argv)
+
+    def _bounded_fixed(self, seconds: int, *argv: str) -> str:
+        """One fixed command run as root under its own bound (VD-216: the HIP
+        kernels' build, `vllm_moe_hip_build.build_argv`, about a second)."""
+        kept, self._step_seconds = self._step_seconds, seconds
+        try:
+            return self._fixed(*argv)
+        finally:
+            self._step_seconds = kept
+
+    def _overlay_fixed(self, *argv: str) -> str:
+        """The image-copy check's one fixed command, bounded by
+        :data:`OVERLAY_CHECK_SECONDS` so the install still fits the client's wait."""
+        kept, self._step_seconds = self._step_seconds, OVERLAY_CHECK_SECONDS
+        try:
+            return self._fixed(*argv)
+        finally:
+            self._step_seconds = kept
 
     def _remove_unit_file(self, unit: str) -> None:
         """Remove one unit file of this bridge's own, without following a link."""

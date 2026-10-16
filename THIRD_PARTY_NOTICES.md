@@ -42,6 +42,7 @@ each is governed by its own licence, which applies to whoever runs it.
 | FastFlowLM runtime 1.0.2 | [ROCm/FastFlowLM](https://github.com/ROCm/FastFlowLM) release, SHA-256 verified | install, on a machine with a neural accelerator | split: MIT orchestration code, proprietary NPU kernels — see below |
 | InfluxDB 1.12.4 | InfluxData's package pool, SHA-256 verified | install | MIT |
 | Telegraf 1.32.3 | InfluxData's downloads, SHA-256 verified | staged at install on the controller; copied by the controller to each cluster worker | MIT |
+| vLLM pull request #59448 (one file's change to `triton_unified_attention.py`) | [vllm-project/vllm](https://github.com/vllm-project/vllm), the PR's diff at pinned commits, SHA-256 verified | install, on the controller; applied on each GPU machine to the pinned vLLM 0.27 image's own copy of that file, which is then mounted into vLLM's container | Apache-2.0 |
 | AMD `amd-smi` and the ROCm runtime | AMD's package repository | install on an AMD GPU or NPU host; `amd-smi` alone on a cluster worker | AMD's licences for those packages |
 | Docker Engine | the host's or Docker's repositories | install, only with your approval when Docker is absent | Apache-2.0 |
 | `nginx:stable-alpine` | Docker Hub | install (pre-pull) | BSD-2-Clause (nginx) and Alpine's package licences |
@@ -51,6 +52,7 @@ each is governed by its own licence, which applies to whoever runs it.
 | `rocm/vllm` (vLLM 0.27 on ROCm 10) | Docker Hub | per machine, when a cluster model is served | Apache-2.0 (vLLM) and AMD's licences for ROCm |
 | `ryai-vllm` (vLLM 0.22) | `oci-registry.ryai.dev` | per machine, only when a deployment selects it | Apache-2.0 (vLLM) and the image's other components' licences |
 | SearXNG | Docker Hub (`searxng/searxng`, by digest) | when web research is enabled | AGPL-3.0 |
+| DFlash draft model for Qwen3-30B-A3B (`RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.dflash`) | Hugging Face, at a pinned revision | when the cluster's 30B is deployed with its guesser; the installer, or the first start, then makes a 4-bit copy of it on each machine that has it, which never leaves that machine | Apache-2.0 |
 | Model weights | Hugging Face or the source you choose | when you download or serve a model | each model's own licence |
 
 Where a model or image's licence restricts use, the restriction is between you

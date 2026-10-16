@@ -129,6 +129,7 @@ const exactLabels: Record<string, string> = {
   // against vaelor/ by auditLabelsCoverage.test.ts.
   "cluster.serving.rotate-key": "Rotated the cluster serving key",
   "cluster.performance.profile": "Captured a serving performance profile",
+  "cluster.performance.kernel-profile": "Captured a GPU kernel profile (the model was restarted for it)",
   "llm_server.rotate_key": "Rotated an LLM Server key",
   "skills.library.register": "Registered a skill",
   "skills.library.import_github": "Imported a skill from GitHub",
@@ -379,6 +380,7 @@ const attemptLabels: Record<string, string> = {
   "cluster.link.set": "Tried to change the cluster link",
   "cluster.node.architecture-eviction": "Tried to remove a worker of the wrong processor architecture",
   "cluster.node.enroll": "Tried to enrol a worker",
+  "cluster.performance.kernel-profile": "Tried a GPU kernel profile (restarts the model)",
   "cluster.performance.profile": "Tried to capture a serving performance profile",
   "cluster.telemetry.install": "Tried to install worker telemetry",
   "credential.store": "Tried to store a connection",

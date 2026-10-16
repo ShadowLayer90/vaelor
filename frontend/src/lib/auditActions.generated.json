@@ -108,6 +108,7 @@
     "cluster.node.architecture-eviction",
     "cluster.node.enroll",
     "cluster.node.remove",
+    "cluster.performance.kernel-profile",
     "cluster.performance.profile",
     "cluster.retained_volume.delete",
     "cluster.service.diagnostic",
@@ -528,6 +529,10 @@
       "success"
     ],
     "cluster.node.remove": [
+      "success"
+    ],
+    "cluster.performance.kernel-profile": [
+      "failure",
       "success"
     ],
     "cluster.performance.profile": [

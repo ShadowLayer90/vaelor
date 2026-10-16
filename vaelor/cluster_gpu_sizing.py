@@ -74,7 +74,7 @@ from .cluster_gpu_model_spec import (  # noqa: F401 - the engine's public spec A
     BYTES_PER_PARAMETER, DEFAULT_KV_SLOTS, RUNTIME_RESERVE_BYTES,
     WEIGHT_OVERHEAD_FRACTION, GpuModelSpec,
     build_model_spec, bytes_per_parameter, context_that_fits,
-    normalize_quantization, with_launch_cache, with_speculation,
+    normalize_quantization, with_launch_cache, with_speculation, draft_note,
 )
 #: What would make a refused model fit, and the one name of the machine
 #: setting those sentences point at, live in `cluster_gpu_ways_out`.
@@ -452,6 +452,7 @@ def _model_view(spec: GpuModelSpec, required: Dict[str, int]) -> Dict[str, Any]:
 def _budget_view(required: Dict[str, int]) -> Dict[str, Any]:
     return {
         "weight_bytes": required["weight_bytes"],
+        "draft_weight_bytes": required["draft_weight_bytes"],
         "kv_cache_bytes": required["kv_cache_bytes"],
         "overhead_bytes": required["overhead_bytes"],
         "margin_bytes": required["margin_bytes"],
@@ -568,7 +569,9 @@ def plan_gpu_fit(
         launch_spec(spec, max_model_len), gpu_nodes, link=link, intent=intent,
         gpu_memory_utilization=gpu_memory_utilization,
     )
-    note = _unreadable_note(gpu_nodes)
+    note = _unreadable_note(gpu_nodes) + draft_note(spec, split=(
+        intent != INTENT_THROUGHPUT
+        or decision.get("verdict") not in (VERDICT_REPLICATED, VERDICT_WONT_FIT)))
     if note:
         decision["summary"] = str(decision.get("summary", "")) + note
     return decision
@@ -795,7 +798,7 @@ def _replica_requests(spec: GpuModelSpec, budget: int) -> int:
     if per_request <= 0:
         return 0
     fixed = spec.required_bytes()
-    room = budget - fixed["weight_bytes"] - fixed["overhead_bytes"]
+    room = budget - fixed["weight_bytes"] - fixed["draft_weight_bytes"] - fixed["overhead_bytes"]
     return max(0, int(room // per_request))
 
 

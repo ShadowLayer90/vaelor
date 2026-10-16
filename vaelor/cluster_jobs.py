@@ -19,6 +19,8 @@ from .job_vocabulary import (
     CLUSTER_LLM_DEPLOY_JOB,
     CLUSTER_NODE_PROFILE_JOB,
 )
+from .gpu_model_library import pull_job_message, remove_job_message
+from .gpu_pool_replicas import with_serving_notes
 from .jobs import JobStore
 from .worker_profile_job import JOINED_REASON, queue_profile_job, run_profile_job
 
@@ -73,7 +75,9 @@ def execute_cluster_job(
         )
         return store.finish(
             job["id"], state="healthy",
-            message="Cluster LLM is healthy and registered", result=result,
+            # VD-215: names each machine serving without the draft model.
+            message=with_serving_notes("Cluster LLM is healthy and registered", result),
+            result=result,
         )
     if job_type == "cluster.app.deploy":
         checkpoint(10, "Validating worker capacity and application policy", "validating")
@@ -191,7 +195,9 @@ def execute_cluster_job(
         )
         return store.finish(
             job["id"], state="healthy",
-            message="GPU inference deployment loaded and serving", result=result,
+            message=with_serving_notes(
+                "GPU inference deployment loaded and serving", result),
+            result=result,
         )
     if job_type == CLUSTER_GPU_REFRESH_JOB:
         checkpoint(5, "Checking whether this release renders the model's units differently", "starting")
@@ -258,14 +264,16 @@ def execute_cluster_job(
         )
         return store.finish(
             job["id"], state="completed",
-            message="Model weights cached on the selected nodes", result=result,
+            # VD-214: says where the model and its draft model were NOT
+            # cached too, rather than calling every pull complete.
+            message=pull_job_message(result), result=result,
         )
     if job_type == "cluster.model.remove":
         checkpoint(20, "Removing the cached model weights", "starting")
         result = operations.model_library.remove(job["payload"])
         return store.finish(
             job["id"], state="completed",
-            message="Cached model weights removed", result=result,
+            message=remove_job_message(result), result=result,
         )
     if job_type == CLUSTER_NODE_PROFILE_JOB:
         return run_profile_job(job, operations, store, checkpoint)

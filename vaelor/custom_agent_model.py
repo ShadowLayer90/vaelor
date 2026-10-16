@@ -10,7 +10,9 @@ from typing import Any, Dict, Mapping
 
 from .agent_prompts import CUSTOM_AGENT_PROMPT, LOCAL_CUSTOM_AGENT_PROMPT
 from .assistant_working_context import render_output_contract
-from .inference_client import chat_completion, inference_timeout, parse_model_object
+from .inference_client import (
+    appliance_session_headers, chat_completion, inference_timeout, parse_model_object,
+)
 from .model_calibration import AGENT_RESULT_SCHEMA, CONNECTOR_PLAN_SCHEMA
 from .model_profiles import (
     reasoning_headroom_tokens,
@@ -24,6 +26,7 @@ from .provider_runtime import (
     provider_system_prompt,
     provider_user_content,
 )
+from .session_affinity import agent_task_session_key
 
 LOGGER = logging.getLogger(__name__)
 
@@ -229,6 +232,9 @@ def execute_custom_agent(
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if connection.get("api_key"):
         headers["Authorization"] = "Bearer {}".format(connection["api_key"])
+    # VD-216 fix 1: the task's key, as the tool loop derives it - this pass
+    # shares the loop's system prompt, so it finds it on the same replica.
+    headers.update(appliance_session_headers(dict(connection), agent_task_session_key(task)))
     model = str(connection.get("model", ""))
     if not model:
         request = urllib.request.Request(
@@ -300,6 +306,7 @@ def plan_connector_calls(
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if connection.get("api_key"):
         headers["Authorization"] = "Bearer {}".format(connection["api_key"])
+    headers.update(appliance_session_headers(dict(connection), agent_task_session_key(task)))
     model = str(connection.get("model", ""))
     if not model:
         request = urllib.request.Request(

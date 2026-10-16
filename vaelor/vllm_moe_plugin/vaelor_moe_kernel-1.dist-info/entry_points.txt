@@ -1,0 +1,2 @@
+[vllm.general_plugins]
+vaelor_moe_kernel = vaelor_moe_kernel:register

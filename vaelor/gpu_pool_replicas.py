@@ -76,7 +76,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .cluster_capacity import gpu_fit_node
@@ -105,6 +105,7 @@ from .gpu_serving_target import (
 from .llm_server_state import generate_key
 from .model_thinking import THINKING_FIELD
 from .vllm_serve_options import OPTIONS_FIELD
+from .vllm_moe_kernels import started_copy_note
 from .ssh_transport import SshTransportError
 
 LOGGER = logging.getLogger(__name__)
@@ -147,6 +148,74 @@ REPLICAS_DOWN = (
 )
 
 #: The three words a replica's last state is written in.
+#: VD-215, the owner's ruling: a machine that cannot set up the patched
+#: attention file serves its copy without the draft model, and the console
+#: says so on that copy's row - from this field of `units.replicas[]`, the
+#: deploy's and Load's progress line and their final message alike (LESSONS
+#: 1/19). Written by every serve, so a Load that succeeds clears it. Named
+#: for what it holds since VD-216 (review nit a): a sentence per set-up this
+#: copy serves without - the draft model's speed fix, Vaelor's expert kernel.
+#: A row written before the rename carries it as :data:`LEGACY_NOTE_FIELD`.
+SERVING_NOTE_FIELD = "serving_note"
+LEGACY_NOTE_FIELD = "speed_fix_missing"
+SPEED_FIX_MISSING = (
+    "Serving without the draft model on {machine}: the speed fix could not be "
+    "set up ({reason})"
+)
+#: VD-216: the same field, when Vaelor's expert kernel could not be set up on
+#: a machine and its copy serves with vLLM's own (`vllm_moe_kernels`).
+KERNEL_MISSING = (
+    "Serving with vLLM's own expert kernel on {machine}: Vaelor's faster expert "
+    "kernel could not be set up ({reason})"
+)
+
+
+#: VD-216 item 2: the same field, when the 4-bit guesser could not be used on a
+#: machine and its copy serves the full-size one (`vllm_guesser_build`).
+GUESSER_MISSING = (
+    "Serving the full-size guesser on {machine}: the 4-bit guesser could not be "
+    "used ({reason})"
+)
+
+
+#: The same, when an older bridge refused the fused qk-norm/RoPE step.
+FUSION_MISSING = (
+    "Serving without the fused qk-norm/RoPE step on {machine} ({reason})"
+)
+
+
+def skip_sentences(runtime: Any, transport: Any, unit: str, machine: Any) -> Tuple[str, bool]:
+    """``(sentences, kernel skipped)`` for the set-ups this copy started without (VD-215/216)."""
+    sentences, kernel_skipped = [], False
+    for method, sentence in (("take_overlay_skip", SPEED_FIX_MISSING),
+                             ("take_kernel_skip", KERNEL_MISSING),
+                             ("take_guesser_skip", GUESSER_MISSING),
+                             ("take_fusion_skip", FUSION_MISSING)):
+        take = getattr(runtime, method, None)
+        skipped = take(transport, unit) if callable(take) else ""
+        if isinstance(skipped, str) and skipped:
+            sentences.append(sentence.format(machine=machine, reason=skipped.rstrip(". ")))
+            kernel_skipped = kernel_skipped or method == "take_kernel_skip"
+    return ". ".join(sentences), kernel_skipped
+
+
+def serving_notes(result: Any) -> List[str]:
+    """The sentences a deploy's or Load's result carries, one per machine (VD-215/216)."""
+    units = result.get("units") if isinstance(result, Mapping) else None
+    replicas = units.get("replicas") if isinstance(units, Mapping) else None
+    return [
+        str(entry.get(SERVING_NOTE_FIELD) or entry[LEGACY_NOTE_FIELD])
+        for entry in replicas or () if isinstance(entry, Mapping)
+        and (entry.get(SERVING_NOTE_FIELD) or entry.get(LEGACY_NOTE_FIELD))
+    ]
+
+
+def with_serving_notes(message: str, result: Any) -> str:
+    """``message``, followed by each machine's serving note."""
+    notes = serving_notes(result)
+    return message if not notes else "{}. {}.".format(message, ". ".join(notes))
+
+
 REPLICA_ALIVE = "answering"
 REPLICA_DOWN = "not answering"
 REPLICA_UNREACHABLE = "unreachable"
@@ -167,6 +236,9 @@ class ReplicaPlacement:
     address: str
     port: int
     gate: str = ""
+    #: The sentence(s) saying which set-up this copy serves without, and why
+    #: (VD-215's draft model, VD-216's expert kernel), or ``""``.
+    serving_note: str = ""
 
     @property
     def node_id(self) -> str:
@@ -190,6 +262,8 @@ class ReplicaPlacement:
         }
         if self.gate:
             entry["gate"] = self.gate
+        if self.serving_note:
+            entry[SERVING_NOTE_FIELD] = self.serving_note
         return entry
 
 
@@ -319,10 +393,15 @@ class ReplicaHealth:
     teardown by at most the passes it lost and never invents one.
     """
 
-    def __init__(self, probe: Callable[[str], bool], *, passes: int = REPLICA_DOWN_PASSES):
+    def __init__(self, probe: Callable[[str], bool], *, passes: int = REPLICA_DOWN_PASSES,
+                 held: Optional[Callable[[str], bool]] = None):
         self._probe = probe
         self._passes = max(1, int(passes))
         self._silent: Dict[str, int] = {}
+        # VD-214: a GPU kernel profile restarts the controller's copy on
+        # purpose, twice; while its bounded hold names this row, a silent
+        # pass is not counted towards the teardown (`gpu_kernel_profile.held`).
+        self._held = held or _kernel_profile_held
 
     def observe(self, record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         """``{replicas, alive, total, failure}`` for a healthy replicated row, else ``None``."""
@@ -346,6 +425,8 @@ class ReplicaHealth:
         failure = ""
         if alive:
             self._silent.pop(name, None)
+        elif self._held(name):
+            pass  # restarting on purpose, within a bounded hold: not counted
         else:
             self._silent[name] = self._silent.get(name, 0) + 1
             if self._silent[name] >= self._passes:
@@ -357,6 +438,13 @@ class ReplicaHealth:
             "replicas": entries, "alive": alive, "total": len(entries),
             "failure": failure,
         }
+
+
+def _kernel_profile_held(name: str) -> bool:
+    """Whether a GPU kernel profile's hold names this deployment now (VD-214)."""
+    from .gpu_kernel_profile import held
+
+    return held(name)
 
 
 def replica_state_word(entry: Mapping[str, Any]) -> str:
@@ -438,6 +526,7 @@ class ReplicatedServing:
     ) -> Tuple[Dict[str, Any], str, str]:
         api_key = mint_replica_key()
         replicas: List[ReplicaPlacement] = []
+        skipped_kernel = set()
         for index, node in enumerate(participants):
             transport = transports[node["id"]]
             address = replica_address(node, self._advertise_address)
@@ -457,6 +546,12 @@ class ReplicatedServing:
                 vllm_options=vllm_options,
             )
             started.append((transport, node, unit))
+            # VD-215/VD-216: this copy may have been started without the draft
+            # model, or with vLLM's own expert kernel.
+            missing, kernel_skipped = skip_sentences(self.runtime, transport, unit,
+                                                     node.get("name") or node.get("id"))
+            if missing:
+                report(60 + int(20 * index / len(participants)), missing)
             gate = ""
             if address != SERVER_LOOPBACK_HOST:
                 gate = self.runtime.start_gate(
@@ -466,9 +561,20 @@ class ReplicatedServing:
                 started.append((transport, node, gate))
             replicas.append(ReplicaPlacement(
                 node=node, transport=transport, unit=unit, address=address,
-                port=replica_port, gate=gate,
+                port=replica_port, gate=gate, serving_note=missing,
             ))
+            if kernel_skipped:
+                skipped_kernel.add(index)
         self._waiter.wait(replicas, payload, report)
+        # VD-216 (review F3): what the expert-kernel plugin itself did on each
+        # started copy, from that unit's own log lines.
+        for at, replica in enumerate(replicas):
+            note = "" if at in skipped_kernel else started_copy_note(
+                self.runtime, replica.transport, replica.unit, replica.name, vllm_options)
+            if note:
+                report(82, note)
+                replicas[at] = replace(replica, serving_note=". ".join(
+                    filter(None, (replica.serving_note, note))))
         units = {
             "engine": VLLM_ENGINE,
             "mode": VERDICT_REPLICATED,

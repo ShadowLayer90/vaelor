@@ -4,9 +4,12 @@ import { formatBytes, formatPercent, formatTemperature } from "../lib/format";
 import { gpuTemperatureLabel } from "../lib/gpuTemperature";
 import { StatusPill } from "./StatusPill";
 import { PerfCard } from "./PerformanceDiagnostics";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type { Session } from "../types";
 import {
+  runGpuKernelProfile,
   runServingProfile,
+  type KernelProfileOutcome,
   type CpuProfileResult,
   type EbpfProfileResult,
   type GpuKernelCategory,
@@ -15,6 +18,7 @@ import {
   type GpuProfileResult,
   type ProfileCapture,
   type ServingProfile,
+  type SpecDecodingResult,
 } from "../lib/clusterPerformance";
 
 /**
@@ -202,6 +206,57 @@ function GpuKernelCaptureResult({ result }: { result: GpuKernelResult }) {
   );
 }
 
+/** A share from 0..1 as a whole percent. */
+function share(value: number): string {
+  return formatPercent(value * 100);
+}
+
+/** The draft model's acceptance in one plain sentence (VD-213). */
+function specLead(result: SpecDecodingResult): string {
+  const kept = result.acceptance_rate !== undefined ? ` · ${share(result.acceptance_rate)} of guessed tokens kept` : "";
+  return `${result.accepted_per_step.toFixed(1)} tokens accepted per step, ${result.mean_acceptance_length.toFixed(1)} written per step${kept}`;
+}
+
+/**
+ * The draft model's acceptance over the window (VD-213): what it guessed and
+ * kept, the tokens accepted per step, and how often each guess position is
+ * right. Read from vLLM's own counters at the window's start and end; a window
+ * with no guesses never reaches here (the capture says why instead).
+ */
+function SpecDecodingCaptureResult({ result }: { result: SpecDecodingResult }) {
+  return (
+    <>
+      <p className="perf-muted">
+        Draft model {"·"} {result.window_seconds} s {"·"} {result.drafts} guessing steps
+      </p>
+      <dl className="perf-kv">
+        <div><dt>Tokens guessed</dt><dd>{result.drafted_tokens}</dd></div>
+        <div><dt>Tokens accepted</dt><dd>{result.accepted_tokens}</dd></div>
+        <div><dt>Tokens accepted per step</dt><dd>{result.accepted_per_step.toFixed(2)}</dd></div>
+        <div><dt>Tokens written per step</dt><dd>{result.mean_acceptance_length.toFixed(2)}</dd></div>
+      </dl>
+      <p className="perf-muted">
+        Each step the model checks the draft model&apos;s guesses and keeps the ones it agrees with, then writes one
+        token of its own, so a step writes the accepted tokens plus one.
+      </p>
+      {result.positions.length > 0 ? (
+        <>
+          <p className="perf-muted">How often each guess is right</p>
+          <ol aria-label="How often each guess is right">
+            {result.positions.map((slot) => (
+              <li key={slot.position}>
+                <span className="perf-profile__symbol-pct">{share(slot.rate)}</span>
+                <span>Guess {slot.position}</span>
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : null}
+      {result.note && <p className="perf-muted">{result.note}</p>}
+    </>
+  );
+}
+
 /** The capture's result in one line, as the board shows it; the whole result is under Details. */
 function captureSummary(capture: ProfileCapture): string {
   if (!capture.available || !capture.result) return capture.reason;
@@ -217,6 +272,7 @@ function captureSummary(capture: ProfileCapture): string {
       ? `${formatMicros(ebpf.total_us)} blocked off-CPU in ${ebpf.window_seconds} s, most in ${ebpf.rows[0].label}`
       : ebpf.note ?? "Captured, but the serving process did not block off-CPU during the window.";
   }
+  if (capture.id === "speculative_decoding") return specLead(capture.result as SpecDecodingResult);
   if (capture.id === "gpu_kernel") {
     const kernels = capture.result as GpuKernelResult;
     const top = kernels.categories?.[0];
@@ -239,7 +295,27 @@ function hasDetail(capture: ProfileCapture): boolean {
   if (capture.id === "cpu") return (capture.result as CpuProfileResult).symbols.length > 0;
   if (capture.id === "ebpf") return (capture.result as EbpfProfileResult).rows.length > 0;
   if (capture.id === "gpu_kernel") return (capture.result as GpuKernelResult).rows.length > 0;
+  if (capture.id === "speculative_decoding") return true;
   return Object.keys((capture.result as GpuProfileResult).snapshot).length > 0;
+}
+
+/**
+ * What the GPU kernel trace's reader left out (VD-214): old traces it could not
+ * clear (and did not read), and traces it refused to read, each with its
+ * reason - said in plain lines, never dropped in silence.
+ */
+function traceReaderLines(capture: ProfileCapture): string[] {
+  if (capture.id !== "gpu_kernel" || !capture.result) return [];
+  const result = capture.result as GpuKernelResult;
+  const lines: string[] = [];
+  const kept = result.stale_traces_kept ?? 0;
+  if (kept > 0) {
+    lines.push(`${kept} old trace file${kept === 1 ? " was" : "s were"} kept: the bridge could not remove ${kept === 1 ? "it" : "them"}, and this capture did not read ${kept === 1 ? "it" : "them"}.`);
+  }
+  for (const refused of result.traces_refused ?? []) {
+    lines.push(`Trace ${refused.name} ${refused.reason}.`);
+  }
+  return lines;
 }
 
 /** One capture row: its name, its result in a line and its pill; the whole result under Details. */
@@ -250,6 +326,7 @@ function CaptureRow({ capture }: { capture: ProfileCapture }) {
         <div className="perf-capture__text">
           <strong>{capture.label}</strong>
           <p className="perf-muted">{captureSummary(capture)}</p>
+          {traceReaderLines(capture).map((line) => <p className="perf-muted" key={line}>{line}</p>)}
         </div>
         <StatusPill label={capture.available ? "Captured" : "Not available"} tone={capture.available ? "success" : "neutral"} />
       </div>
@@ -262,7 +339,9 @@ function CaptureRow({ capture }: { capture: ProfileCapture }) {
               ? <EbpfCaptureResult result={capture.result as EbpfProfileResult} />
               : capture.id === "gpu_kernel"
                 ? <GpuKernelCaptureResult result={capture.result as GpuKernelResult} />
-                : <GpuCaptureResult result={capture.result as GpuProfileResult} />}
+                : capture.id === "speculative_decoding"
+                  ? <SpecDecodingCaptureResult result={capture.result as SpecDecodingResult} />
+                  : <GpuCaptureResult result={capture.result as GpuProfileResult} />}
         </details>
       ) : null}
     </section>
@@ -270,24 +349,50 @@ function CaptureRow({ capture }: { capture: ProfileCapture }) {
 }
 
 /**
+ * How long GPU tracing may stay on, in whole minutes rounded up:
+ * `gpu_kernel_profile.TRACING_DEADLINE_MINUTES` (590 s, rounded up). Said before the owner starts it; `tests/test_gpu_kernel_profile_console.py`
+ * ties this copy to the producer (LESSONS 6).
+ */
+export const KERNEL_TRACING_LIMIT_MINUTES = 10;
+
+/** What the owner is told before a GPU kernel profile restarts the model (VD-214). */
+export const KERNEL_PROFILE_WARNING =
+  "This restarts this controller's copy of the model twice: once with GPU tracing on, and again normally after the " +
+  "capture. Each restart takes about two minutes. Other machines in the cluster keep answering; a model on this " +
+  "machine alone is offline for that time.";
+export const KERNEL_PROFILE_NOTE =
+  `While tracing is on, one CPU core runs at 100%. Tracing switches itself off after at most ${KERNEL_TRACING_LIMIT_MINUTES} ` +
+  "minutes, even if this page is closed.";
+
+/** The restarts' outcome in one plain line (VD-214). */
+function kernelOutcomeLine(outcome: KernelProfileOutcome): string {
+  const tracing = outcome.tracing_confirmed ? "Captured with GPU tracing on. " : "";
+  return `${tracing}${outcome.revert_note}`;
+}
+
+/**
  * The on-demand profile action (VD-128, administrator only; VD-200, the
  * ClusterPerformanceAdvanced board). One click runs a single bounded profile
  * of the GPU serving process through the root bridge and shows each capture's
  * real result where it ran, and the honest reason where it could not - never
- * a fabricated flame graph.
+ * a fabricated flame graph. The GPU kernel profile (VD-214) is the second,
+ * disruptive action: it restarts this controller's copy with GPU tracing on,
+ * so it asks first and says what it costs.
  */
 export function ProfilePanel({ session, className }: { session: Session; className?: string }) {
   const [profile, setProfile] = useState<ServingProfile | null>(null);
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState<"" | "profile" | "kernel">("");
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
 
-  const run = () => {
-    setRunning(true);
+  const start = (kind: "profile" | "kernel") => {
+    setConfirming(false);
+    setRunning(kind);
     setError("");
-    runServingProfile(session.csrf_token)
+    (kind === "kernel" ? runGpuKernelProfile : runServingProfile)(session.csrf_token)
       .then((result) => setProfile(result))
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "The profile could not be run."))
-      .finally(() => setRunning(false));
+      .finally(() => setRunning(""));
   };
 
   return (
@@ -297,8 +402,8 @@ export function ProfilePanel({ session, className }: { session: Session; classNa
       subtitle={"On-demand profile · administrators"}
       title="Profile the serving process"
       trailing={(
-        <Button disabled={running} onClick={run} type="button" variant="secondary">
-          {running ? "Profiling…" : "Run a profile"}
+        <Button disabled={running !== ""} onClick={() => start("profile")} type="button" variant="secondary">
+          {running === "profile" ? "Profiling…" : "Run a profile"}
         </Button>
       )}
     >
@@ -306,12 +411,33 @@ export function ProfilePanel({ session, className }: { session: Session; classNa
         A one-off, few-second capture of what the GPU serving process is doing; real where the tools can run on this
         box, with the reason stated where one cannot.
       </p>
+      <div className="perf-capture__row">
+        <p className="perf-muted">
+          {running === "kernel"
+            ? "Restarting the model with GPU tracing on, capturing, then restarting it normally. This takes a few minutes."
+            : "Per-kernel GPU time on vLLM 0.27 needs the model restarted with GPU tracing on, for testing."}
+        </p>
+        <Button disabled={running !== ""} onClick={() => setConfirming(true)} type="button" variant="secondary">
+          {running === "kernel" ? "Profiling GPU kernels…" : "GPU kernel profile (restarts the model)"}
+        </Button>
+      </div>
       {error && <Notice severity="warning">{error}</Notice>}
+      {profile?.kernel_profile && <p className="perf-muted">{kernelOutcomeLine(profile.kernel_profile)}</p>}
       {profile && (
         <div className="perf-captures">
           {profile.captures.map((capture) => <CaptureRow capture={capture} key={capture.id} />)}
         </div>
       )}
+      <ConfirmDialog
+        busy={false}
+        confirmLabel="Restart and profile"
+        description={KERNEL_PROFILE_WARNING}
+        note={KERNEL_PROFILE_NOTE}
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => start("kernel")}
+        open={confirming}
+        title="Run a GPU kernel profile?"
+      />
     </PerfCard>
   );
 }

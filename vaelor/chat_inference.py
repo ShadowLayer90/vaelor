@@ -17,6 +17,7 @@ from .usage_rollup import SOURCE_AI_CHAT
 from .gpu_serving_target import AI_CHAT_HELD_BY_CLUSTER, gpu_cluster_mode_active
 from .inference_client import (
     MAX_INFERENCE_SECONDS,
+    appliance_session_headers,
     inference_timeout,
     normalize_performance,
     remote_inference_budget,
@@ -32,7 +33,6 @@ from .model_credential_roles import (
     AI_CHAT_NEVER_ON_THE_ASSISTANT_NPU, ai_chat_may_use, ai_chat_may_use_lease,
 )
 from .provider_runtime import assistant_budget, managed_local_connection
-from .session_affinity import session_headers
 from .chat_hosted import HostedChatError, answer_hosted, read_thinking
 from .chat_thinking import (
     ThinkingSettingError,
@@ -175,6 +175,24 @@ def conversational_history(history):
             continue
         kept.append(item)
     return kept
+
+
+#: AI Chat shows the model at least the last eight earlier messages, as it
+#: always has; past that the window drops its oldest in blocks of four (VD-216
+#: fix 2). Sliding one exchange a turn changed every prompt's start, so the
+#: prefix cache reused only the system prompt (3% of a 4.3k-token turn).
+HISTORY_MESSAGES = 8
+HISTORY_DROP_BLOCK = 4
+
+
+def history_window(history):
+    """`conversational_history` cut to 8-11 messages whose first changes
+    only every `HISTORY_DROP_BLOCK` messages (two turns), not every turn."""
+    kept = conversational_history(history)
+    if len(kept) <= HISTORY_MESSAGES:
+        return kept
+    surplus = len(kept) - HISTORY_MESSAGES
+    return kept[surplus - surplus % HISTORY_DROP_BLOCK:]
 
 
 #: The error code `activate` answers while the cluster holds the lease, and
@@ -705,24 +723,29 @@ class ChatInference:
             "claim its source does not support. Never claim to have "
             "changed the appliance or reveal secrets."
         )
+        # VD-216 fix 2: stable first. System prompt and history stay the same
+        # turn to turn for the prefix cache; what this turn decides (question,
+        # memory, notes on how to answer, sources) follows in one user message.
+        notes = []
         if remembered:
-            system += (
-                " Saved appliance memory is background context this appliance "
-                "recorded earlier, not a retrieved source. Use it for context, "
-                "and never cite it with an [S#] marker."
+            notes.append(
+                "Use the memory above for context only: it is background this "
+                "appliance recorded earlier, not a retrieved source, so never "
+                "cite it with an [S#] marker."
             )
         if managed_local_connection(connection):
-            system = "/no_think\n" + system + (
+            system = "/no_think\n" + system
+            notes.append(
                 # "completely" is what pairs with the larger cited ceiling below;
                 # "from the retrieved sources" was what made a locally-hosted
                 # model refuse every question its documents did not answer.
-                " Answer the question completely, from the sources where they "
+                "Answer the question completely, from the sources where they "
                 "are relevant and from your own general knowledge where they "
                 "are not."
-                if sources else " Keep the answer under 120 words."
+                if sources else "Keep the answer under 120 words."
             )
         messages = [{"role": "system", "content": system}]
-        for item in conversational_history(history)[-8:]:
+        for item in history_window(history):
             messages.append({
                 "role": item["role"], "content": str(item.get("content", ""))[:3000]
             })
@@ -732,6 +755,8 @@ class ChatInference:
                 "\n\nSaved appliance memory (background context, never citable):\n"
                 + "\n".join(remembered)
             )
+        if notes:
+            content += "\n\n" + " ".join(notes)
         # The question as a service with its own document input reads it: the
         # sources go beside it as documents, not inside it (VD-206).
         question = content
@@ -742,10 +767,7 @@ class ChatInference:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if connection.get("api_key"):
             headers["Authorization"] = "Bearer {}".format(connection["api_key"])
-        if managed_local_connection(connection):
-            # Only Vaelor's own balancer reads it; a hosted provider is sent
-            # nothing about which conversation this is.
-            headers.update(session_headers(session_key))
+        headers.update(appliance_session_headers(connection, session_key))
         base_budget = assistant_budget(connection, clean)["max_tokens"]
         if sources:
             ceiling = (

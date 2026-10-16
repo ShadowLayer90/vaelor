@@ -15,9 +15,10 @@ that:
   (``drwxrwx--T+``, mode ``1770``);
 * ``/var/lib/vaelor/models``: ``root:vaelor-jobs 3770``. The executor still
   downloads into it (group write, setgid); nothing but root renames its entries;
-* ``models/hub``, ``models/pull``, ``models/compile`` and ``serving-profiles``:
-  real ``root:root 0755`` folders - and for the three a root container reads
-  weights and kernels from, EVERY entry below them root-owned too, since a
+* ``models/hub``, ``models/pull``, ``models/compile``, ``serving-profiles`` and
+  ``vllm-overlays`` (VD-215): real ``root:root 0755`` folders - and for the
+  four a root container reads weights, kernels or code from, EVERY entry below
+  them root-owned too, since a
   subtree another account made is consumed by root containers.
 
 **Every step is fd-relative and never follows a link (review R1).** This runs
@@ -84,9 +85,13 @@ HUB_ROOT = MODELS_ROOT + "/hub"
 STATE_ROOT = posixpath.dirname(MODELS_ROOT)
 COMPILE_ROOT = MODELS_ROOT + "/compile"
 #: The folders a root container writes through, all root's and never links.
-ROOT_FOLDERS = (HUB_ROOT, PULL_ROOT, COMPILE_ROOT, SERVING_PROFILES_DIR)
+#: The patched vLLM attention file each GPU machine builds (VD-215,
+#: `vllm_overlays.OVERLAY_ROOT`, tied by a test): root's alone, everything in it
+#: too, because a root container mounts what is built there.
+OVERLAY_ROOT = STATE_ROOT + "/vllm-overlays"
+ROOT_FOLDERS = (HUB_ROOT, PULL_ROOT, COMPILE_ROOT, SERVING_PROFILES_DIR, OVERLAY_ROOT)
 #: The ones whose whole subtree a root container reads: every entry root's.
-ROOT_SUBTREES = (HUB_ROOT, PULL_ROOT, COMPILE_ROOT)
+ROOT_SUBTREES = (HUB_ROOT, PULL_ROOT, COMPILE_ROOT, OVERLAY_ROOT)
 #: What a controller vLLM or pull container mounts (`gpu_pool_runtime`'s ``-v``).
 MOUNT_SOURCES = (MODELS_ROOT, COMPILE_ROOT, SERVING_PROFILES_DIR)
 STATE_ROOT_MODE = 0o1770

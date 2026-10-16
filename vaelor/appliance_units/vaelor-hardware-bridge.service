@@ -71,6 +71,17 @@ ReadWritePaths=/etc/systemd/system /var/lib/vaelor/models
 ConfigurationDirectory=vaelor-ray
 ConfigurationDirectoryMode=0700
 ReadWritePaths=/etc/vaelor-ray
+# The on-demand serving profile (VD-128) clears and reads vLLM's torch traces
+# in /var/lib/vaelor/serving-profiles (`serving_profiler.SERVING_PROFILES_DIR`).
+# Without this path the cleanup failed with EROFS and old traces were read as
+# the new capture's (live Z2, 2026-10-12). Optional (`-`): the state-root
+# layout creates it, and a box without it must still start the bridge.
+ReadWritePaths=-/var/lib/vaelor/serving-profiles
+# The patched vLLM attention file (VD-215) is built here by the bridge at the
+# first start that needs it, from the diff the installer fetched, and mounted
+# read-only into the model's container. Optional (`-`): the state-root layout
+# creates it, and a box without it serves without the patch and says so.
+ReadWritePaths=-/var/lib/vaelor/vllm-overlays
 # Enclosure-only paths, optional for the same reason as WorkingDirectory.
 ReadWritePaths=-/opt/pironman5 -/var/log/pironman5
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

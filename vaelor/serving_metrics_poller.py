@@ -47,6 +47,8 @@ from .serving_metrics import (  # noqa: F401 - the two poll constants are re-exp
     SERVING_POLL_SECONDS,
     TTFT_BUCKET_KEY_PREFIX,
     counter_increase,
+    DECODE_BASIS_STEP_TOKENS,
+    decode_step_tokens,
     histogram_in_use,
     parse_llamacpp_counters,
     parse_llamacpp_metrics,
@@ -271,7 +273,8 @@ def llamacpp_performance(
 
     llama.cpp adds a reply's tokens and the seconds spent writing them when the
     reply finishes; their ratio is the writing speed, so they fill the same two
-    columns vLLM's inter-token counters fill. It reports no KV-cache occupancy,
+    columns vLLM's decode-step tokens and inter-token seconds fill. It reports
+    no KV-cache occupancy,
     no prefix-cache counters and no per-request histogram, and none is invented.
     """
     mapping = (
@@ -293,14 +296,27 @@ def vllm_performance(
     node_id: str, port: int, aggregate: Dict[str, float], body: str,
     tick_period: Optional[float], stamp: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """One vLLM replica's reading as the ledger's performance input."""
+    """One vLLM replica's reading as the ledger's performance input.
+
+    The ``itl_intervals`` column carries decode-step TOKENS, as it carries
+    llama.cpp's tokens predicted (`decode_step_tokens`, VD-213): under a drafter
+    an interval is a step of several tokens. The two columns are written as a
+    pair or not at all, so a pooled speed never divides seconds without tokens,
+    and with ``decode_basis`` so the ledger never diffs tokens against a
+    baseline that counted steps (review R47).
+    """
     parsed = parse_vllm_performance(body)
     mapping = (
-        ("itl_seconds", "tpot_seconds_sum"), ("itl_intervals", "tpot_seconds_count"),
         ("prefix_hits", "prefix_cache_hits_total"), ("prefix_queries", "prefix_cache_queries_total"),
         ("preemptions", "preemptions_total"),
     )
     counters = {column: aggregate[key] for column, key in mapping if key in aggregate}
+    basis: Dict[str, str] = {}
+    decoded = decode_step_tokens(aggregate, body)
+    if decoded is not None and "tpot_seconds_sum" in aggregate:
+        counters["itl_intervals"] = decoded
+        counters["itl_seconds"] = aggregate["tpot_seconds_sum"]
+        basis["decode_basis"] = DECODE_BASIS_STEP_TOKENS
     sources = parsed["prompt_sources"]
     for column, source in (("prompt_computed", "local_compute"), ("prompt_cached", "local_cache_hit")):
         if source in sources:
@@ -321,6 +337,7 @@ def vllm_performance(
             if key in aggregate
         },
         "counters": counters, "histogram": histogram, "created": parsed["created"],
+        **basis,
     }
 
 
@@ -522,11 +539,13 @@ class VllmServingPoller:
     :func:`vaelor.serving_metrics.parse_vllm_serving` and writes ONE aggregate
     sample per tick: the running/waiting queue SUMMED across replicas, the
     output and prompt token THROUGHPUT summed from each replica's own counter
-    delta, the per-stream DECODE SPEED from the inter-token-latency histogram's
-    delta over the tick, how many replicas were read out of how many there are,
+    delta, the per-stream DECODE SPEED from the decode-step tokens and the
+    inter-token seconds of the tick, how many replicas were read out of how
+    many there are,
     the KV-cache fraction as the MAX across replicas (a ratio is not additive), a
-    pooled TTFT/TPOT average (sum of the histogram sums over the sum of the
-    counts, omitted when no observations exist), and the summed success counter.
+    pooled TTFT/TPOT average (summed seconds over summed requests for TTFT, over
+    summed decode-step tokens for TPOT; omitted when no observations exist),
+    and the summed success counter.
     It also derives the lifetime prefix-cache hit rate, the summed preemption
     counter, the goodput share within :data:`GOODPUT_BUDGET_SECONDS`, and
     per-model RED (request and error counts and an average end-to-end latency,
@@ -537,16 +556,27 @@ class VllmServingPoller:
     produce", not "how fast does a stream type": a stream that ran for three of
     the ten seconds, or two replicas each half busy, drag that figure well below
     what a user watching the answer sees. So the tick writes the two separately:
-    ``decode_tokens_per_second`` is the inter-token intervals observed during the
-    tick divided by the seconds they took (vLLM's ``inter_token_latency_seconds``
-    ``_count``/``_sum`` deltas, pooled across replicas) - the rate a stream
-    decodes at while it is generating, the same quantity llama.cpp's
-    ``predicted_tokens_seconds`` reports - and it is ABSENT when nothing was
-    decoded during the tick; ``generation_throughput_tokens_per_second`` and
-    ``prompt_throughput_tokens_per_second`` carry the counted aggregate under a
-    name that says so. One known limit: under speculative decoding a single
-    step can emit several tokens but is observed as one inter-token interval,
-    so this formula UNDERSTATES the speed a user sees on such a deployment.
+    ``decode_tokens_per_second`` is the tokens decode steps wrote during the
+    tick divided by the seconds those steps took, pooled across replicas - the
+    rate a stream decodes at while it is generating, the same quantity
+    llama.cpp's ``predicted_tokens_seconds`` reports - and it is ABSENT when
+    nothing was decoded during the tick; ``generation_throughput_tokens_per_second``
+    and ``prompt_throughput_tokens_per_second`` carry the counted aggregate under
+    a name that says so. **The tokens are not the inter-token count (VD-213).**
+    vLLM observes one inter-token latency per engine STEP, and a speculative
+    step writes several tokens, so the count is steps: with the drafter on, the
+    Z2 read 7.8 where 28.3 tokens a second were written. The tokens are the
+    ``generation_tokens_total`` increase less the ``time_to_first_token``
+    count's (each request's first token comes from its prefill step, which no
+    inter-token latency times), over the ``inter_token_latency_seconds_sum``
+    increase (:func:`vaelor.serving_metrics.decode_step_tokens`). Each step
+    adds to all three counters at once and one scrape reads them together, so
+    the tick is exact; a scrape that caught them apart would be off by at most
+    one step's tokens per running request, made up by the next tick (or, read
+    backwards, sat out like a restart). Without a drafter the
+    result equals the old inter-token count; a drafter with either counter
+    missing writes no decode speed at all rather than steps called tokens.
+    ``tpot_seconds`` divides by the same tokens.
 
     **A partial sum says it is partial (ACC-053).** ``replicas_total`` and
     ``replicas_read`` ride on every sample, so a tick that could read one replica
@@ -685,10 +715,10 @@ class VllmServingPoller:
         decode = prefill = 0.0
         have_queue = False
         decode_samples = prefill_samples = 0
-        # The inter-token intervals observed during this tick and the seconds
-        # they took, pooled across replicas: their ratio is the per-stream
-        # decode speed (ACC-051), token-weighted rather than a mean of means.
-        itl_seconds = itl_intervals = 0.0
+        # The tokens decode steps wrote during this tick and the seconds they
+        # took, pooled across replicas: their ratio is the per-stream decode
+        # speed (ACC-051, VD-213), token-weighted rather than a mean of means.
+        decode_seconds = decode_tokens = 0.0
         # Whether any replica gave a decode increase this tick (zero included:
         # read, and nothing written, is a measurement), and the answers that
         # STARTED this tick by time-to-first-token bucket - the window fields.
@@ -697,7 +727,8 @@ class VllmServingPoller:
         ttft_window: Dict[str, float] = {}
         # The deep aggregate signals: KV-cache is a fraction (MAX across
         # replicas, never summed); TTFT/TPOT are a pooled average built from
-        # the summed histogram sum and count; success is a summed counter.
+        # the summed seconds and the summed requests (TTFT) or decode-step
+        # tokens (TPOT); success is a summed counter.
         ttft_sum = ttft_count = tpot_sum = tpot_count = 0.0
         success_total = 0.0
         success_seen = False
@@ -771,29 +802,30 @@ class VllmServingPoller:
                 ttft_sum += ttft_series_sum
                 ttft_count += ttft_series_count
             tpot_series_sum = aggregate.get("tpot_seconds_sum")
-            tpot_series_count = aggregate.get("tpot_seconds_count")
-            if tpot_series_sum is not None and tpot_series_count is not None:
+            decoded_series = decode_step_tokens(aggregate, body)
+            if tpot_series_sum is not None and decoded_series is not None:
                 tpot_sum += tpot_series_sum
-                tpot_count += tpot_series_count
-                # The histogram's sum and count are one pair: if EITHER went
-                # backwards the server restarted (or the series was reset), and
-                # a delta of one against the other would be a meaningless speed.
-                # Both baselines are re-taken and the replica sits this tick out.
-                prior = self._previous.get(node, {})
-                prior_seconds = prior.get("tpot_seconds_sum")
-                prior_intervals = prior.get("tpot_seconds_count")
-                pair_reset = (
-                    (prior_seconds is not None and tpot_series_sum < prior_seconds[0])
-                    or (prior_intervals is not None and tpot_series_count < prior_intervals[0])
-                )
+                tpot_count += decoded_series
+                # The decode seconds and tokens are one pair. The seconds are a
+                # real counter: backwards is a restart (`_delta` says so). The
+                # tokens are DERIVED (generation less first tokens) and can dip
+                # without any restart - a request timed to its first token that
+                # wrote none - so a dip is never a restart claim (review R48):
+                # the replica's decode figure just sits this tick out, absent,
+                # neither clamped nor counted. Both baselines are re-taken.
+                prior_tokens = self._previous.get(node, {}).get("decode_step_tokens")
+                self._previous.setdefault(node, {})["decode_step_tokens"] = (decoded_series, now)
                 seconds_delta = self._delta(node, "tpot_seconds_sum", tpot_series_sum, now)
-                intervals_delta = self._delta(node, "tpot_seconds_count", tpot_series_count, now)
-                if not pair_reset and seconds_delta is not None and intervals_delta is not None:
-                    itl_seconds += seconds_delta[0]
-                    itl_intervals += intervals_delta[0]
+                if (
+                    seconds_delta is not None and prior_tokens is not None
+                    and decoded_series >= prior_tokens[0]
+                ):
+                    tokens_increase = decoded_series - prior_tokens[0]
+                    decode_seconds += seconds_delta[0]
+                    decode_tokens += tokens_increase
                     decode_window_seen = True
                     tick_rows.append({
-                        "itl_seconds": seconds_delta[0], "itl_intervals": intervals_delta[0],
+                        "decode_seconds": seconds_delta[0], "decode_tokens": tokens_increase,
                     })
             if ttft_series_sum is not None and ttft_series_count is not None:
                 family = {
@@ -854,15 +886,15 @@ class VllmServingPoller:
         # Per-stream decode speed only when tokens were actually decoded during
         # the tick: an idle tick has no speed to report, which is an absent key,
         # never a 0 tok/s that reads as a stalled engine.
-        decode_speed = pooled_rate(tick_rows, "itl_intervals", "itl_seconds")
+        decode_speed = pooled_rate(tick_rows, "decode_tokens", "decode_seconds")
         if decode_speed:
             gauges["decode_tokens_per_second"] = decode_speed
         # What changed during the tick, for the window's speed verdict
         # (`generation_health`): written as floats (one field type in the
         # store), zeros included, whenever a replica gave an increase.
         if decode_window_seen:
-            gauges[DECODE_TOKENS_FIELD] = float(itl_intervals)
-            gauges[DECODE_SECONDS_FIELD] = float(itl_seconds)
+            gauges[DECODE_TOKENS_FIELD] = float(decode_tokens)
+            gauges[DECODE_SECONDS_FIELD] = float(decode_seconds)
         if ttft_window_seen:
             for key, increase in ttft_window.items():
                 gauges[key] = float(increase)
@@ -877,6 +909,8 @@ class VllmServingPoller:
         if ttft_count > 0:
             gauges["ttft_seconds"] = ttft_sum / ttft_count
         if tpot_count > 0:
+            # Lifetime decode seconds per decode-step TOKEN (VD-213), so the
+            # "time per output token" the tab shows is per token under a drafter.
             gauges["tpot_seconds"] = tpot_sum / tpot_count
         if success_seen:
             gauges["request_success_total"] = success_total

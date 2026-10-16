@@ -89,6 +89,17 @@ class VllmImage:
     #: About how much a machine downloads when it does not have the image,
     #: in GB, for the progress line that says a download is under way.
     download_gb: int
+    #: Whether this vLLM takes ``VLLM_USE_V2_MODEL_RUNNER=1``, its newer model
+    #: runner (VD-213): run on the 0.27 image, where a per-load drafter
+    #: lookahead keeps full GPU graphs only on it. Not on 0.22.1, which was
+    #: never run with it.
+    v2_runner: bool = False
+
+
+#: The container variable that selects vLLM's newer model runner (VD-213),
+#: spelled once: the renderer emits it and the root bridge admits it only on an
+#: image whose :attr:`VllmImage.v2_runner` is set.
+V2_RUNNER_ENV = "VLLM_USE_V2_MODEL_RUNNER=1"
 
 
 VLLM_0221 = VllmImage(
@@ -125,6 +136,7 @@ VLLM_027_ROCM10 = VllmImage(
     fast_w4a16=True,
     hybrid_cache=True,
     download_gb=27,
+    v2_runner=True,
 )
 
 #: Every image the cluster may serve from, keyed by the name a deployment

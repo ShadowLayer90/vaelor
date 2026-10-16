@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from . import hf_cached_config
 from .cluster_capacity import gpu_fit_node
+from .cluster_gpu_model_spec import with_decided_drafter
 from .cluster_gpu_ways_out import startup_pool_refusal
 from .cluster_gpu_sizing import (
     INTENT_CAPACITY, INTENT_THROUGHPUT, VERDICT_DISTRIBUTED, VERDICT_REPLICATED,
@@ -50,10 +51,13 @@ from .cluster_gpu_sizing import (
 from .cluster_placement import CONTROLLER_PLACEMENT_ID
 from .gpu_serving_target import switch_gpu_chat_reclaimable
 from .vllm_model_profile import facts_from_hf_config, profile_for
+from .vllm_guesser_build import GUESSER_FIELD
+from .vllm_images import image_profile
+from .vllm_serve_advanced import FUSION_FIELD, speedups_note
 from .vllm_serve_options import (
-    CONFIG_NEVER_READ, CONFIG_READ_FIELD, IMAGE_FIELD, LOAD_KEPT_AS_DEPLOYED,
+    OPTIONS_FIELD, CONFIG_NEVER_READ, CONFIG_READ_FIELD, IMAGE_FIELD, LOAD_KEPT_AS_DEPLOYED,
     LOAD_NOT_CHECKED, MTP_FIELD, ServeOptions, names_hybrid_family,
-    options_for, options_for_load,
+    options_draft_bytes, options_for, options_for_load,
 )
 
 #: The record key for the weight size the deploy's fit was made on, which a
@@ -118,10 +122,10 @@ def refit_after_fetch(
             raise ValueError(CONFIG_NEVER_READ)
         return spec, None, None
     _repo, _revision, fetched = ops._model_and_spec(payload)
-    fetched = with_launch_cache(
+    fetched = with_decided_drafter(with_launch_cache(
         fetched, payload.get(MTP_FIELD), vllm_image=payload.get(IMAGE_FIELD),
         gpu_targets=gpu_targets,
-    )
+    ), repo, payload, gpu_targets)
     plan = plan_gpu_fit(
         fetched, nodes, link=str(payload.get("link", "cross-node")),
         intent=intent, gpu_memory_utilization=fraction,
@@ -145,6 +149,28 @@ def options_for_load_checked(
     participants: List[Dict[str, Any]], replicated: bool, fraction: float,
     context: int,
 ) -> Tuple[ServeOptions, bool, str]:
+    """:func:`_load_checked`, and the stand-aside sentence when the Load dropped
+    VD-216 item 2's speed-ups because a machine now reads as another GPU (R86)."""
+    options, config_read, note = _load_checked(
+        ops, units, repo, revision, participants=participants, replicated=replicated,
+        fraction=fraction, context=context)
+    recorded = (units or {}).get(OPTIONS_FIELD)
+    carried = isinstance(recorded, Mapping) and (
+        recorded.get(FUSION_FIELD) is not None or recorded.get(GUESSER_FIELD) is not None)
+    if carried and not (options.qk_norm_rope_fusion or options.guesser):
+        aside = speedups_note(repo, image_profile(options.vllm_image), [
+            {"name": node.get("name") or node.get("id"),
+             "gfx_target_version": ((node.get("inventory") or {}).get("gpu") or {}).get(
+                 "gfx_target_version")} for node in participants])
+        note = " ".join(filter(None, (note, aside)))
+    return options, config_read, note
+
+
+def _load_checked(
+    ops: Any, units: Mapping[str, Any], repo: str, revision: Optional[str], *,
+    participants: List[Dict[str, Any]], replicated: bool, fraction: float,
+    context: int,
+) -> Tuple[ServeOptions, bool, str]:
     """``(options, config_read, note)`` a Load serves a stored deployment with.
 
     A record that does not say its config was unread is served as stored. One
@@ -162,10 +188,19 @@ def options_for_load_checked(
     config = hf_cached_config.cached_config(repo, revision)
     weight = (units or {}).get(WEIGHT_FIELD)
     weighed = not isinstance(weight, bool) and isinstance(weight, int) and weight > 0
+    # With the machines' GPUs, so VD-216 item 2's speed-ups a Load adds
+    # (`vllm_serve_options.with_measured_speedups`) are in both values and
+    # never read as the config-driven change below.
+    stored, _ = options_for_load(units, repo, replicated=replicated, facts=None,
+                                 gpu_targets=targets)
+    # The draft model the record serves with is charged as the deploy charged
+    # it (VD-213, LESSONS 6): the record's own, never one it does not carry.
+    load_body = {"hf_config": config, "weight_bytes": weight,
+                 "draft_weight_bytes": options_draft_bytes(stored)}
     if config is not None and weighed:
         # The start-up rule, on the pools as they are now (J5).
         reason = startup_pool_refusal(
-            build_model_spec({"hf_config": config, "weight_bytes": weight}),
+            build_model_spec(load_body),
             fit_nodes(ops.broker, ops.mode_switch, participants),
             stages=1 if replicated else len(participants),
         )
@@ -175,13 +210,12 @@ def options_for_load_checked(
     options, config_read = options_for_load(
         units, repo, replicated=replicated, facts=facts, gpu_targets=targets,
     )
-    stored, _ = options_for_load(units, repo, replicated=replicated, facts=None)
     if options == stored:
         return stored, config_read, ""
     if not weighed:
         return stored, False, LOAD_NOT_CHECKED
     spec = with_launch_cache(
-        build_model_spec({"hf_config": config, "weight_bytes": weight}),
+        build_model_spec(load_body),
         stored.mtp_tokens or None, vllm_image=stored.vllm_image, gpu_targets=targets,
     )
     plan = plan_gpu_fit(

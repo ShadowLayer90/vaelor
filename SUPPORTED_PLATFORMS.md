@@ -5,7 +5,7 @@ specific than “the Pironman hardware can run on this OS”: some appliance
 operating systems support an enclosure but cannot provide a general-purpose
 Docker host, package manager, desktop, or local AI runtime.
 
-Last reviewed: 2026-10-10 (Vaelor 1.5.1)
+Last reviewed: 2026-10-16 (Vaelor 1.5.2)
 
 ## Support levels
 
@@ -104,6 +104,10 @@ The Overview page reports the detected OS and one of these levels. Feature avail
   fixed in 1.5.1. The fixes were deployed in place to the Z2 Mini, and the
   certificate switchover was verified on both machines; 1.5.1 itself has not
   had a cold install.
+- **Vaelor 1.5.2** was installed in place on the Z2 Mini and the ZBook, with
+  the cluster model measured on the Z2 Mini after the install. 1.5.2 has not
+  had a cold install, and the ZBook worker's build of the 4-bit guesser has
+  run live only once.
 - The commissioned Ubuntu 26.04 Raspberry Pi completed the versioned
   Pironman-to-Vaelor 2.0.4 migration on 2026-07-30. Ten Vaelor services,
   HTTPS health, encrypted credentials, legacy aliases, and the existing Qwen
@@ -250,6 +254,13 @@ A machine joining as a worker needs:
   says which version runs. The controller re-checks a worker's software every 15
   minutes and after its own update brings each worker to its version.
 - **`/dev/kfd` and `/dev/dri`,** as above.
+- **For the 30B's speed-ups, a gfx1151 GPU and the default vLLM 0.27 image.**
+  From 1.5.2, Vaelor's own GPU routines, its step-merging setting and the
+  4-bit guesser switch on only where a machine reads a gfx1151 GPU; any other
+  GPU, the earlier vLLM 0.22 image and a model split across machines serve
+  with vLLM's own code. The
+  machine builds its own copies of the routine that needs a compiler and of the
+  4-bit guesser, inside the vLLM image, with no network.
 - **Registry reachability for the vLLM image, on every GPU machine, at deploy
   time.** The image is pulled per machine as part of the deploy, not at install,
   and a machine that cannot reach the registry fails the deploy up front:

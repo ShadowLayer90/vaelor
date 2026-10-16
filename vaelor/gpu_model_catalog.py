@@ -37,6 +37,7 @@ write a precision the cache does not use.
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, Optional, Tuple
 
 from .hf_model_source import resolve_model_source
@@ -89,6 +90,30 @@ GPU_MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
         "parameter_billions": 30.5,
         "default_intent": "throughput",
         "default_max_model_len": 32768,
+        # VD-213 (owner decision 2026-10-12): how a NEW deployment of this
+        # model is served unless the deploy form's Advanced section says
+        # otherwise (`vllm_serve_advanced`). Measured on the Z2 (one GPU, a
+        # 44 GiB pool) on vLLM 0.27 with real coding prompts: at most 8
+        # requests per machine and an 8,192-token batch budget, RedHat's
+        # DFlash drafter on vLLM's newer model runner. A deployment that
+        # already exists is loaded as it was deployed, never moved onto these.
+        # The lookahead is VD-215's (owner decision 2026-10-12, session E2):
+        # 4 tokens for one active request and 3 for 2-8, in place of VD-213's
+        # 7 for 2-8 - with the split-context verify path and the gfx1151
+        # prompt tuning, eight users at a 3,240-token prompt went from 45.2
+        # (7 ahead) to 64.4 tok/s and eight short ones from 152.2 to 174.2;
+        # VD-213's benchmark short 90.9 / 210.5 tok/s at 1 / 8 users (75.2 /
+        # 210.6 before); HumanEval 154 one at a time and eight at once
+        # (baseline 154).
+        "default_serving": {
+            "max_num_seqs": 8,
+            "max_num_batched_tokens": 8192,
+            "drafter": {
+                "key": "dflash-qwen3-30b-a3b-2507",
+                "schedule": [[1, 1, 4], [2, 8, 3]],
+            },
+            "new_runner": True,
+        },
     },
     "qwen3_8b_fp16": {
         # Measured off the Hub tree on 2026-09-05: five safetensors shards
@@ -245,6 +270,19 @@ def catalog_defaults(catalog_id: str) -> Dict[str, Any]:
         "intent": entry["default_intent"],
         "max_model_len": entry["default_max_model_len"],
     }
+
+
+def default_serving_for(repo: Any) -> Dict[str, Any]:
+    """The serving settings a NEW deployment of ``repo`` gets by default, or ``{}``.
+
+    Read by repo, not by catalog id, so a pasted link to a catalog model's
+    own repo is served as the entry says (VD-213). A copy: the caller may not
+    change the table.
+    """
+    for entry in GPU_MODEL_CATALOG.values():
+        if entry["repo"] == str(repo or "").strip() and "default_serving" in entry:
+            return copy.deepcopy(entry["default_serving"])
+    return {}
 
 
 def served_repo(model_source: Any) -> Tuple[str, Optional[str]]:

@@ -36,7 +36,8 @@ from .performance_marker_lines import engine_near, line_name
 from .serving_metrics import FAMILY_PER_REQUEST
 from .telemetry_reader import SAMPLES_KEY
 
-#: A machine must have decoded at least this many inter-token intervals in the
+#: A machine must have decoded at least this many tokens (the ``itl_intervals``
+#: column, decode-step tokens since VD-213) in the
 #: range to count for "Slowest machine": about 15 s of decoding at this
 #: hardware's ceiling, so one short reply cannot make a machine "slowest".
 MIN_T2_INTERVALS = 200

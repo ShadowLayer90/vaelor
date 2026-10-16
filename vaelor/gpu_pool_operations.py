@@ -130,6 +130,7 @@ from .vllm_serve_options import (
 )
 from .vllm_images import download_line, image_profile
 from .cluster_gpu_sizing import with_launch_cache
+from .cluster_gpu_model_spec import with_decided_drafter
 from .cluster_split_mode import (
     SPLIT_MODE_FIELD, SPLIT_TENSOR, degrees, parse_split_mode, split_devices, tensor_refusal,
 )
@@ -335,10 +336,10 @@ class GpuPoolOperations:
         # machines' GPUs - by the call the fit preview makes; refused here if
         # the prediction choice cannot be had.
         gpu_targets = [node["gfx_target_version"] for node in fit_nodes]
-        spec = with_launch_cache(
+        spec = with_decided_drafter(with_launch_cache(
             spec, payload.get(MTP_FIELD), vllm_image=payload.get(IMAGE_FIELD),
             gpu_targets=gpu_targets,
-        )
+        ), repo, payload, gpu_targets)
         plan = plan_gpu_fit(
             spec, fit_nodes, link=str(payload.get("link", "cross-node")),
             intent=intent, gpu_memory_utilization=gpu_memory_utilization,
@@ -527,7 +528,7 @@ class GpuPoolOperations:
                 )
                 self._pull.wait(
                     transports[node["id"]], node, repo, revision, report, pulls,
-                    image=vllm_options[IMAGE_FIELD],
+                    image=vllm_options[IMAGE_FIELD], vllm_options=vllm_options,
                 )
             # A model whose config.json was not in the library when this
             # deploy began has just been fetched: the fit is asked again with

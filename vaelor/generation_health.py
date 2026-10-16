@@ -12,8 +12,11 @@ person waiting on an answer actually feels, both measured by the model itself:
   ``vllm:time_to_first_token_seconds`` histogram; judged as the p95 against
   :data:`TTFT_P95_BUDGET_MS`.
 * **Speed while answering** - tokens per second per answer while it is being
-  written, the inter-token intervals over the seconds they took (vLLM's
-  ``vllm:inter_token_latency_seconds``; llama.cpp's
+  written, the tokens decode steps wrote over the seconds they took (vLLM's
+  ``generation_tokens_total`` less one first token per request, over the
+  ``vllm:inter_token_latency_seconds`` sum - never that histogram's count,
+  which is engine steps and under a drafter several tokens each, VD-213;
+  llama.cpp's
   ``tokens_predicted_total`` over ``tokens_predicted_seconds_total``), pooled
   across every answer and replica in the window, never a mean of means. Judged
   against :data:`DECODE_FLOOR_TOKENS_PER_SECOND`.
