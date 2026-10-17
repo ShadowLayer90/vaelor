@@ -4,8 +4,9 @@ import type { Session } from "../types";
 import { formatBytes } from "../lib/format";
 import { Icon } from "./Icon";
 import { StatusPill } from "./StatusPill";
-import { KvGrid, SectionCard, SystemDialog } from "./systemUi";
+import { KvGrid, SectionCard, SystemDialog, useVisiblePoll } from "./systemUi";
 import { Button, LoadingLines, Notice } from "./ui";
+import { ServedModels, UpdatePhases, type UpgradeProgress } from "./UpdateProgress";
 
 /** One offered release, exactly as `manifest.public()` serves it. */
 export interface UpgradeManifest {
@@ -81,7 +82,16 @@ export interface UpgradeStatus {
   eligibility: UpgradeEligibility | null;
   confirmation: string;
   last_result: UpgradeLastResult | null;
+  /** The latest update phase by phase (`upgrade_progress`, R104); absent from older servers. */
+  progress?: UpgradeProgress | null;
 }
+
+/** How often the panel reads an update it follows. */
+export const FOLLOW_POLL_MS = 3000;
+/** How long it follows one before saying it is taking longer than expected. */
+export const FOLLOW_LIMIT_MS = 20 * 60 * 1000;
+/** How long a finished update stays on the panel after a reload. */
+const RECENT_MS = 60 * 60 * 1000;
 
 /** ISO published date, shown as a local date; the raw value if it will not parse. */
 function publishedOn(published_at: string): string {
@@ -120,9 +130,15 @@ function describeBuild(installed: InstalledBuild | null | undefined): string {
  * DialogsSystem board's. It reads `GET /upgrade` on mount, shows the running version and what is offered,
  * and — for an administrator — applies the offered release through the same
  * gated, audited job path a factory reset uses. A viewer sees the same status
- * without an action. The apply restarts the control plane, so once the job is
- * accepted the panel stops and says the page may briefly disconnect rather than
- * polling through a restart it cannot see across.
+ * without an action.
+ *
+ * Once an update is accepted the panel follows it (R104): it reads
+ * `GET /upgrade` every few seconds, phase by phase as `upgrade_progress`
+ * derives them, through the restart (a read that fails then is the restart,
+ * retried quietly), and says "Updated to X" by itself when the running
+ * version reaches X. It stops when every phase has ended, or after
+ * FOLLOW_LIMIT_MS with a plain "taking longer than expected" and a way to
+ * look again. A page reloaded mid-update picks the same update up.
  */
 export function SystemUpdatePanel({ session }: { session: Session }) {
   const isAdministrator = session.user.role === "administrator";
@@ -134,7 +150,20 @@ export function SystemUpdatePanel({ session }: { session: Session }) {
   const [started, setStarted] = useState(false);
   /** Why the confirmed apply could not start: said inside the confirm dialog (DialogsSystem). */
   const [applyError, setApplyError] = useState("");
+  /** Following an update: reading it until every phase has ended (R104). */
+  const [following, setFollowing] = useState(false);
+  /** When following began: a ref, so a read started in the same tick sees it. */
+  const followSince = useRef(0);
+  /** The last read failed while following: the appliance is restarting. */
+  const [reconnecting, setReconnecting] = useState(false);
+  const [slow, setSlow] = useState(false);
   const cancelRef = useRef<HTMLButtonElement>(null);
+
+  const follow = useCallback(() => {
+    setFollowing(true);
+    followSince.current = Date.now();
+    setSlow(false);
+  }, []);
 
   const check = useCallback(async () => {
     setLoading(true);
@@ -143,14 +172,41 @@ export function SystemUpdatePanel({ session }: { session: Session }) {
       const next = await apiRequest<UpgradeStatus>("/upgrade", { cache: "no-store" });
       setStatus(next);
       setConfirming(false);
+      // R107: an unfinished update is followed only inside the follow window;
+      // an older one is shown as taking too long, with the Update button back.
+      if (next.progress && !next.progress.finished) {
+        if (Date.now() - next.progress.started_at * 1000 < FOLLOW_LIMIT_MS) follow();
+        else setSlow(true);
+      }
     } catch (caught) {
       setError(caught instanceof Error && caught.message ? caught.message : "The update status could not be read.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [follow]);
 
   useEffect(() => { void check(); }, [check]);
+
+  const poll = useCallback(async () => {
+    if (Date.now() - followSince.current > FOLLOW_LIMIT_MS) {
+      setSlow(true);
+      return;
+    }
+    try {
+      const next = await apiRequest<UpgradeStatus>("/upgrade", { cache: "no-store" });
+      setStatus(next);
+      setReconnecting(false);
+      if (next.progress?.finished) {
+        setFollowing(false);
+        setStarted(false);
+      }
+    } catch {
+      // The restart: the server that would answer is the one restarting.
+      setReconnecting(true);
+    }
+  }, []);
+
+  useVisiblePoll(() => { void poll(); }, FOLLOW_POLL_MS, following && !slow);
 
   const apply = async () => {
     if (!status?.manifest) return;
@@ -169,6 +225,8 @@ export function SystemUpdatePanel({ session }: { session: Session }) {
       );
       setStarted(true);
       setConfirming(false);
+      follow();
+      void poll();
     } catch (caught) {
       setApplyError(caught instanceof Error && caught.message ? caught.message : "The update could not be started.");
     } finally {
@@ -193,6 +251,15 @@ export function SystemUpdatePanel({ session }: { session: Session }) {
       : `Update to ${manifest.version}`
     : "";
   const lastResult = status?.last_result ?? null;
+  const run = status?.progress ?? null;
+  const showRun = Boolean(run && (following || started || !run.finished
+    || Date.now() - run.started_at * 1000 < RECENT_MS));
+  /**
+   * The Update button hides while an update is followed (R107: it comes back
+   * after the follow window) and whenever the backend says something is still
+   * working on one (R114: never a second update over a live apply).
+   */
+  const busyUpdating = Boolean(run?.active) || ((started || following) && !slow);
   const pill = loading
     ? { label: "Checking", tone: "neutral" as const }
     : upgradeAvailable || replaceBuild
@@ -223,7 +290,7 @@ export function SystemUpdatePanel({ session }: { session: Session }) {
           <Button busy={loading} disabled={busy} onClick={() => void check()} type="button" variant="quiet">
             {loading ? "Checking…" : "Check for updates"}
           </Button>
-          {!started && status && !loading && manifest && eligibility?.eligible && (isAdministrator ? (
+          {!busyUpdating && status && !loading && manifest && eligibility?.eligible && (isAdministrator ? (
             <Button
               onClick={() => { setApplyError(""); setConfirming(true); }}
               type="button"
@@ -251,13 +318,20 @@ export function SystemUpdatePanel({ session }: { session: Session }) {
 
         {error && <Notice severity="danger">{error}</Notice>}
 
-        {started && (
-          <Notice heading="Update in progress" severity="info">
-            Vaelor will restart to apply the release; this page may briefly disconnect. Reload it in a moment to see the result.
-          </Notice>
+        {(started || (showRun && run)) && (
+          <UpdateRun reconnecting={reconnecting} run={showRun ? run : null} />
         )}
 
-        {!started && status && !loading && (
+        {slow && (
+          <div className="sys-run__slow">
+            <Notice heading="This update is taking longer than expected" severity="warning">
+              The page stopped following it after {Math.round(FOLLOW_LIMIT_MS / 60000)} minutes. Vaelor keeps working on it. Check again to read where it stands.
+            </Notice>
+            <Button onClick={() => { follow(); void poll(); }} type="button" variant="secondary">Check again</Button>
+          </div>
+        )}
+
+        {!busyUpdating && status && !loading && (
           <>
             {!manifest && (
               <Notice severity="info">
@@ -334,5 +408,35 @@ export function SystemUpdatePanel({ session }: { session: Session }) {
       </SystemDialog>
     )}
     </>
+  );
+}
+
+/** The update being followed, or the last one: its headline, phases and model result (R104). */
+function UpdateRun({ run, reconnecting }: { run: UpgradeProgress | null; reconnecting: boolean }) {
+  if (!run) {
+    return (
+      <Notice heading="Update in progress" severity="info">
+        Vaelor is starting the update. This page follows it and says when it is done.
+      </Notice>
+    );
+  }
+  const heading = run.failed
+    ? `The update to ${run.to_version} did not complete`
+    : run.reached ? `Updated to ${run.to_version}` : "Update in progress";
+  const lead = run.failed
+    ? "Each step below says what happened."
+    : run.reached
+      ? run.finished
+        ? `Vaelor ${run.to_version} is running and every step has ended.`
+        : `Vaelor ${run.to_version} is running. The rest of the update finishes below; this page follows it.`
+      : `Vaelor is installing ${run.to_version} and restarts by itself. This page follows it and needs no reload.`;
+  return (
+    <div className="sys-run">
+      <Notice heading={heading} severity={run.failed ? "danger" : run.reached ? "success" : "info"}>
+        {lead}
+      </Notice>
+      <UpdatePhases phases={run.phases} restarting={reconnecting} />
+      {run.model && run.model.models.length > 0 && <ServedModels models={run.model.models} />}
+    </div>
   );
 }

@@ -24,6 +24,7 @@ from typing import Any, Optional
 from flask import g, request
 
 from .api_common import ApiContext, payload as _payload
+from . import upgrade_progress
 from .appliance_upgrade import CONFIRMATION, UpgradeApplyPlans, last_result
 from .build_provenance import installed_build
 from .release_source import (
@@ -103,6 +104,8 @@ def register_upgrade_routes(context: ApiContext) -> None:
         source = _release_source(callbacks)
         installed = _installed()
         manifest, eligibility = _offered(installed)
+        result = last_result()
+        administrator = g.auth_session.role == "administrator"
         return _payload({
             "running_version": __version__,
             "installed_build": installed,
@@ -111,7 +114,12 @@ def register_upgrade_routes(context: ApiContext) -> None:
             "manifest": manifest.public() if manifest is not None else None,
             "eligibility": eligibility,
             "confirmation": CONFIRMATION,
-            "last_result": last_result(),
+            # R111 / VD-204: a viewer reads states and fixed sentences only -
+            # never a failed apply's pip or systemd text.
+            "last_result": result if administrator else upgrade_progress.viewer_result(result),
+            "progress": upgrade_progress.progress(
+                callbacks.get("job_store"), __version__, result, upgrade_progress.read_record(),
+                detail=administrator),
         })
 
     @blueprint.post("/upgrade")

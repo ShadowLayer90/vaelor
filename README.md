@@ -12,7 +12,7 @@ console, all on the box, nothing forced through the cloud. Add a second machine 
 the same console serves models across both.**
 
 ![License](https://img.shields.io/badge/license-GPL--2.0-blue)
-![Release](https://img.shields.io/badge/release-1.5.2-orange)
+![Release](https://img.shields.io/badge/release-1.5.3-orange)
 ![Flagship](https://img.shields.io/badge/flagship-HP%20Z2%20Mini%20G1a%20·%20Strix%20Halo-orange)
 ![Also runs on](https://img.shields.io/badge/also%20runs%20on-HP%20ZBook%20Ultra%20G1a%20·%20Raspberry%20Pi%205-informational)
 ![Arch](https://img.shields.io/badge/arch-x86--64%20%7C%20ARM64-lightgrey)
@@ -39,6 +39,18 @@ The assistant, the chat model, the databases, the search backend, and the creden
 vault all run **on the box**. What leaves the machine leaves only when you ask it to —
 for example when you choose to connect AI Chat to a hosted service.
 
+## 🆕 New in 1.5.3
+
+- **Updating from the console now does everything the installer does.** It downloads
+  and builds the cluster model's speed-up pieces, and a 30B deployed under 1.5.1 gets the
+  guesser, Vaelor's GPU routines and the new defaults on its next reload, where they were
+  measured. To upgrade from 1.5.1 or 1.5.2, use **Update Vaelor** in the console: no
+  installer re-run, no remove-and-redeploy.
+- **One update at a time,** and the updater restarts itself after each one so the next
+  update runs the new version's own code. The update page now follows the update to the
+  end, step by step, and the cluster model is reloaded once, with every speed-up. Read the one caution for the first update into
+  1.5.3 in [CHANGELOG.md](CHANGELOG.md), with what was not run live.
+
 ## 🆕 New in 1.5.2
 
 - **The cluster's recommended model is about three times as fast on coding tasks for one person.** On the
@@ -51,9 +63,8 @@ for example when you choose to connect AI Chat to a hosted service.
 - **Conversations reuse what the model already read.** AI Chat keeps its history in steady
   blocks, and Vaelor's agents, research and planning tag their requests, so a follow-up
   lands on the machine that already holds the conversation and starts sooner.
-- **Re-run the installer to upgrade** from 1.5.1, and remove and redeploy a 30B deployed
-  under 1.5.1: the installer downloads and builds the speed-up pieces on each machine. See [CHANGELOG.md](CHANGELOG.md) for the details and for what
-  was not run live.
+- See [CHANGELOG.md](CHANGELOG.md) for the details and for what was not run live. To
+  upgrade, see 1.5.3 above.
 
 ## 🆕 New in 1.5.1
 
@@ -282,9 +293,9 @@ the first visit. See [SECURE_ACCESS.md](SECURE_ACCESS.md). The first visit asks 
 create the administrator account. The installer adopts Docker if it is already present and asks before installing
 it when it is not.
 
-The installer downloads from the **`v1.5.2`** release by default. Set `VAELOR_RELEASE_TAG`
+The installer downloads from the **`v1.5.3`** release by default. Set `VAELOR_RELEASE_TAG`
 to install from another release (for example
-`sudo VAELOR_RELEASE_TAG=v1.5.1 ~/vaelor/deploy/install-vaelor.sh --unattended`), or pass
+`sudo VAELOR_RELEASE_TAG=v1.5.2 ~/vaelor/deploy/install-vaelor.sh --unattended`), or pass
 `--wheel /path/to/…whl` to install a specific build. `deploy/fetch-npu-model.sh` reads the
 same variable.
 
@@ -330,8 +341,11 @@ checks GitHub for the newest release, shows the version on offer, and — on an
 administrator's approval — downloads the verified wheel, installs it, restarts, and rolls
 back automatically if the new version fails its health check. On a cluster, the controller
 then brings each worker's software to the new version within about fifteen minutes; you do
-not update workers yourself. You can also update the controller at any time by re-running
-the installer (`git pull` in the clone, then `install-vaelor.sh` again).
+not update workers yourself. From 1.5.3, the update also runs the installer's build steps
+for the cluster model and reloads a serving model that the new version changes, so it ends
+in the same state as re-running the installer; only one update runs at a time.
+You can also update the controller at any time by re-running the
+installer (`git pull` in the clone, then `install-vaelor.sh` again).
 
 ## 🤝 Contributing & docs
 

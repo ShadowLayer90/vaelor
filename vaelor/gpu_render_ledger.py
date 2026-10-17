@@ -164,13 +164,20 @@ def render_digest(kind: str, values: Mapping[str, Any]) -> tuple:
     return unit, hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def render_drift(record: Mapping[str, Any]) -> Dict[str, Any]:
+def render_drift(record: Mapping[str, Any], would_load: Any = None) -> Dict[str, Any]:
     """Whether an upgrade must re-render this vLLM row, and why, in plain words.
 
     ``{"refresh": bool, "reason": str, "changed": [{"node", "unit"}]}``. Only a
     ``healthy`` row is ever refreshed: an unloaded one renders from the
     installed code on its next Load, and a row deploying or failed is not
     serving anything an upgrade could re-render.
+
+    ``would_load`` is the `vllm_serve_options.ServeOptions` a Load would serve
+    this row with now, when the caller could decide it. A row whose units
+    re-render unchanged is still refreshed when that differs from what it
+    holds (VD-217, kb G71: the check compared only the unit text, so an
+    install that changed only what a Load adds - this release's measured
+    settings - skipped the reload and the box kept the old speed).
     """
     units = record.get("units") or {}
     state = str(record.get("state", "") or "")
@@ -193,11 +200,33 @@ def render_drift(record: Mapping[str, Any]) -> Dict[str, Any]:
         if digest != entry.get("digest"):
             changed.append({"node": str(entry.get("node", "")), "unit": str(entry.get("unit", ""))})
     if not changed:
+        fields = _load_fields(record, would_load)
+        if fields:
+            return _verdict(True, (
+                "a Load now serves it with this release's settings ({})".format(
+                    ", ".join(fields))))
         return _verdict(False, "its units are already what this release renders")
     return _verdict(True, "this release renders {} differently".format(", ".join(
         "{} on {}".format(item["unit"], item["node"] or "a machine with no id")
         for item in changed
     )), changed)
+
+
+def _load_fields(record: Mapping[str, Any], would_load: Any) -> List[str]:
+    """The options fields a Load serving ``would_load`` changes on ``record``; none when not given."""
+    if would_load is None:
+        return []
+    from .gpu_pool_units import is_replicated
+    from .vllm_release_defaults import load_changes
+
+    units = record.get("units") or {}
+    repo = str(units.get("repo", "") or record.get("model_id", "") or "")
+    try:
+        return load_changes(units, repo, would_load, replicated=is_replicated(record))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        # A stored value this release cannot read: the Load would refuse it
+        # too, in its own words, so no reload is queued on its account.
+        return []
 
 
 def refresh_note(units: Mapping[str, Any], state: str) -> str:

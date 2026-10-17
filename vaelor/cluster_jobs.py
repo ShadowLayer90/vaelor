@@ -203,8 +203,10 @@ def execute_cluster_job(
         checkpoint(5, "Checking whether this release renders the model's units differently", "starting")
         result = operations.refresh_gpu_inference(
             job["payload"],
-            progress=lambda percent, message: checkpoint(
-                percent, message, "starting"
+            # R104: each line filed under its refresh phase, which the update
+            # panel reads back from the job's events (`upgrade_progress`).
+            progress=lambda percent, message, phase=None: checkpoint(
+                percent, message, "starting", **({"phase": phase} if phase else {})
             ),
         )
         return store.finish(

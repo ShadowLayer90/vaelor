@@ -53,6 +53,7 @@ import os
 import secrets
 import subprocess
 import sys
+import time
 from typing import Any, Callable, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 from .vllm_overlays import OVERLAY_ROOT, root_controlled_bytes
@@ -122,8 +123,15 @@ def compiler_args(source: str, output: str) -> List[str]:
 
 
 def container_name() -> str:
-    """A build container's own name (:data:`CONTAINER_PREFIX` and a fresh token)."""
-    return CONTAINER_PREFIX + secrets.token_hex(6)
+    """A build container's own name: :data:`CONTAINER_PREFIX`, then twelve hex digits.
+
+    The first six are this process group's (`post_install_steps.group_tag`), so
+    an update step that is stopped removes its own containers and nobody
+    else's (VD-217, R101); the last six are fresh.
+    """
+    from .post_install_steps import group_tag
+
+    return CONTAINER_PREFIX + group_tag() + secrets.token_hex(3)
 
 
 def build_argv(image: str, source_path: str, out_dir: str, name: str) -> List[str]:
@@ -451,8 +459,8 @@ def ensure_on_worker(transport: Any, kernel: Any, target: str) -> Optional[str]:
 
 # --- The installer -------------------------------------------------------------
 
-def _run_fixed(argv: List[str]) -> str:
-    completed = subprocess.run(argv, capture_output=True, text=True, timeout=BUILD_SECONDS,
+def _run_fixed(argv: List[str], timeout: float = BUILD_SECONDS) -> str:
+    completed = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
                                check=False)
     if completed.returncode != 0:
         raise RuntimeError(str(completed.stderr or "").strip()[:400] or "the build failed")
@@ -460,17 +468,25 @@ def _run_fixed(argv: List[str]) -> str:
 
 
 def main(argv: Sequence[str], *, root: str = OVERLAY_ROOT,
-         build: Callable[[List[str]], Any] = _run_fixed) -> int:
-    """``build``, as root, from the installer: the checked plugin copy, then its
-    HIP build, for every kernel row. Every outcome is printed; never fails the install."""
+         build: Optional[Callable[[List[str]], Any]] = None) -> int:
+    """``build [--within N]``, as root, from the installer: the checked plugin copy,
+    then its HIP build, for every kernel row. Every outcome is printed; never fails
+    the install. ``--within`` (VD-217, R98) keeps the lock wait and the build
+    inside the update's share, so a timed-out build's container is removed here."""
+    from .post_install_steps import step_timeout, within_seconds
     from .vllm_moe_kernels import MOE_KERNELS, KernelUnavailable, root_kernel_dir
 
-    if (argv[1] if len(argv) > 1 else "") != "build":
-        sys.stderr.write("usage: python -m vaelor.vllm_moe_hip_build build\n")
+    within = within_seconds(argv, ("build",))
+    if within is None:
+        sys.stderr.write("usage: python -m vaelor.vllm_moe_hip_build build [--within SECONDS]\n")
         return 2
+    deadline = time.monotonic() + min(within, 2.0 * BUILD_SECONDS)
+    build = build or (lambda command: _run_fixed(
+        command, step_timeout(command, deadline, BUILD_SECONDS)))
     for kernel in MOE_KERNELS.values():
         try:
-            root_kernel_dir(kernel, root=root, build=build, lock_wait=BUILD_SECONDS)
+            root_kernel_dir(kernel, root=root, build=build, lock_wait=min(
+                BUILD_SECONDS, max(0.0, deadline - time.monotonic())))
             from .vllm_moe_kernels import installed_dir
 
             record = parse_record(root_controlled_bytes(installed_dir(kernel, root) + "/" + RECORD))

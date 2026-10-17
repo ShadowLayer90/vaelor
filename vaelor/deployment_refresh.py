@@ -37,15 +37,23 @@ read-only, asks which ones this release renders differently, says which and
 why, and queues one ``cluster.gpu.refresh`` per serving row that does - the
 same Unload and Load the owner would run (`gpu_pool_refresh`). It renders
 nothing itself here either: the comparison re-renders through the runtime's
-one template, and the job runs in the executor, after the restart.
+one template, and the job runs in the executor, after the restart. A row
+whose units still read as this release renders them is refreshed too when a
+Load would now serve it with different options - this release's measured
+settings for a deployment made before them (VD-217, kb G71).
+
+**Run as root with ``--apply``, it first runs the release's root build steps**
+(`post_install_steps`, VD-217), so the reloads it queues serve what they
+build - on the installer and on the console update alike.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 # The cluster store's file under the state root is `ClusterStore`'s own
 # constant, so the installer's read and the store cannot disagree (review A4).
@@ -265,7 +273,59 @@ def read_only_store(database: Path):
     return connection
 
 
-def gpu_refresh_plan(database: Path) -> List[Dict[str, Any]]:
+def _controller_gpu() -> Dict[str, Any]:
+    """This controller's GPU, read as the deploy reads it (`cluster_operations._controller_gpu_facts`)."""
+    from .cluster_capacity import gpu_facts_from_accelerators
+    from .copilot_setup import hardware_inventory
+
+    hardware = hardware_inventory() or {}
+    return dict(gpu_facts_from_accelerators(
+        hardware.get("accelerators"), int(hardware.get("memory_total_bytes", 0) or 0) or None))
+
+
+def would_load(record: Dict[str, Any], inventories: Dict[str, Any],
+               controller_gpu: Callable[[], Dict[str, Any]] = _controller_gpu) -> Any:
+    """The options a Load would serve this serving row with on the fleet as recorded (VD-217).
+
+    The Load's own decision (`vllm_serve_options.options_for_load`, release
+    defaults and item 2's speed-ups included) on each machine's GPU type as
+    the deploy reads it: a worker's from its last probe in the store, this
+    controller's from its own probe. Without the fit, which needs the running
+    control plane; the refresh job asks the Load again, fit included, before it
+    stops anything (`gpu_pool_refresh`). ``None`` when it cannot be decided -
+    a row not serving, or a fact that cannot be read - so the unit text
+    alone decides, as before.
+    """
+    import json
+
+    from .cluster_placement import CONTROLLER_PLACEMENT_ID
+    from .gpu_cluster_mode import HEALTHY_STATE
+    from .gpu_pool_refit import gpu_targets_of
+    from .gpu_pool_units import is_replicated
+    from .vllm_serve_options import options_for_load
+
+    if str(record.get("state", "")) != HEALTHY_STATE:
+        return None
+    try:
+        nodes = []
+        for node_id in record.get("node_ids") or []:
+            if str(node_id) == CONTROLLER_PLACEMENT_ID:
+                gpu = controller_gpu()
+            else:
+                gpu = (json.loads(inventories.get(str(node_id)) or "{}") or {}).get("gpu") or {}
+            nodes.append({"inventory": {"gpu": gpu}})
+        units = record.get("units") or {}
+        return options_for_load(
+            units, str(units.get("repo", "") or record.get("model_id", "") or ""),
+            replicated=is_replicated(record), facts=None, gpu_targets=gpu_targets_of(nodes),
+        )[0]
+    except Exception:  # noqa: BLE001 - an unread fact is not a change (LESSONS 8)
+        return None
+
+
+def gpu_refresh_plan(
+    database: Path, controller_gpu: Callable[[], Dict[str, Any]] = _controller_gpu,
+) -> List[Dict[str, Any]]:
     """Every vLLM deployment with whether this release must re-render it, and why.
 
     Read only, and only when the store exists (:func:`read_only_store`); a
@@ -285,6 +345,14 @@ def gpu_refresh_plan(database: Path) -> List[Dict[str, Any]]:
     try:
         with closing(read_only_store(database)) as connection:
             rows = connection.execute(POOLED_ROWS_QUERY).fetchall()
+            try:
+                inventories = {
+                    str(node["id"]): node["inventory_json"] for node in connection.execute(
+                        "SELECT id, inventory_json FROM cluster_nodes")
+                }
+            except sqlite3.Error:
+                # No machine facts: every row is judged on its unit text alone.
+                inventories = {}
     except sqlite3.Error as error:
         raise StoreUnread("the cluster store could not be read ({})".format(error)) from error
     plan = []
@@ -293,7 +361,8 @@ def gpu_refresh_plan(database: Path) -> List[Dict[str, Any]]:
             record = ClusterStore._pooled(row)
             if (record.get("units") or {}).get("engine") != "vllm":
                 continue
-            plan.append({"name": record["name"], **render_drift(record)})
+            plan.append({"name": record["name"], **render_drift(
+                record, would_load(record, inventories, controller_gpu))})
         except Exception as error:  # noqa: BLE001 - one bad row reports itself
             name = row["name"] if "name" in row.keys() else "a row"
             plan.append({"name": str(name), "refresh": False, "changed": [],
@@ -301,7 +370,7 @@ def gpu_refresh_plan(database: Path) -> List[Dict[str, Any]]:
     return plan
 
 
-def _queue_gpu_refreshes(plan: List[Dict[str, Any]], store: Any) -> None:
+def _queue_gpu_refreshes(plan: List[Dict[str, Any]], store: Any, record: Any = None) -> None:
     from .cluster_job_confirmations import confirmation_for
     from .job_vocabulary import CLUSTER_GPU_REFRESH_JOB
 
@@ -313,6 +382,8 @@ def _queue_gpu_refreshes(plan: List[Dict[str, Any]], store: Any) -> None:
             "confirm": confirmation_for(CLUSTER_GPU_REFRESH_JOB),
             "reason": REFRESH_REASON,
         })
+        if record is not None:
+            record.queued(job, entry["name"])
         print("queued {} for GPU deployment {}; it stops and loads again, so it "
               "does not answer until that Load is healthy".format(job["id"], entry["name"]))
 
@@ -329,6 +400,49 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
              "is changed")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
+    # VD-217: the release's root builds land BEFORE anything below queues a
+    # reload, on every path that runs this - the installer and the console
+    # update's broker alike (`post_install_steps`: one list, no new door). Only
+    # as root, only when queueing, and only on the box's own state root.
+    held = None
+    record = None
+    if args.apply and args.root is None:
+        from .post_install_steps import is_root, run_steps
+
+        if is_root():
+            # R102: one apply at a time, from the first update on - this runs
+            # from the new package even when the broker that started it is
+            # the previous release's (`upgrade_apply_lock`).
+            from . import upgrade_apply_lock as apply_lock
+            from .appliance_upgrade import RETAINED_DIR
+
+            if os.environ.get(apply_lock.HELD_ENV) != "1":
+                held = apply_lock.acquire(RETAINED_DIR, apply_lock.REFRESH_WAIT_SECONDS)
+                if held is None:
+                    print(apply_lock.BUSY)
+                    return 1
+            # R104: each step's outcome, then the reloads queued, written as
+            # they happen for the update panel (`upgrade_progress`).
+            from .upgrade_progress import RefreshRecord
+
+            record = RefreshRecord()
+            run_steps(record=record.step)
+            record.steps_ended()
+            # R105: a broker from before the lock never restarts itself, so
+            # this - the one command it runs from the new package - has it
+            # restarted onto the new code once it is idle (`upgrade_broker_restart`).
+            from .upgrade_broker_restart import schedule
+
+            print(schedule())
+    try:
+        return _refresh(args, record)
+    finally:
+        if record is not None:
+            record.ended()
+
+
+def _refresh(args: Any, record: Any) -> int:
+    """The refresh itself, after any build steps: report, then queue with ``--apply``."""
     payloads = refresh_payloads(args.root)
     skipped = _incomplete(args.root)
     for entry in skipped:
@@ -370,10 +484,12 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if mode:
             payload["mode"] = mode
         job = store.create("model.deploy", "system", payload)
+        if record is not None:
+            record.queued(job, str(payload["path"]).rsplit("/", 1)[-1])
         print("queued {} for {}{}".format(
             job["id"], payload["path"],
             " in {} mode".format(mode) if mode else ""))
-    _queue_gpu_refreshes(plan, store)
+    _queue_gpu_refreshes(plan, store, record)
     return 0
 
 

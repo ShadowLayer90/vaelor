@@ -362,12 +362,15 @@ def main(
     pulls it, and the root bridge builds the file then). Every outcome, every
     failure included, is written to the overlay's status and printed.
     """
+    from .post_install_steps import within_seconds
     from .vllm_overlays import fetched_diff
 
-    verb = argv[1] if len(argv) > 1 else ""
-    if verb not in ("fetch", "build"):
-        sys.stderr.write("usage: python -m vaelor.vllm_overlay_build fetch|build\n")
+    within = within_seconds(argv, ("fetch", "build"))
+    if within is None:
+        sys.stderr.write("usage: python -m vaelor.vllm_overlay_build fetch|build "
+                         "[--within SECONDS]\n")
         return 2
+    verb = argv[1]
     for overlay in OVERLAYS.values():
         reason: Optional[str] = None
         try:
@@ -380,7 +383,10 @@ def main(
                     raise OverlayUnavailable(
                         "The vLLM change has not been downloaded; re-run the Vaelor "
                         "installer with internet access.")
-                install_built(overlay, build(read_image(overlay), diff, overlay), root=root)
+                # VD-217 (R98): the image read stays inside the update's share.
+                pristine = read_image(overlay) if within == float("inf") else read_image(
+                    overlay, timeout=max(1, int(min(within, 60))))
+                install_built(overlay, build(pristine, diff, overlay), root=root)
         except Exception as error:  # an installer step never fails the install
             reason = str(error)[:400] or type(error).__name__
         if reason is not None:

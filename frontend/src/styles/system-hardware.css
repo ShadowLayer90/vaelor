@@ -363,3 +363,200 @@
 .sys-service .ui-button--quiet {
   border-color: transparent;
 }
+
+/* Update Vaelor, followed phase by phase (R104). State is said in words beside
+   each marker; the marker's colour repeats it, never carries it alone. */
+.sys-run {
+  display: grid;
+  gap: 12px;
+}
+
+.sys-run__phases,
+.sys-run__steps,
+.sys-run__notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sys-run__phases {
+  display: grid;
+  gap: 0;
+}
+
+.sys-run__phase {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-list);
+}
+
+.sys-run__phase:first-child {
+  border-top: 0;
+}
+
+.sys-run__phase > svg,
+.sys-run__phase > .sys-run__dot {
+  margin-top: 2px;
+}
+
+.sys-run__dot {
+  display: block;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  margin-left: 1px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 50%;
+}
+
+.sys-run__phase--running > .sys-run__dot {
+  border-color: var(--info-text);
+  border-right-color: transparent;
+  animation: sys-run-spin 1s linear infinite;
+}
+
+.sys-run__phase--skipped > .sys-run__dot {
+  height: 1.5px;
+  margin-top: 9px;
+  border: 0;
+  border-radius: 0;
+  background: var(--text-muted);
+}
+
+.sys-run__phase--done > svg {
+  color: var(--success-text);
+}
+
+.sys-run__phase--held-back > svg {
+  color: var(--warning-text);
+}
+
+.sys-run__phase--failed > svg {
+  color: var(--danger-text);
+}
+
+.sys-run__body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sys-run__head,
+.sys-run__step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+
+.sys-run__label {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.sys-run__state {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  white-space: nowrap;
+}
+
+.sys-run__phase--held-back > .sys-run__body > .sys-run__head > .sys-run__state,
+.sys-run__step.sys-run__phase--held-back > .sys-run__state {
+  color: var(--warning-text);
+}
+
+.sys-run__phase--failed > .sys-run__body > .sys-run__head > .sys-run__state {
+  color: var(--danger-text);
+}
+
+.sys-run__reason {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  overflow-wrap: anywhere;
+}
+
+.sys-run__steps {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.sys-run__step .sys-run__label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.sys-run__models {
+  display: grid;
+  gap: 12px;
+}
+
+.sys-run__model {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-list);
+  border-radius: var(--radius-md);
+}
+
+.sys-run__model h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+  font-weight: 500;
+}
+
+.sys-run__served {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.sys-run__served div {
+  display: grid;
+  gap: 2px;
+}
+
+.sys-run__served dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-ui-xs);
+}
+
+.sys-run__served dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.sys-run__notes {
+  display: grid;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+}
+
+.sys-run__slow {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+@keyframes sys-run-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sys-run__phase--running > .sys-run__dot {
+    animation: none;
+    border-right-color: var(--info-text);
+    border-style: dashed;
+  }
+}

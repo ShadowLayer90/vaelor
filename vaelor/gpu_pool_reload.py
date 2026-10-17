@@ -47,7 +47,7 @@ door reads it.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping, Optional
 
 from .cluster_gpu_sizing import VERDICT_DISTRIBUTED, VERDICT_REPLICATED
 from .cluster_link import confirm_recorded_bindings
@@ -64,9 +64,13 @@ from .gpu_pool_recover import FAILED_STATE, LOAD_IT_AGAIN, load_failed_deploymen
 from .model_thinking import thinking_from_record
 #: A Load renders the serving options the record carries, or - for a record
 #: from before they existed - the ones its repo's profile implies.
-from .gpu_pool_refit import WEIGHT_FIELD, options_for_load_checked
+from .gpu_pool_refit import WEIGHT_FIELD, gpu_targets_of, options_for_load_checked
 from .vllm_images import download_line
-from .vllm_serve_options import CONFIG_READ_FIELD
+from .vllm_serve_advanced import DRAFTER_FIELD
+from .vllm_release_defaults import (
+    DRAFTER_DECLINED_FIELD, DRAFTER_NOT_FETCHED, declined_drafter, held_back,
+)
+from .vllm_serve_options import CONFIG_READ_FIELD, OPTIONS_FIELD, options_for_load
 from .gpu_pool_units import (
     RAY_PLANE_KIND, VLLM_ENGINE, deployment_name, describe_unstopped, record_mode,
     remove_blockers,
@@ -389,8 +393,14 @@ def unload_deployment(ops: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def load_deployment(
     ops: Any, payload: Dict[str, Any], progress=None, placement_status=None,
+    retry_declined: bool = True,
 ) -> Dict[str, Any]:
     """Re-serve an unloaded vLLM deployment warm, from its stored record.
+
+    VD-217 (R96): ``retry_declined`` offers this release's draft model again
+    to a record an earlier Load served without it (`vllm_serve_options.
+    DRAFTER_DECLINED_FIELD`) - an owner's Load re-checks the fit and the
+    fetch. The upgrade's refresh passes ``False`` and keeps the decline.
 
     Confirm-gated and engine-gated. A load of an already-``healthy`` row is an
     idempotent no-op success; any state but ``unloaded`` or ``healthy`` is
@@ -440,7 +450,9 @@ def load_deployment(
     # setting existed carries none and is served with thinking OFF from this
     # Load on (owner decision 2026-09-29) - never the old think-by-default.
     thinking = thinking_from_record(units)
-    options, config_read, cache_note = load_options(ops, deployment, participants)
+    offer = True if retry_declined else None
+    options, config_read, cache_note = load_options(
+        ops, deployment, participants, drafter=offer)
     transports = {node["id"]: ops._transport(node) for node in participants}
     confirm_load_bindings(ops, deployment, participants, transports)
 
@@ -468,6 +480,19 @@ def load_deployment(
             group_ids[node["id"]] = ops.runtime.resolve_group_ids(
                 transports[node["id"]]
             )
+        try:
+            # VD-217: a record made before this release's draft model gains
+            # it only once every machine has it; a fetch that fails serves the
+            # record as it was, and says so, rather than failing the Load.
+            fetch_drafter(ops, deployment, participants, transports, options, report)
+        except (RuntimeError, OSError, ValueError) as error:
+            # R96/R97: only the draft model and what needs it are held back.
+            proposed = options
+            options, config_read, _note = load_options(
+                ops, deployment, participants, drafter=False)
+            cache_note = " ".join(filter(None, (cache_note, held_back(
+                proposed, options, DRAFTER_NOT_FETCHED.format(
+                    reason=str(error)[:200] or type(error).__name__)))))
         with render_ledger.recording() as renders:
             if replicated:
                 new_units, endpoint = _load_replicated(
@@ -484,6 +509,12 @@ def load_deployment(
                 )
         # What every unit was rendered from, for the next upgrade (W4-D1).
         new_units[render_ledger.RENDERS_FIELD] = render_ledger.entries(renders, transports)
+        # R96: a draft model this release offers and this Load did not serve
+        # (the fit or the fetch said no) is recorded as declined, so the next
+        # upgrade's refresh does not count it again; an owner's Load re-offers it.
+        declined = declined_drafter(offered_options(ops, deployment, participants), options)
+        if declined:
+            new_units[DRAFTER_DECLINED_FIELD] = {"key": declined}
         # What the record said about its model's layout and weight size is
         # carried to the loaded record, as the scale-to-zero window is below:
         # the serve rebuild does not carry them, and a later Load reads both.
@@ -584,7 +615,18 @@ def load_participants(
     return participants
 
 
-def load_options(ops: Any, deployment: Dict[str, Any], participants: List[Dict[str, Any]]):
+def offered_options(ops: Any, deployment: Dict[str, Any],
+                    participants: List[Dict[str, Any]]) -> Any:
+    """What this release offers the record before the fit, its draft model included (R96)."""
+    units = deployment.get("units", {}) or {}
+    return options_for_load(
+        units, str(units.get("repo", "") or deployment.get("model_id", "") or ""),
+        replicated=record_mode(deployment) == VERDICT_REPLICATED, facts=None,
+        gpu_targets=gpu_targets_of(participants), drafter=True)[0]
+
+
+def load_options(ops: Any, deployment: Dict[str, Any], participants: List[Dict[str, Any]],
+                 drafter: Optional[bool] = True):
     """``(options, config_read, note)`` a Load of this record serves with, or its refusal.
 
     The serving options the record carries (or its repo implies), re-checked
@@ -601,8 +643,31 @@ def load_options(ops: Any, deployment: Dict[str, Any], participants: List[Dict[s
         units.get("revision"), participants=participants,
         replicated=record_mode(deployment) == VERDICT_REPLICATED,
         fraction=float(units.get("gpu_memory_utilization", 0) or 0),
-        context=int(units.get("max_model_len", 0) or 0),
+        context=int(units.get("max_model_len", 0) or 0), drafter=drafter,
     )
+
+
+def drafter_to_fetch(units: Mapping[str, Any], options: Any) -> Optional[str]:
+    """The draft model a Load gives this record that its record does not carry (VD-217), or ``None``.
+
+    A Load pulls no weights: a deploy fetched the record's own drafter, and
+    nothing ever fetched one for a deployment made before drafters existed.
+    """
+    key = options.advanced[2]
+    stored = (units or {}).get(OPTIONS_FIELD)
+    carried = stored.get(DRAFTER_FIELD) if isinstance(stored, Mapping) else None
+    return key if key is not None and (carried or {}).get("key") != key else None
+
+
+def fetch_drafter(ops: Any, deployment: Dict[str, Any], participants: List[Dict[str, Any]],
+                  transports: Dict[str, Any], options: Any, report) -> None:
+    """Fetch :func:`drafter_to_fetch`'s draft model onto every machine; raises when one cannot."""
+    key = drafter_to_fetch(deployment.get("units", {}) or {}, options)
+    if key is None:
+        return
+    for node in participants:
+        ops._pull.fetch_drafter(transports[node["id"]], node, key, report,
+                                image=options.vllm_image)
 
 
 def confirm_load_bindings(

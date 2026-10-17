@@ -580,6 +580,14 @@ class HardwareBridgeClient:
         )
         return value if isinstance(value, dict) else {}
 
+    def guesser_build(self, image: str, start: bool) -> dict[str, Any]:
+        """N94 (VD-217): this controller's 4-bit guesser for ``image``, checked or started."""
+        value = self._request(
+            "guesser_build", {"image": str(image), "start": bool(start)},
+            socket_timeout=PROGRESS_READ_SOCKET_TIMEOUT,
+        )
+        return value if isinstance(value, dict) else {}
+
     def pull_progress_read(self, repo: str) -> dict[str, Any]:
         """``{"text": ...}``: a model pull's progress record, read root-side.
 

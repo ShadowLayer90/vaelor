@@ -18,6 +18,7 @@ from .runtime_paths import (
     data_path, env_value, jobs_group_id, run_path, state_path,
 )
 from .portable_state import PortableState
+from .upgrade_files import read_json, write_json
 from .backup_schedule import BACKUP_SCHEDULE_DB
 
 try:
@@ -177,14 +178,10 @@ START_SERVICES = (
 def _atomic_write(
     path: Path, payload: Dict[str, Any], mode: int = 0o640
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True),
-        encoding="utf-8",
-    )
-    os.chmod(temporary, mode)
-    temporary.replace(path)
+    # R113 (the R106 class): /var/lib/vaelor/recovery is 2770 and not sticky,
+    # so a fixed `<name>.tmp` let another account plant a link this root
+    # broker wrote through. One safe writer for every update and recovery file.
+    write_json(path, payload, mode)
 
 
 class FactoryResetPlans:
@@ -272,7 +269,8 @@ class UninstallPlans:
                 self.path.unlink(missing_ok=True)
             plan = None
         try:
-            result = json.loads(self.result_path.read_text(encoding="utf-8"))
+            # R113: the root broker's own regular file, or no result.
+            result = read_json(self.result_path)
         except (OSError, ValueError, json.JSONDecodeError):
             result = None
         return {
@@ -361,7 +359,8 @@ class PortableImportPlans:
     def status(self) -> Dict[str, Any]:
         plan = self._current()
         try:
-            result = json.loads(self.result_path.read_text(encoding="utf-8"))
+            # R113: the root broker's own regular file, or no result.
+            result = read_json(self.result_path)
         except (OSError, ValueError, json.JSONDecodeError):
             result = None
         public_plan = None

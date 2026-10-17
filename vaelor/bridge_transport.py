@@ -176,6 +176,10 @@ class BridgeTransport:
         """Have the root bridge remove a split's token and firewall here."""
         self._bridge_call(self._client.ray_plane_clear, str(name))
 
+    def guesser_build(self, image: str, start: bool) -> Dict[str, Any]:
+        """N94 (VD-217): the root bridge's answer for this controller's 4-bit guesser build."""
+        return self._bridge_call(self._client.guesser_build, str(image), bool(start))
+
     def read_pull_progress(self, repo: str) -> str:
         """The text of a pull's progress record, read as root without following a link."""
         reply = self._bridge_call(self._client.pull_progress_read, str(repo))

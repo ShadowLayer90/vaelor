@@ -73,7 +73,10 @@ deployment, kept as recorded on a Load. So does Vaelor's expert kernel (VD-216,
 `vllm_moe_kernels`). So do VD-216 work order item 2's two speed-ups - the
 qk-norm/RoPE fusion (`vllm_serve_advanced`) and the 4-bit guesser
 (`vllm_guesser_build`) - which are also ADDED at a Load where they were
-measured (:func:`with_measured_speedups`), never removed by one.
+measured (:func:`with_measured_speedups`), never removed by one. VD-217: and
+a Load gives a record made before the Advanced settings, the attention file
+or the expert kernel what a fresh deploy gets, where it was measured, never
+over an owner's choice (`vllm_release_defaults`).
 """
 
 from __future__ import annotations
@@ -503,12 +506,8 @@ def options_for(
     )
     _require_replicated(tokens, replicated)
     bf16, aligned = hybrid_cache(profile.hybrid, image, gpu_targets, tokens)
-    # The Advanced settings (VD-213): the payload's, else this repo's catalog
-    # defaults on one copy per machine (`vllm_serve_advanced.advanced_for`).
-    advanced = advanced_for(
-        payload, repo=_payload_repo(payload), image=image, mtp_tokens=tokens,
-        replicated=replicated,
-    )
+    advanced, overlay, kernel = _deploy_choices(
+        payload, _payload_repo(payload), image, tokens, replicated)
     return with_measured_speedups(ServeOptions(
         tool_call_parser=profile.tool_call_parser,
         reasoning_parser=profile.reasoning_parser,
@@ -517,13 +516,31 @@ def options_for(
         tuned_moe=profile.moe and image.moe_entry,
         vllm_image=image.key,
         bf16_attention=bf16, aligned_prefix_cache=aligned, advanced=advanced,
-        # VD-215: a draft model on one copy per machine serves with the
-        # patched attention file where its image has one (`vllm_overlays`).
-        attention_overlay=decide_overlay(image, advanced[2], replicated),
-        # VD-216: the 30B on one copy per machine serves its small expert
-        # calls with Vaelor's own kernel (`vllm_moe_kernels`).
-        moe_kernel=decide_moe_kernel(image, _payload_repo(payload), replicated),
+        attention_overlay=overlay, moe_kernel=kernel,
     ), _payload_repo(payload), replicated=replicated, gpu_targets=gpu_targets)
+
+
+def _deploy_choices(
+    payload: Mapping[str, Any], repo: Optional[str], image: VllmImage, tokens: int,
+    replicated: bool,
+) -> Tuple[Advanced, Optional[str], Optional[str]]:
+    """``(advanced, overlay, kernel)`` a deploy decides: THE one decision (LESSONS 6).
+
+    Read by :func:`options_for` with the deploy's payload and by
+    :func:`with_release_defaults` with an empty one - what an untouched
+    deploy form gets - so a Load cannot add something a deploy would not.
+    """
+    # The Advanced settings (VD-213): the payload's, else this repo's catalog
+    # defaults on one copy per machine (`vllm_serve_advanced.advanced_for`).
+    advanced = advanced_for(
+        payload, repo=repo, image=image, mtp_tokens=tokens, replicated=replicated,
+    )
+    # VD-215: a draft model on one copy per machine serves with the patched
+    # attention file where its image has one (`vllm_overlays`); VD-216: the
+    # 30B on one copy per machine serves its small expert calls with Vaelor's
+    # own kernel (`vllm_moe_kernels`).
+    return (advanced, decide_overlay(image, advanced[2], replicated),
+            decide_moe_kernel(image, repo, replicated))
 
 
 def with_measured_speedups(
@@ -631,8 +648,16 @@ CONFIG_READ_FIELD = "vllm_config_read"
 def options_for_load(
     units: Mapping[str, Any], repo: Any, *, replicated: bool,
     facts: Optional[ModelFacts], gpu_targets: Iterable[Any] = (),
+    release_defaults: bool = True, drafter: Optional[bool] = None,
 ) -> Tuple[ServeOptions, bool]:
     """``(options, config_read)`` a Load may serve a stored deployment with.
+
+    VD-217: ``release_defaults`` adds what a fresh deploy gets here now
+    (`vllm_release_defaults`); ``drafter`` says whether its draft model
+    is offered - ``True`` offers it even where an earlier Load declined it
+    (an owner's Load re-checks), ``False`` never (the fit or the fetch said
+    no), ``None`` unless the record says it was declined
+    (`vllm_release_defaults.DRAFTER_DECLINED_FIELD`; the upgrade's refresh check and job).
 
     :func:`options_from_record`, with one addition. A deployment made before
     its model's ``config.json`` was in the model library was decided without
@@ -646,11 +671,21 @@ def options_for_load(
     (`gpu_pool_refit.options_for_load_checked`). A record that says nothing
     about the config, or says it was read, is rendered as stored.
     """
+    # VD-217: what a fresh deploy gets here now, unless the fit said no
+    # (`gpu_pool_refit`), for a record made before it (:func:`with_release_defaults`).
+    from .vllm_release_defaults import DRAFTER_DECLINED_FIELD, with_release_defaults
+
+    recorded = options_from_record(units, repo, replicated=replicated)
+    if release_defaults:
+        marker = (units or {}).get(DRAFTER_DECLINED_FIELD)
+        declined = str(marker.get("key") or "") if isinstance(marker, Mapping) else None
+        recorded = with_release_defaults(
+            recorded, (units or {}).get(OPTIONS_FIELD), repo, replicated=replicated,
+            gpu_targets=gpu_targets, declined=declined, drafter=drafter)
     # VD-216 item 2: what this release measured, added to the stored options
     # on the machines as they are now (:func:`with_measured_speedups`).
     stored = with_measured_speedups(
-        options_from_record(units, repo, replicated=replicated), repo,
-        replicated=replicated, gpu_targets=gpu_targets,
+        recorded, repo, replicated=replicated, gpu_targets=gpu_targets,
     )
     if (units or {}).get(CONFIG_READ_FIELD) is not False or facts is None:
         return stored, (units or {}).get(CONFIG_READ_FIELD) is not False

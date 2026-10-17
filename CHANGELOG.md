@@ -1,5 +1,95 @@
 # Change log
 
+## 1.5.3
+
+An update release: updating from the console now leaves a machine in the same
+state as the installer does. In 1.5.2, a machine updated from the console
+served the cluster model without its speed-ups until its owner re-ran the
+installer, and a 30B deployed under 1.5.1 had to be removed and deployed again
+to get them. Neither step is needed from this release on.
+
+### Upgrading from 1.5.1 or 1.5.2
+
+- **Update Vaelor from the console** (**System › Hardware and services ›
+  Update Vaelor**). There is no installer re-run and no remove-and-redeploy
+  any more.
+- **One caution, for this one update:** The first update from the console into this release is applied by the updater of the release it replaces, which does not take the update lock. While that one update runs, do not start another update or run the installer. Its model refresh and build steps already take the lock, and every update after it is fully protected.
+- **Updating from 1.5.1:** the update page you start it from is 1.5.1's own and does not refresh by itself, so reload the page about a minute after you press Confirm update to follow the rest of the update.
+- A cluster model that is serving is reloaded once near the end of the update,
+  which takes it offline for about a minute and a half. It comes back with
+  every speed-up, including the 4-bit guesser; no second Unload and Load is
+  needed.
+- Re-running the installer still works, and ends in the same state.
+
+### The console update does everything the installer does
+
+- **The same build steps.** Once the new version has passed its health check,
+  the update fetches vLLM's attention fix and builds it, builds Vaelor's own
+  GPU routines and the 4-bit guesser, and removes pieces the release retired.
+  It is the same list of steps the installer runs, run from the same place, and
+  it runs before any model is reloaded, so the reload serves what was built.
+  The steps share a time limit that leaves room for the reload. A step that
+  does not finish leaves the model serving without that speed-up, and the
+  console says so; it does not leave the update half done. On the Z2 Mini,
+  run on their own rather than inside a real update, the steps took 27 seconds
+  when nothing had been built yet and about a second when everything had.
+- **A 30B deployed under 1.5.1 is upgraded on its next reload.** A Load,
+  including the one the update runs, now gives an older deployment what a
+  fresh deployment of the same model gets on the same machines: the guesser,
+  Vaelor's GPU routines and the new defaults. It does so only where these were
+  measured: the default vLLM 0.27 image, the 4-bit (AWQ) Qwen3-30B-A3B, one
+  copy per machine, and every machine reading a gfx1151 GPU. A setting you
+  chose yourself is kept. The guesser's model is downloaded during the update
+  while the current model keeps serving.
+- **A decline is kept honest and retried.** If the guesser will not fit in
+  memory, or cannot be downloaded, the model is reloaded with everything else
+  and without the guesser and what needs it, and its note says what was held
+  back and why. Later updates do not keep retrying it; the next Load you start
+  does.
+- **A reload is no longer skipped when only the speed-ups changed.** The check
+  that decides whether an update reloads a model now counts every setting a
+  Load would change. This also fixes the installer, which had the same gap.
+- **One update at a time.** While an update runs, a second update is refused
+  at once, and the installer's model refresh waits a limited time for it and
+  then stops with a message rather than running alongside it.
+- **The updater restarts itself after each update,** once it is idle, so the
+  next update is applied by the new version's own updater.
+- **The update page follows the update to the end.** After you confirm, it
+  shows each step as it happens (download and check, install, restart, build
+  steps, guesser download, model reload), each ending done, skipped or held
+  back with the reason, and switches to "Updated to" by itself. It also shows
+  what the cluster model now runs with, or what was held back and why. If the
+  update takes more than 20 minutes it says so.
+- **One reload, not two.** The 4-bit guesser is now built before the model is
+  reloaded, within a time limit, so the update's reload already uses it. If the
+  build does not finish in time, the model loads with the full-size guesser and
+  its note says so.
+
+The test suite and the developer tools also changed; none of that ships.
+
+### Tested live
+
+- **The console update from the published 1.5.1 was run on the Z2 Mini and
+  the ZBook Ultra,** with every speed-up piece and the guesser's files removed
+  from both machines first, and a 30B deployed by 1.5.1 itself. From pressing
+  Confirm update: 1.5.3 was running after 40 seconds, the build steps and the
+  guesser download were done after about two minutes, and the 30B was offline
+  for a minute and a half while it reloaded, once. Both machines came back
+  with every speed-up, the 4-bit guesser included, built from scratch on each.
+  The update page followed it to the end without a reload, and the updater
+  restarted onto 1.5.3's code. The 30B then wrote about 123, 121 and 95 word
+  pieces a second for one person at 65, 708 and 6,443 prompt tokens, and 167 on
+  the coding test, the same as 1.5.2 freshly deployed. No GPU faults.
+
+### Not verified in this release
+
+- **The console update from 1.5.2 to 1.5.3 has not been run live;** only the
+  update from 1.5.1 has.
+- **1.5.3 has not had a cold install.**
+- Still open from 1.5.2: the ZBook worker's build of the 4-bit guesser has run
+  live only once, and AI Chat does not yet trim a conversation to fit the
+  context window a connection declares.
+
 ## 1.5.2
 
 A speed release for the cluster's recommended model, Qwen3-30B-A3B, on the AMD

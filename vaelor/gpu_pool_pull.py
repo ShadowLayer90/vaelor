@@ -238,6 +238,23 @@ class ModelPullWaiter:
                 image, DRAFT_PULL_LABEL.format(gb=round(drafter.weight_bytes / 1e9, 1)),
             )
 
+    def fetch_drafter(
+        self, transport: Any, node: Dict[str, Any], key: str,
+        report: Callable[[int, str], None], image: Optional[str] = None,
+    ) -> None:
+        """Fetch one pinned draft model onto one node, as :meth:`wait` does for a deploy.
+
+        VD-217: a Load that gives a record made before the draft model this
+        release's one (`vllm_serve_options.with_release_defaults`) fetches it
+        first - a Load pulls no weights, and a unit is never started "with a
+        drafter" it does not have. Already there, the pull ends at once.
+        """
+        drafter = drafter_profile(key)
+        self._fetch(
+            transport, node, drafter.repo, drafter.revision, report, {}, image,
+            DRAFT_PULL_LABEL.format(gb=round(drafter.weight_bytes / 1e9, 1)),
+        )
+
     def _fetch(
         self, transport: Any, node: Dict[str, Any], repo: str,
         revision: Optional[str], report: Callable[[int, str], None],

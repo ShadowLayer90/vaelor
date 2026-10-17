@@ -40,17 +40,25 @@ could not start it again, with the Load's own sentence, and Load is the retry.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 from . import gpu_render_ledger as render_ledger
+from .bridge_transport import root_renders_units
+from .vllm_guesser_build import GUESSERS, NOT_BUILT, GuesserUnavailable, UNAVAILABLE_MARK
+from .vllm_guesser_build import ensure_on_worker as ensure_guesser_on_worker
 from .gpu_cluster_mode import HEALTHY_STATE
 from .gpu_pool_reload import (
     LOAD_CONFIRM, NOT_FOUND, NOT_VLLM, UNLOAD_CONFIRM, confirm_load_bindings,
-    load_deployment, load_options, load_participants, unload_deployment,
+    drafter_to_fetch, fetch_drafter, load_deployment, load_options, load_participants,
+    unload_deployment,
 )
 from .vllm_images import download_line
-from .gpu_pool_units import VLLM_ENGINE, deployment_name
+from .gpu_pool_refit import gpu_targets_of
+from .gpu_pool_units import VLLM_ENGINE, deployment_name, is_replicated
 from .ssh_transport import SshTransportError
+from .vllm_release_defaults import DRAFTER_DECLINED_FIELD, DRAFTER_NOT_FETCHED, held_back
+from .vllm_serve_options import options_for_load
 
 #: The confirm token a refresh job carries; the installer's queue stamps it.
 REFRESH_CONFIRM = "refresh-gpu-inference"
@@ -72,6 +80,43 @@ STOPPING = (
 #: What a machine that cannot be asked raises, over either transport.
 _UNANSWERED = (SshTransportError, RuntimeError, OSError, ValueError)
 
+#: The job phases a refresh reports under (R104: the update panel names them);
+#: `upgrade_progress` reads them back from the job's events.
+PHASE_CHECK = "refresh-check"
+PHASE_FETCH = "guesser-fetch"
+PHASE_BUILD = "guesser-build"
+PHASE_RELOAD = "model-reload"
+REFRESH_PHASES = (PHASE_CHECK, PHASE_FETCH, PHASE_BUILD, PHASE_RELOAD)
+
+#: N94 (VD-217): what building the 4-bit guesser before the stop may take, all
+#: machines together. Measured 21-31 s a build on the Z2 (kb N65); a build not
+#: ready by then leaves the Load serving the full-size guesser, said on the row.
+GUESSER_PREBUILD_SECONDS = 240
+#: How often the controller's background build is asked about.
+GUESSER_POLL_SECONDS = 3
+#: The progress line while it builds; and when it was not ready before the stop.
+GUESSER_BUILDING = "Building the 4-bit guesser on {} while the model still serves"
+GUESSER_NOT_READY = (
+    "The 4-bit guesser was not ready before the reload ({}), so the model serves "
+    "the full-size guesser until its next Load"
+)
+GUESSER_LATE = "it did not finish within {} s"
+#: R111: a worker's own build is tried again by the Load in this same refresh
+#: (`gpu_pool_runtime` builds it there before the unit), so it is never "until
+#: the next Load".
+GUESSER_WORKER_RETRY = (
+    "The 4-bit guesser could not be built before the stop on {}, so the reload "
+    "builds it there again; a machine where that fails too serves the full-size "
+    "guesser and its row says why"
+)
+
+
+def _phased(progress: Optional[Callable[..., None]], phase: str) -> Callable[[int, str], None]:
+    """A two-argument report that files each line under ``phase`` (R104)."""
+    if progress is None:
+        return lambda _percent, _message: None
+    return lambda percent, message: progress(percent, message, phase)
+
 
 def refresh_deployment(
     ops: Any, payload: Dict[str, Any],
@@ -81,7 +126,8 @@ def refresh_deployment(
     """Unload and Load one serving vLLM deployment whose units this release renders differently.
 
     A row that is not serving, or whose units already read as this release
-    renders them, is answered without touching anything.
+    renders them, is answered without touching anything. ``progress`` is
+    called ``(percent, message, phase)``, the phase one of :data:`REFRESH_PHASES`.
     """
     if (payload or {}).get("confirm") != REFRESH_CONFIRM:
         raise ValueError("Confirm the post-upgrade GPU deployment refresh.")
@@ -91,15 +137,29 @@ def refresh_deployment(
         raise ValueError(NOT_FOUND)
     if (deployment.get("units", {}) or {}).get("engine") != VLLM_ENGINE:
         raise ValueError(NOT_VLLM)
-    report = progress or (lambda _percent, _message: None)
+    report = _phased(progress, PHASE_CHECK)
     drift = render_ledger.render_drift(deployment)
+    if not drift["refresh"] and str(deployment.get("state", "")) == HEALTHY_STATE:
+        # VD-217 (kb G71): the units re-render unchanged, but a Load may now
+        # serve this record differently - this release's measured settings for
+        # a record made before them - decided on the machines' GPUs as the Load
+        # reads them. Not fit-checked here: while it serves, the model's own
+        # memory reads as taken, so the fit says no to what the Load after the
+        # stop places (measured on the Z2). The Load re-decides with the fit
+        # and serves as before, saying why, if the drafter does not fit.
+        try:
+            would_load = would_load_now(
+                deployment, load_participants(ops, deployment, placement_status))
+        except ValueError:
+            would_load = None
+        drift = render_ledger.render_drift(deployment, would_load)
     if not drift["refresh"]:
         return {"name": name, "refreshed": False, "reason": drift["reason"]}
 
     report(5, "Asking every machine of {} before anything is stopped".format(name))
     try:
         participants = load_participants(ops, deployment, placement_status)
-        options = load_options(ops, deployment, participants)[0]
+        options = load_options(ops, deployment, participants, drafter=None)[0]
     except ValueError as error:
         _write_note(ops, name, {"reason": "refused", "detail": str(error)})
         raise
@@ -121,13 +181,42 @@ def refresh_deployment(
     except _UNANSWERED as error:
         _write_note(ops, name, {"reason": "refused", "detail": str(error)})
         raise
+    # VD-217: the draft model a record made before it gains is fetched while
+    # the model still serves, so the Load after the stop finds it. Decided
+    # before the fit, as the refresh itself was: while it serves, the fit
+    # reads the model's own memory as taken.
+    wanted = would_load_now(deployment, participants)
+    fetched, fetch_note = True, None
+    try:
+        fetch_drafter(ops, deployment, participants, transports, wanted,
+                      _phased(progress, PHASE_FETCH))
+    except _UNANSWERED as error:
+        fetched = False
+        # R96: declined on the row, so neither this refresh nor a later one
+        # counts it again; the release's other settings still apply, and an
+        # owner's Load offers it again.
+        _mark_declined(ops, name, drafter_to_fetch(deployment.get("units", {}) or {}, wanted))
+        deployment = ops.store.get_pooled_deployment(name) or deployment
+        served = would_load_now(deployment, participants)
+        why = held_back(wanted, served, DRAFTER_NOT_FETCHED.format(
+            reason=str(error)[:200] or type(error).__name__))
+        fetch_note = why  # R104: the guesser phase says the decline
+        drift = render_ledger.render_drift(deployment, served)
+        if not drift["refresh"]:
+            return {"name": name, "refreshed": False, "reason": why, "guesser_note": why}
+        drift = dict(drift, reason="{} {}".format(drift["reason"], why))
+    # N94: the 4-bit guesser is built from the drafter just fetched, while the
+    # model still serves, so the Load below uses it at once - never stops it.
+    guesser_note = prebuild_guesser(wanted, participants, transports,
+                                    _phased(progress, PHASE_BUILD)) if fetched else fetch_note
 
     # Re-read at the last moment: an idle unload may have landed since.
     current = ops.store.get_pooled_deployment(name) or {}
     if str(current.get("state", "")) != HEALTHY_STATE:
         return {"name": name, "refreshed": False,
                 "reason": render_ledger.render_drift(current)["reason"]}
-    report(15, STOPPING.format(name))
+    reload_report = _phased(progress, PHASE_RELOAD)
+    reload_report(15, STOPPING.format(name))
     try:
         unload_deployment(ops, {"name": name, "confirm": UNLOAD_CONFIRM})
     except Exception as error:
@@ -136,19 +225,121 @@ def refresh_deployment(
         raise
     try:
         loaded = load_deployment(
-            ops, {"name": name, "confirm": LOAD_CONFIRM}, progress, placement_status,
+            ops, {"name": name, "confirm": LOAD_CONFIRM}, reload_report, placement_status,
+            retry_declined=False,
         )
     except Exception as error:
         _write_note(ops, name, {"reason": "load-failed", "detail": str(error)})
         raise
+    reason = drift["reason"] if guesser_note is None or not fetched else "{} {}.".format(
+        drift["reason"], guesser_note)
     return {
         "name": name,
         "refreshed": True,
-        "reason": drift["reason"],
+        "reason": reason,
         "changed": drift["changed"],
         "state": loaded.get("state"),
         "endpoint": loaded.get("endpoint"),
+        # R104: what the model now serves with, for the update panel.
+        "serving": serving_summary(ops.store.get_pooled_deployment(name) or {}),
+        "guesser_note": guesser_note or "",
     }
+
+
+def prebuild_guesser(wanted: Any, participants: List[Dict[str, Any]], transports: Dict[str, Any],
+                     report: Callable[[int, str], None], *,
+                     seconds: float = GUESSER_PREBUILD_SECONDS,
+                     clock: Callable[[], float] = time.monotonic,
+                     sleep: Callable[[float], None] = time.sleep) -> Optional[str]:
+    """Build the 4-bit guesser ``wanted`` serves on every machine before the stop (N94).
+
+    ``None`` when every machine has it (or it serves none), else
+    :data:`GUESSER_NOT_READY` naming each machine and why. Never raises: a
+    machine without it serves the full-size guesser at the Load, as before,
+    and its row says so. The controller's build runs in the background under
+    its root bridge (`vllm_guesser_verb.bridge_build_state`), started first so
+    it overlaps each worker's, which the controller builds there over SSH as
+    its Load would (`vllm_guesser_build.ensure_on_worker`, VD-194).
+    """
+    row = GUESSERS.get(str(getattr(wanted, "guesser", None) or ""))
+    if row is None:
+        return None
+    deadline = clock() + float(seconds)
+    names = {node["id"]: str(node.get("name") or node.get("id") or "")
+             for node in participants}
+    held: Dict[str, str] = {}
+    controllers = [node["id"] for node in participants if root_renders_units(transports[node["id"]])]
+    for node_id in controllers:
+        report(12, GUESSER_BUILDING.format(names[node_id]))
+        held[node_id] = _ask_bridge(transports[node_id], row, True)
+    for node in participants:
+        if node["id"] in controllers:
+            continue
+        report(12, GUESSER_BUILDING.format(names[node["id"]]))
+        try:
+            ensure_guesser_on_worker(transports[node["id"]], row,
+                                     seconds=max(1.0, deadline - clock()))
+        except (GuesserUnavailable, *_UNANSWERED) as error:
+            held[node["id"]] = str(error).replace(UNAVAILABLE_MARK, "")[:300]
+    for node_id in controllers:
+        while held.get(node_id) == "":
+            if clock() >= deadline:
+                held[node_id] = GUESSER_LATE.format(int(seconds))
+                break
+            sleep(GUESSER_POLL_SECONDS)
+            held[node_id] = _ask_bridge(transports[node_id], row, False)
+    said = []
+    for sentence, wanted_controller in ((GUESSER_NOT_READY, True), (GUESSER_WORKER_RETRY, False)):
+        reasons = ["{}: {}".format(names[node_id], why) for node_id, why in held.items()
+                   if why and (node_id in controllers) == wanted_controller]
+        if reasons:
+            said.append(sentence.format("; ".join(reasons)))
+    return ". ".join(said) or None
+
+
+def _ask_bridge(transport: Any, row: Any, start: bool) -> Optional[str]:
+    """``None`` built, ``""`` still building, else why not - the controller's bridge's answer."""
+    try:
+        answer = transport.guesser_build(row.image, start)
+    except _UNANSWERED as error:
+        return "its hardware bridge did not answer ({})".format(str(error)[:160])
+    state = str((answer or {}).get("state", ""))
+    if state == "ready":
+        return None
+    if state in ("building", "started"):
+        return ""
+    return str((answer or {}).get("reason") or NOT_BUILT)[:300]
+
+
+def serving_summary(record: Dict[str, Any]) -> Dict[str, Any]:
+    """What a reloaded deployment serves with, and each machine's note (R104)."""
+    from .gpu_pool_replicas import serving_notes
+    from .vllm_serve_options import options_from_record
+
+    units = record.get("units", {}) or {}
+    try:
+        options = options_from_record(
+            units, str(units.get("repo", "") or record.get("model_id", "") or ""),
+            replicated=is_replicated(record))
+    except (ValueError, TypeError):
+        return {"read": False, "notes": serving_notes({"units": units})}
+    return {
+        "read": True,
+        "drafter": options.advanced[2] is not None,
+        "guesser": "4-bit" if options.guesser else ("full-size" if options.advanced[2] else "none"),
+        "expert_kernels": "vaelor" if options.moe_kernel else "vllm",
+        "step_merging": bool(options.qk_norm_rope_fusion),
+        "notes": serving_notes({"units": units}),
+    }
+
+
+def would_load_now(deployment: Dict[str, Any], participants: List[Dict[str, Any]]) -> Any:
+    """The options a Load would serve ``deployment`` with on ``participants``, before the fit (VD-217)."""
+    units = deployment.get("units", {}) or {}
+    return options_for_load(
+        units, str(units.get("repo", "") or deployment.get("model_id", "") or ""),
+        replicated=is_replicated(deployment), facts=None,
+        gpu_targets=gpu_targets_of(participants))[0]
 
 
 def _unanswering(ops: Any, participants: List[Dict[str, Any]], transports) -> List[str]:
@@ -165,6 +356,25 @@ def _unanswering(ops: Any, participants: List[Dict[str, Any]], transports) -> Li
         except _UNANSWERED:
             silent.append(str(node.get("name") or node.get("id") or "a machine"))
     return silent
+
+
+def _mark_declined(ops: Any, name: str, key: Optional[str]) -> None:
+    """Record on the row that this release's draft model was declined (R96), changing nothing else."""
+    if key is None:
+        return
+    with ops._serving_lock():
+        current = ops.store.get_pooled_deployment(name)
+        if current is None:
+            return
+        units = dict(current.get("units", {}) or {})
+        units[DRAFTER_DECLINED_FIELD] = {"key": key}
+        ops.store.put_pooled_deployment(
+            name=name, state=str(current.get("state", "")),
+            model_id=str(current.get("model_id", "")),
+            node_ids=list(current.get("node_ids") or []), units=units,
+            endpoint=str(current.get("endpoint", "") or ""),
+            credential_id=str(current.get("credential_id", "") or ""),
+        )
 
 
 def _write_note(ops: Any, name: str, note: Dict[str, Any]) -> None:

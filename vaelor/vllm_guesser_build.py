@@ -60,6 +60,7 @@ import re
 import secrets
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
@@ -467,8 +468,15 @@ def source_dir(row: GuesserBuild, hub: str = MODEL_HUB) -> str:
 
 
 def container_name() -> str:
-    """A build container's own name (:data:`CONTAINER_PREFIX` and a fresh token)."""
-    return CONTAINER_PREFIX + secrets.token_hex(6)
+    """A build container's own name: :data:`CONTAINER_PREFIX`, then twelve hex digits.
+
+    The first six are this process group's (`post_install_steps.group_tag`), so
+    an update step that is stopped removes its own containers and nobody
+    else's (VD-217, R101); the last six are fresh.
+    """
+    from .post_install_steps import group_tag
+
+    return CONTAINER_PREFIX + group_tag() + secrets.token_hex(3)
 
 
 def build_argv(row: GuesserBuild, source: str, build: str, name: str) -> List[str]:
@@ -523,8 +531,8 @@ def program_text(source: str = PROGRAM_SOURCE) -> Optional[str]:
 
 # --- The controller: the installer and the background build, as root ------------------
 
-def _run_fixed(argv: List[str]) -> str:
-    completed = subprocess.run(argv, capture_output=True, text=True, timeout=BUILD_SECONDS,
+def _run_fixed(argv: List[str], timeout: float = BUILD_SECONDS) -> str:
+    completed = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
                                check=False)
     if completed.returncode != 0:
         raise RuntimeError(" ".join([str(completed.stdout or ""), str(completed.stderr or "")])
@@ -658,7 +666,8 @@ def root_guesser_dir(
 
 # --- A worker: built there, by the controller, over SSH as root -------------------------
 
-def ensure_on_worker(transport: Any, row: GuesserBuild, *, source: str = PROGRAM_SOURCE) -> str:
+def ensure_on_worker(transport: Any, row: GuesserBuild, *, source: str = PROGRAM_SOURCE,
+                     seconds: float = BUILD_SECONDS) -> str:
     """The worker's built folder - built there first when needed - or :class:`GuesserUnavailable`.
 
     Built with the worker's own image from the worker's own copy of the drafter
@@ -698,7 +707,8 @@ def ensure_on_worker(transport: Any, row: GuesserBuild, *, source: str = PROGRAM
             raise ValueError(reason_of(prepared))
         try:
             transport.run(build_argv(row, source_dir(row), "{}/{}/{}".format(
-                OVERLAY_ROOT, row.key, build), name), sudo=True, timeout=BUILD_SECONDS)
+                OVERLAY_ROOT, row.key, build), name), sudo=True,
+                timeout=max(1, int(min(BUILD_SECONDS, seconds))))
         except SshTransportError as error:
             try:
                 transport.run(remove_argv(name), sudo=True)
@@ -727,14 +737,23 @@ def ensure_on_worker(transport: Any, row: GuesserBuild, *, source: str = PROGRAM
 # --- The installer ------------------------------------------------------------------
 
 def main(argv: Sequence[str], *, root: str = OVERLAY_ROOT,
-         run: Callable[[List[str]], Any] = _run_fixed) -> int:
-    """``build``, as root: every row's build, each outcome printed; never fails the install."""
-    if (argv[1] if len(argv) > 1 else "") != "build":
-        sys.stderr.write("usage: python -m vaelor.vllm_guesser_build build\n")
+         run: Optional[Callable[[List[str]], Any]] = None) -> int:
+    """``build [--within N]``, as root: every row's build, each outcome printed; never
+    fails the install. ``--within`` (VD-217, R98) keeps the lock wait and the
+    build inside the update's share, so a timed-out build container is
+    removed here, by name, before the update's own bound is reached."""
+    from .post_install_steps import step_timeout, within_seconds
+
+    within = within_seconds(argv, ("build",))
+    if within is None:
+        sys.stderr.write("usage: python -m vaelor.vllm_guesser_build build [--within SECONDS]\n")
         return 2
+    deadline = time.monotonic() + min(within, 2.0 * BUILD_SECONDS)
+    run = run or (lambda command: _run_fixed(command, step_timeout(command, deadline, BUILD_SECONDS)))
     for row in GUESSERS.values():
         try:
-            reason = ensure_on_controller(row, root=root, run=run, lock_wait=BUILD_SECONDS)
+            reason = ensure_on_controller(row, root=root, run=run, lock_wait=min(
+                BUILD_SECONDS, max(0.0, deadline - time.monotonic())))
         except Exception as error:  # noqa: BLE001 - an installer step never fails the install
             reason = str(error)[:300] or type(error).__name__
         print("Vaelor 4-bit guesser build ({}): {}".format(row.key, "done" if reason is None

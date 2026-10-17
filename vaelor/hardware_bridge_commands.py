@@ -40,6 +40,9 @@ CONTROLLER_UNIT_VERBS = frozenset({
     # from before it does not know it, so it is never handed a shared fence
     # it would ignore (review 1, SC2); the old prepare verb is gone.
     "ray_plane_fence", "ray_plane_clear", "ray_container_cgroup",
+    # N94 (VD-217): the 4-bit guesser's build before an upgrade's reload - a
+    # pinned image reference and a bool, the fixed background build or a check.
+    "guesser_build",
 })
 
 #: How long a Ray-plane verb waits for the bridge's lock (held by, say, a unit
@@ -70,6 +73,7 @@ _TYPED_PAYLOADS = {
                         "peers": list, "shared": bool},
     "ray_plane_clear": {"name": str},
     "ray_container_cgroup": {"name": str, "role": str},
+    "guesser_build": {"image": str, "start": bool},
 }
 
 
@@ -220,6 +224,11 @@ class ControllerCommandsMixin:
         if action == "ray_container_cgroup":
             values = _typed(action, payload)
             return self._managed_units().container_cgroup(values["name"], values["role"])
+        if action == "guesser_build":
+            # No lock: nothing is built in the call (the build is its own
+            # transient unit, one at a time), and a check only reads.
+            values = _typed(action, payload)
+            return self._managed_units().guesser_build(values["image"], values["start"])
         raise ValueError("That is not a controller unit verb.")
 
 

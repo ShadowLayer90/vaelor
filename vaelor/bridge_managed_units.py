@@ -802,6 +802,15 @@ class ManagedUnits:
                     os.close(hub)
         return f"{self._model_store}/{_HUB_FOLDER}/{name}"
 
+    def guesser_build(self, image: Any, start: Any) -> Dict[str, str]:
+        """N94 (VD-217): this controller's 4-bit guesser build, checked or started in the
+        background (`vllm_guesser_verb.bridge_build_state`); never built in this call."""
+        from .vllm_guesser_verb import bridge_build_state
+
+        return bridge_build_state(
+            image, start, run=lambda argv: self._bounded_fixed(HIP_REMOVE_SECONDS, *argv),
+            root=self._overlay_root, owners=self._owners)
+
     @property
     def _owners(self) -> frozenset:
         return frozenset({0, self._owner[0]})

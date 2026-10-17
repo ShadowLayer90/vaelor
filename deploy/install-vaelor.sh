@@ -297,7 +297,7 @@ if [[ -z "${wheel}" ]]; then
     }
   fi
   wheel_repo="${VAELOR_REPO:-ShadowLayer90/vaelor}"
-  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5.2}"
+  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5.3}"
   wheel_dl_dir="$(mktemp -d)"
   echo "No local wheel; downloading it from ${wheel_repo} release ${wheel_tag} ..."
   wheel="$(VAELOR_REPO="${wheel_repo}" VAELOR_TAG="${wheel_tag}" \
@@ -2305,16 +2305,17 @@ check_household_chain
 # Non-fatal: a refresh that cannot run must not fail an install that otherwise
 # succeeded. It reports, and the next redeploy picks it up.
 #
-# VD-216 work order item 2: build the 4-bit guesser for this machine FIRST, so
-# the reload queued below serves it rather than the full-size one. As root,
-# from the pinned bf16 drafter already in the model store, by Vaelor's pinned
-# program inside the pinned vLLM 0.27 image (`docker run --pull never --network
-# none`, read-only, no GPU; about 25 s), accepted only when every file carries
-# its pinned SHA-256 (`vaelor/vllm_guesser_build.py`). Ships no 4-bit file.
-# Without the image or the drafter (a first install) it records why, and the
-# root bridge starts this same step in the background at the first model start.
-# Non-fatal: a box without it serves the full-size guesser and says why.
-/opt/vaelor/venv/bin/python -I -m vaelor.vllm_guesser_build build || true
+# VD-217: `vaelor-refresh-models --apply`, run as root, first runs this
+# release's root build steps (`vaelor/post_install_steps.py`, the ONE list:
+# fetch and build the vLLM attention change (VD-215), build Vaelor's HIP
+# expert kernels and the 4-bit guesser (VD-216), then remove retired versions)
+# and only then queues the reloads, so the reloads serve what was built. The
+# console's Update Vaelor runs the same command from its root broker, so an
+# update reaches the state this installer does. Each step is bounded, prints
+# its outcome, and never fails the install: a box without a build serves with
+# the honest fallback and says why, and the root bridge builds it at the
+# first model start that needs it. Do not call the steps here as well - a
+# second list is how the two update paths drifted (LESSONS 6).
 if /opt/vaelor/venv/bin/vaelor-refresh-models --apply; then
   :
 else
@@ -2344,42 +2345,6 @@ prepull_serving_images || true
 # stage them enrols workers fine and only worker telemetry waits until they are
 # staged (VD-128 E2 follow-up).
 stage_worker_telegraf || true
-
-# VD-215: fetch upstream vLLM pull request #59448's diff (pinned commits,
-# SHA-256 verified) into /var/lib/vaelor/vllm-overlays, root-owned. Vaelor
-# ships no vLLM code (owner, 2026-10-12: "for the license, the installer should
-# fetch it"): the patched attention file is BUILT on each GPU machine from this
-# diff and that machine's own copy of the file inside the pinned vLLM 0.27
-# image, and used only when the result matches its pinned SHA-256
-# (`vaelor/vllm_overlay_build.py`). `build` runs now only if the image is
-# already here (it never downloads it: `docker run --pull never`); otherwise
-# the root bridge builds it at the first cluster start that needs it, and the
-# controller builds each worker's copy from that worker's image. Same placement
-# and rules as the steps above: after the health gate, bounded, non-fatal - a
-# box that cannot fetch it serves the model without the patch and says why.
-/opt/vaelor/venv/bin/python -I -m vaelor.vllm_overlay_build fetch || true
-/opt/vaelor/venv/bin/python -I -m vaelor.vllm_overlay_build build || true
-
-# VD-216: build Vaelor's own HIP expert kernels for this machine, as root, with
-# the compiler inside the pinned vLLM 0.27 image (the host ROCm has none): one
-# `docker run --pull never --network none` of that image compiling the pinned
-# source into a root-only folder, the result's SHA-256 recorded beside it and
-# checked again before every mount and at load (`vaelor/vllm_moe_hip_build.py`).
-# Without the image (a first install) it records why and the root bridge builds
-# at the first model start. Non-fatal: a box without the build serves the
-# expert layers with the Triton kernels and its log says why.
-/opt/vaelor/venv/bin/python -I -m vaelor.vllm_moe_hip_build build || true
-
-# VD-216: remove the attention-overlay and expert-kernel versions this release
-# retired (`vaelor/vllm_overlay_prune.py`): only folders the release tables call
-# retired and that hold nothing but Vaelor's own files, never one a unit, a
-# running container or a deployment record names, never the only downloaded
-# copy of the pinned vLLM change. Each removal - and anything kept, and why -
-# is printed here. Runs after the builds above, so the current versions are in
-# place first; bounded, root, no link followed, and non-fatal. A worker's own
-# old versions are removed by the controller when it next installs that
-# worker's serving unit.
-/opt/vaelor/venv/bin/python -I -m vaelor.vllm_overlay_prune apply || true
 
 if [[ "${migrate}" -eq 1 ]]; then
   for unit in "${legacy_units[@]}"; do

@@ -48,7 +48,6 @@ import socket
 import socketserver
 import ssl
 import subprocess
-import threading
 import time
 import urllib.request
 import uuid
@@ -64,7 +63,9 @@ from packaging.version import InvalidVersion, Version
 from .appliance_recovery import START_SERVICES, STOP_SERVICES
 from .build_provenance import write_installed_record
 from .state_root_layout import settle_after_install
+from .upgrade_apply_lock import HELD_ENV, restart_self, start_locked
 from .upgrade_dependencies import install_unmet
+from .upgrade_files import read_json, write_json
 from .www_v2_orphans import MODULE as ORPHAN_SWEEP
 from .runtime_paths import env_value, jobs_group_id, run_path, state_path
 
@@ -185,6 +186,11 @@ CONTROL_PLANE_ORIGIN = env_value(
     "VAELOR_CONTROL_PLANE_ORIGIN", "PM_CONTROL_PLANE_ORIGIN",
     "https://127.0.0.1:34001",
 )
+#: What the refresh may take; every release so far gave 600 s, and VD-217's
+#: build steps run inside it (`post_install_steps.BUDGET_SECONDS`).
+REFRESH_TIMEOUT_SECONDS = 600
+#: What one pip run may take: the reinstall, and the unmet dependencies after it.
+PIP_TIMEOUT_SECONDS = 1800
 HEALTH_PATH = "/api/v2/auth/status"
 #: The loopback-only readback surface the running control plane exposes for this
 #: broker. See ``api_upgrade_routes.register_upgrade_routes``.
@@ -234,14 +240,9 @@ class UpgradeFailure(RuntimeError):
 
 
 def _atomic_write(path: Path, payload: Dict[str, Any], mode: int = 0o640) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True),
-        encoding="utf-8",
-    )
-    os.chmod(temporary, mode)
-    temporary.replace(path)
+    # R106: never a fixed temporary name in the executor-writable folder - a
+    # link planted there made root overwrite any file (`upgrade_files`).
+    write_json(path, payload, mode)
 
 
 class UpgradeApplyPlans:
@@ -397,16 +398,13 @@ def record_current_wheel(
 
 
 def last_result(path: Path = RESULT_PATH) -> Optional[Dict[str, Any]]:
-    try:
-        result = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return result if isinstance(result, dict) else None
+    """The broker's result: root's own regular file, or ``None`` (R106, `upgrade_files`)."""
+    return read_json(path)
 
 
-def _run(runner: Callable[..., Any], command: List[str], timeout: int) -> str:
+def _run(runner: Callable[..., Any], command: List[str], timeout: int, **env: Any) -> str:
     result = runner(
-        command, capture_output=True, text=True, check=False, timeout=timeout,
+        command, capture_output=True, text=True, check=False, timeout=timeout, **env,
     )
     if getattr(result, "returncode", 1) != 0:
         raise UpgradeFailure(
@@ -491,7 +489,7 @@ def _verify_staged_wheel(
 
 
 def _pip_reinstall(runner: Callable[..., Any], wheel: Path) -> None:
-    _run(runner, [PIP, *REINSTALL_FLAGS, str(wheel)], timeout=1800)
+    _run(runner, [PIP, *REINSTALL_FLAGS, str(wheel)], timeout=PIP_TIMEOUT_SECONDS)
     # #178 / VD-102 (Pi): this broker's UMask=0007 strips the world-read that
     # install-vaelor.sh leaves, so re-widen the venv after EVERY install. This
     # lives in _pip_reinstall on purpose: both the forward apply and the
@@ -719,7 +717,8 @@ def _default_refresh(runner: Callable[..., Any]) -> None:
     # Non-fatal, exactly as install-vaelor.sh treats it: a refresh that cannot
     # run must not undo an upgrade that otherwise succeeded and verified.
     try:
-        _run(runner, list(REFRESH_COMMAND), timeout=600)
+        _run(runner, list(REFRESH_COMMAND), timeout=REFRESH_TIMEOUT_SECONDS,
+             env=dict(os.environ, **{HELD_ENV: "1"}))  # VD-217: this apply holds the lock
     except (UpgradeFailure, OSError, subprocess.SubprocessError):
         pass
 
@@ -759,7 +758,7 @@ def perform_upgrade_apply(
             wheel, plan, stage_root, verified_dir=verified_dir
         )
         _pip_reinstall(runner, verified)
-        install_unmet(lambda a: _run(runner, a, 1800), VENV_ROOT + "/bin/python", PIP,
+        install_unmet(lambda a: _run(runner, a, PIP_TIMEOUT_SECONDS), VENV_ROOT + "/bin/python", PIP,
                       normalize=[*NORMALIZE_PERMS, VENV_ROOT])  # R19 / R23
         # Install any changed systemd unit files from the just-installed wheel
         # and daemon-reload BEFORE the restart, or the restart picks up the OLD
@@ -913,14 +912,11 @@ class _Handler(socketserver.StreamRequestHandler):
                 raise ValueError("Unsupported upgrade action.")
             if request["confirmation"] != CONFIRMATION:
                 raise ValueError("Upgrade confirmation did not match.")
-            plan = UpgradeApplyPlans().consume(str(request["plan_id"]))
-            worker = threading.Thread(
-                target=perform_upgrade_apply,
-                args=(plan,),
-                name="vaelor-appliance-upgrade",
-                daemon=False,
-            )
-            worker.start()
+            # VD-217: one apply at a time, held for the whole apply and refused
+            # at once while one runs, its plan left unconsumed (`upgrade_apply_lock`).
+            start_locked(RETAINED_DIR, lambda: UpgradeApplyPlans().consume(
+                str(request["plan_id"])), perform_upgrade_apply,
+                after=lambda: restart_self(UPGRADE_ORCHESTRATOR_EXCLUSIONS[0]))  # R102
             result = {"ok": True, "result": {"scheduled": True}}
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
             result = {"ok": False, "error": str(error)[:1000]}

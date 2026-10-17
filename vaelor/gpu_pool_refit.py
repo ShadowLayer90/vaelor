@@ -53,11 +53,16 @@ from .gpu_serving_target import switch_gpu_chat_reclaimable
 from .vllm_model_profile import facts_from_hf_config, profile_for
 from .vllm_guesser_build import GUESSER_FIELD
 from .vllm_images import image_profile
-from .vllm_serve_advanced import FUSION_FIELD, speedups_note
+from .vllm_serve_advanced import (
+    ADVANCED_FIELDS, FUSION_FIELD, SPEEDUPS_MEASURED, speedups_note,
+)
+from .vllm_release_defaults import (
+    RELEASE_DEFAULTS_NOT_CHECKED, RELEASE_DEFAULTS_NOT_FIT, held_back, release_defaults_note,
+)
 from .vllm_serve_options import (
     OPTIONS_FIELD, CONFIG_NEVER_READ, CONFIG_READ_FIELD, IMAGE_FIELD, LOAD_KEPT_AS_DEPLOYED,
-    LOAD_NOT_CHECKED, MTP_FIELD, ServeOptions, names_hybrid_family,
-    options_draft_bytes, options_for, options_for_load,
+    LOAD_NOT_CHECKED, MTP_FIELD, ServeOptions, names_hybrid_family, options_draft_bytes,
+    options_for, options_for_load,
 )
 
 #: The record key for the weight size the deploy's fit was made on, which a
@@ -144,32 +149,70 @@ def refit_after_fetch(
     return fetched, facts, options
 
 
+def gpu_targets_of(participants: List[Dict[str, Any]]) -> List[str]:
+    """Each machine's ``gfx_target_version``, read as the deploy reads it (`gpu_fit_node`).
+
+    One reading for a Load, its note and the upgrade's refresh check (VD-217,
+    LESSONS 6), off the raw field the probe writes - never a derived one.
+    """
+    return [
+        str(((node.get("inventory") or {}).get("gpu") or {}).get("gfx_target_version", "") or "")
+        for node in participants
+    ]
+
+
 def options_for_load_checked(
     ops: Any, units: Mapping[str, Any], repo: str, revision: Optional[str], *,
     participants: List[Dict[str, Any]], replicated: bool, fraction: float,
-    context: int,
+    context: int, drafter: Optional[bool] = True,
 ) -> Tuple[ServeOptions, bool, str]:
     """:func:`_load_checked`, and the stand-aside sentence when the Load dropped
-    VD-216 item 2's speed-ups because a machine now reads as another GPU (R86)."""
+    VD-216 item 2's speed-ups because a machine now reads as another GPU (R86),
+    or gave a record made before this release's measured settings none of
+    them for the same reason (VD-217)."""
     options, config_read, note = _load_checked(
         ops, units, repo, revision, participants=participants, replicated=replicated,
-        fraction=fraction, context=context)
+        fraction=fraction, context=context, drafter=drafter)
     recorded = (units or {}).get(OPTIONS_FIELD)
     carried = isinstance(recorded, Mapping) and (
         recorded.get(FUSION_FIELD) is not None or recorded.get(GUESSER_FIELD) is not None)
-    if carried and not (options.qk_norm_rope_fusion or options.guesser):
-        aside = speedups_note(repo, image_profile(options.vllm_image), [
-            {"name": node.get("name") or node.get("id"),
-             "gfx_target_version": ((node.get("inventory") or {}).get("gpu") or {}).get(
-                 "gfx_target_version")} for node in participants])
-        note = " ".join(filter(None, (note, aside)))
+    older = replicated and isinstance(recorded, Mapping) and not any(
+        field in recorded for field in ADVANCED_FIELDS) and (
+        options.vllm_image, str(repo or "").strip()) in SPEEDUPS_MEASURED
+    if (carried or older) and not (options.qk_norm_rope_fusion or options.guesser):
+        machines = [
+            {"name": node.get("name") or node.get("id"), "gfx_target_version": target}
+            for node, target in zip(participants, gpu_targets_of(participants))]
+        note = _joined(note, speedups_note(repo, image_profile(options.vllm_image), machines)
+                       if carried else release_defaults_note(machines))
     return options, config_read, note
+
+
+def _fit_refusal(ops: Any, body: Mapping[str, Any], options: ServeOptions, *,
+                 participants: List[Dict[str, Any]], replicated: bool, fraction: float,
+                 context: int, targets: List[str]) -> str:
+    """The fit's own sentence when ``options`` would not place this record, ``""`` when it would."""
+    spec = with_launch_cache(
+        build_model_spec(body), options.mtp_tokens or None,
+        vllm_image=options.vllm_image, gpu_targets=targets,
+    )
+    nodes = fit_nodes(ops.broker, ops.mode_switch, participants)
+    refusal = startup_pool_refusal(spec, nodes, stages=1 if replicated else len(participants))
+    if refusal:
+        return refusal
+    plan = plan_gpu_fit(
+        spec, nodes, intent=INTENT_THROUGHPUT if replicated else INTENT_CAPACITY,
+        gpu_memory_utilization=fraction, max_model_len=context,
+    )
+    if plan["verdict"] != (VERDICT_REPLICATED if replicated else VERDICT_DISTRIBUTED):
+        return str(plan["summary"])
+    return ""
 
 
 def _load_checked(
     ops: Any, units: Mapping[str, Any], repo: str, revision: Optional[str], *,
     participants: List[Dict[str, Any]], replicated: bool, fraction: float,
-    context: int,
+    context: int, drafter: Optional[bool] = True,
 ) -> Tuple[ServeOptions, bool, str]:
     """``(options, config_read, note)`` a Load serves a stored deployment with.
 
@@ -179,24 +222,36 @@ def _load_checked(
     still places the model at the record's own weight size, context and
     fraction; otherwise the unit is served as deployed, the record keeps
     saying the config is unread, and ``note`` says why in plain words.
+
+    VD-217: a record that gains this release's draft model (made before it,
+    `vllm_serve_options.with_release_defaults`) gains it only if the fit,
+    charged with the drafter's weights as a deploy charges them, still places
+    the model. Otherwise, or when that cannot be checked, it gets the
+    release's other settings without the draft model and what needs it (R96),
+    and ``note`` names exactly what was held back and why (R97). ``drafter``
+    is `vllm_serve_options.options_for_load`'s: an owner's Load offers it
+    again (``True``), the upgrade's refresh respects an earlier decline.
     """
-    targets = [
-        str(((node.get("inventory") or {}).get("gpu") or {}).get("gfx_target_version", "") or "")
-        for node in participants
-    ]
+    targets = gpu_targets_of(participants)
     unread = (units or {}).get(CONFIG_READ_FIELD) is False
     config = hf_cached_config.cached_config(repo, revision)
     weight = (units or {}).get(WEIGHT_FIELD)
     weighed = not isinstance(weight, bool) and isinstance(weight, int) and weight > 0
-    # With the machines' GPUs, so VD-216 item 2's speed-ups a Load adds
-    # (`vllm_serve_options.with_measured_speedups`) are in both values and
-    # never read as the config-driven change below.
-    stored, _ = options_for_load(units, repo, replicated=replicated, facts=None,
-                                 gpu_targets=targets)
+
+    def decided(facts: Any = None, defaults: bool = True,
+                offer: Optional[bool] = drafter) -> Tuple[ServeOptions, bool]:
+        # With the machines' GPUs, so VD-216 item 2's speed-ups a Load adds
+        # (`vllm_serve_options.with_measured_speedups`) are in both values and
+        # never read as the config-driven change below.
+        return options_for_load(units, repo, replicated=replicated, facts=facts,
+                                gpu_targets=targets, release_defaults=defaults,
+                                drafter=offer)
+
+    baseline, _ = decided(defaults=False)
     # The draft model the record serves with is charged as the deploy charged
     # it (VD-213, LESSONS 6): the record's own, never one it does not carry.
     load_body = {"hf_config": config, "weight_bytes": weight,
-                 "draft_weight_bytes": options_draft_bytes(stored)}
+                 "draft_weight_bytes": options_draft_bytes(baseline)}
     if config is not None and weighed:
         # The start-up rule, on the pools as they are now (J5).
         reason = startup_pool_refusal(
@@ -206,14 +261,32 @@ def _load_checked(
         )
         if reason:
             raise ValueError(LOAD_CANNOT_START.format(reason=reason))
+    stored, _ = decided()
+    offer, note = drafter, ""
+    if options_draft_bytes(stored) != options_draft_bytes(baseline):
+        if config is None or not weighed:
+            refusal = RELEASE_DEFAULTS_NOT_CHECKED.format(reason=(
+                "this model's config.json is not in the model library" if config is None
+                else "the deployment's record does not say how big its weights are"))
+        else:
+            fit = _fit_refusal(
+                ops, {**load_body, "draft_weight_bytes": options_draft_bytes(stored)},
+                stored, participants=participants, replicated=replicated,
+                fraction=fraction, context=context, targets=targets)
+            refusal = RELEASE_DEFAULTS_NOT_FIT.format(reason=fit) if fit else ""
+        if refusal:
+            # R96: the release's other settings stay; only the draft model and
+            # what needs it are held back, and the record says it was declined.
+            offer = False
+            proposed, (stored, _) = stored, decided(offer=False)
+            note = held_back(proposed, stored, refusal)
+    load_body["draft_weight_bytes"] = options_draft_bytes(stored)
     facts = facts_from_hf_config(config) if config is not None and unread else None
-    options, config_read = options_for_load(
-        units, repo, replicated=replicated, facts=facts, gpu_targets=targets,
-    )
+    options, config_read = decided(facts, offer=offer)
     if options == stored:
-        return stored, config_read, ""
+        return stored, config_read, note
     if not weighed:
-        return stored, False, LOAD_NOT_CHECKED
+        return stored, False, _joined(note, LOAD_NOT_CHECKED)
     spec = with_launch_cache(
         build_model_spec(load_body),
         stored.mtp_tokens or None, vllm_image=stored.vllm_image, gpu_targets=targets,
@@ -224,5 +297,9 @@ def _load_checked(
         gpu_memory_utilization=fraction, max_model_len=context,
     )
     if plan["verdict"] != (VERDICT_REPLICATED if replicated else VERDICT_DISTRIBUTED):
-        return stored, False, LOAD_KEPT_AS_DEPLOYED.format(reason=plan["summary"])
-    return options, True, ""
+        return stored, False, _joined(note, LOAD_KEPT_AS_DEPLOYED.format(reason=plan["summary"]))
+    return options, True, note
+
+
+def _joined(*notes: str) -> str:
+    return " ".join(note for note in notes if note)

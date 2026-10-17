@@ -5,7 +5,7 @@ specific than “the Pironman hardware can run on this OS”: some appliance
 operating systems support an enclosure but cannot provide a general-purpose
 Docker host, package manager, desktop, or local AI runtime.
 
-Last reviewed: 2026-10-16 (Vaelor 1.5.2)
+Last reviewed: 2026-10-16 (Vaelor 1.5.3)
 
 ## Support levels
 
