@@ -31,7 +31,9 @@ class ExecutorReleaseModelMixin:
         """
         from .flm_service import npu_model_present
         from .hardware_bridge import HardwareBridgeClient
-        from .model_catalog import catalog_release_for_tag
+        from .model_catalog import (
+            NPU_RELEASE_PACKAGE, SIZE_MEASURED, catalog_release_for_tag, size_note,
+        )
 
         release = catalog_release_for_tag(str(payload.get("tag") or ""))
         if release is None:
@@ -54,8 +56,9 @@ class ExecutorReleaseModelMixin:
         if not npu_model_present():
             self._checkpoint(
                 10,
-                "Downloading and verifying the on-device model (about 3.4 GiB). "
-                "This can take a few minutes on a slow connection.",
+                "Downloading and verifying the on-device model ({}). "
+                "This can take a few minutes on a slow connection.".format(
+                    size_note(NPU_RELEASE_PACKAGE.size_bytes, SIZE_MEASURED)),
                 state="downloading",
             )
             HardwareBridgeClient(timeout=1200).flm_install_release(

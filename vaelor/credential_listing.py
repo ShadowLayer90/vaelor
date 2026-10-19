@@ -187,7 +187,7 @@ VIEWER_WAYS_BACK = (
 
 #: AI Chat's lease still names the Assistant's NPU model - left by a release
 #: before VD-202, which the vault now refuses to assign. AI Chat refuses to
-#: send to it (`ChatInference._refuse_a_lease_ai_chat_may_not_use`, VD-210
+#: send to it (`ai_chat_model_lease.resolve_ai_chat_model`, VD-210
 #: owner rule), so AI Chat has no working model. The next NPU install
 #: supersedes and deletes that credential
 #: (`managed_local_credentials.activate_managed_local`), and the lease goes

@@ -9,13 +9,16 @@ from typing import Any, Dict, Iterable, Optional
 
 from .agent_prompts import (
     ASSISTANT_PROMPT,
+    LOCAL_ASSISTANT_CONTRACT_PROMPT,
     LOCAL_ASSISTANT_PROMPT,
     LOCAL_PLANNER_PROMPT,
     SYSTEM_PROMPT,
 )
 from .assistant_accelerator_answers import npu_readings_answer
 from .assistant_builtin_answer import builtin_reply
+from .assistant_clock_answer import CLOCK_SOURCE, clock_answer
 from .assistant_cluster_answers import cluster_answer, workers_named
+from .assistant_machine_names import names_here
 from .assistant_serving_answers import SERVING_SOURCE, serving_answer
 from .assistant_log_answers import LOG_WORDS
 from .phrase_match import mentions
@@ -28,7 +31,13 @@ from .assistant_fault_answers import (
     names_other_component_subject,
 )
 from .assistant_answer_scope import scoped_answer
-from .assistant_local_answer import first_choice_content, local_answer, local_turn
+from .assistant_local_answer import (
+    CONTRACT_ANSWER_TOKENS,
+    asks_in_contract,
+    first_choice_content,
+    local_answer,
+    local_turn,
+)
 from .assistant_recovery import recovery_answer
 from .assistant_answer_presentation import (
     connected_model_failure_answer,
@@ -40,10 +49,14 @@ from .assistant_answer_presentation import (
     with_performance,
     out_of_scope_after_model_failure,
 )
-from .assistant_intents import knowledge_redirect, world_followup
+from .assistant_contract_reader import is_hand_off, without_hand_off
+from .assistant_intents import (
+    WORLD_PART_ACTION, asks_partly_about_the_world, knowledge_redirect, model_hand_off,
+    ai_chat_action, hand_off_is_this_machines, world_followup,
+)
 from .assistant_acting_wiring import acting_answer, acting_decline, acting_proposal
 from .assistant_request_policy import assistant_refusal, specialist_refusal
-from .assistant_scope_guard import guarded_answer
+from .assistant_scope_guard import guarded_answer, withheld_reply
 from .assistant_memory_grounding import grounded_memory_answer
 from .assistant_policy import deployment_capability_answer, is_deployment_request
 from .agent_failure_messages import plan_failure_warning
@@ -60,6 +73,7 @@ from .inference_client import (
     parse_model_object as _parse_model_object,
 )
 from .assistant_machine_brief import brief_system_prompt
+from .assistant_machine_history import HISTORY_SOURCE
 from .inference_tuning import offered_models
 from .job_secrets import contains_secret
 from .provider_runtime import (
@@ -86,7 +100,14 @@ from .specialist_model import specialist_review
 from .runtime_paths import env_value
 from .session_affinity import new_session_key
 
+#: VD-205 L2: answers read from this cluster's own records - a named worker's
+#: digest, this controller's history - outrank the AI Chat redirect (VD-220).
+_RECORD_SOURCES = frozenset({"built-in-cluster", HISTORY_SOURCE}) & READING_BACKED_SOURCES
+
 MAX_MESSAGE_LENGTH = 4000
+#: Owner, VD-220 (2026-10-18): the Assistant's own answers and plans are asked
+#: deterministically - the same question, the same readings, the same reply.
+ASSISTANT_TEMPERATURE = 0.0
 #: What the status says when no model is pinned: the server's first offered
 #: model is used. A placeholder, never a model name (review round 3).
 AUTO_DETECT_MODEL = "Auto-detect loaded model"
@@ -314,8 +335,15 @@ class DeploymentAgent:
 
     def answer(
         self, message: str, context: Optional[Dict[str, Any]] = None, mode: str = "",
-        granted_scopes: Optional[Iterable[str]] = None,
+        granted_scopes: Optional[Iterable[str]] = None, draft: Any = None,
     ):
+        """Answer one Assistant question.
+
+        ``draft`` (VD-218) is the page's streamed draft, from
+        :class:`vaelor.assistant_stream.AnswerDraft`: when given, a managed-local
+        model's text is streamed into it as it is written. Every other answer
+        path ignores it - a built-in or remote answer arrives whole.
+        """
         clean_message = str(message).strip()
         if not clean_message or len(clean_message) > MAX_MESSAGE_LENGTH:
             raise ValueError("Assistant questions must be between 1 and 4,000 characters.")
@@ -362,7 +390,25 @@ class DeploymentAgent:
         # no word for a fault and no word for the accelerator - so the two
         # questions this appliance is most often asked were handed to a model
         # that had neither reading in front of it.
-        if grounded.get("source") in READING_BACKED_SOURCES:
+        # VD-220 (owner): anything outside the appliance goes to AI Chat. Only
+        # the answers read from this cluster's own records outrank it (VD-205
+        # L2: a named worker, this controller's history). The redirect wins
+        # before every other built-in reading, a matched skill or a memory:
+        # "what is a GPU" was answered by the accelerator reading (VD-121's
+        # definition), and "what is a fan?" went to the NPU model because the
+        # shipped troubleshooting skill shared one word.
+        source = grounded.get("source")
+        if source in _RECORD_SOURCES:
+            return grounded
+        appliance = live_context.get("appliance", live_context)
+        here = names_here(appliance)
+        redirect = knowledge_redirect(clean_message, appliance.get("ai_chat"), here)
+        if redirect is not None:
+            return self._validate_answer(
+                redirect, source="out-of-scope", answered=False,
+                question=clean_message,
+            )
+        if source in READING_BACKED_SOURCES:
             return grounded
         general_knowledge = is_general_knowledge_question(clean_message)
         # Current appliance facts outrank lexical matches in historical memory.
@@ -390,28 +436,17 @@ class DeploymentAgent:
             )
         ):
             return grounded
-        # Nothing above could answer this from the appliance. If nothing on
-        # this machine can evidence the question either, the model must not be
-        # asked to invent one: a small model answers history and science
-        # confidently and wrongly, and a wrong answer in the machine's own
-        # voice is the same defect as a fabricated sensor reading. A matched
-        # skill or a grounding memory is evidence, so those still answer.
-        appliance = live_context.get("appliance", live_context)
-        if memory_answer is None and not appliance.get("matched_skills"):
-            redirect = knowledge_redirect(clean_message, appliance.get("ai_chat"))
-            if redirect is not None:
-                return self._validate_answer(
-                    redirect, source="out-of-scope", answered=False,
-                    question=clean_message,
-                )
         if model_available:
             try:
-                result = self._model_answer(clean_message, live_context, connection)
-                validated = self._validate_answer(result, source="connected-model", question=clean_message)
+                result = self._model_answer(clean_message, live_context, connection, draft)
+                validated = self._handed_off(clean_message, result, appliance.get("ai_chat"), here)
                 validated["performance"] = result.get("performance", {})
                 validated["skills_sent"] = list(result.get("skills_sent") or [])
                 return validated
-            except (OSError, ValueError, KeyError, IndexError, urllib.error.URLError):
+            except (OSError, ValueError, KeyError, IndexError, urllib.error.URLError) as error:
+                # VD-218: the time the model spent before it failed is still
+                # spent; the timing line says so on the answer standing in.
+                spent = getattr(error, "performance", None) or {}
                 if general_knowledge:
                     fallback = self._validate_answer(
                         general_knowledge_model_failure(),
@@ -419,6 +454,7 @@ class DeploymentAgent:
                         question=clean_message,
                     )
                     fallback["fallback_used"] = True
+                    fallback["performance"] = spent
                     return fallback
                 # Tomorrow's weather and last night's baseball are not
                 # appliance facts, and reporting them purely as a model failure
@@ -432,6 +468,7 @@ class DeploymentAgent:
                         answered=False, question=clean_message,
                     )
                     scoped["fallback_used"] = True
+                    scoped["performance"] = spent
                     return scoped
                 fallback = grounded
                 stood_in = bool(fallback.get("answered", True))
@@ -450,20 +487,49 @@ class DeploymentAgent:
                 # Review S11: only claim a built-in answer when one stood in.
                 fallback["evidence"] = [{
                     "source": "assistant.fallback",
-                    "summary": (
+                    "summary": " ".join(filter(None, (
                         "The Assistant's model did not answer, so Vaelor answered "
                         "from this machine's own readings instead."
                         if stood_in else
                         "The Assistant's model did not answer, and no built-in "
-                        "reading could answer this question either."
-                    ),
+                        "reading could answer this question either.",
+                        # VD-218: why, when the reply said (a tool call, no text).
+                        str(error) if hasattr(error, "performance") else "",
+                    ))),
                 }, *fallback.get("evidence", [])][:10]
                 fallback["fallback_used"] = True
+                fallback["performance"] = spent
                 return fallback
         return grounded
 
+    def _handed_off(self, question: str, result: Dict[str, Any], ai_chat: Any, here: Any = ()) -> Dict[str, Any]:
+        """The model's answer, its trained hand-off decided once (VD-220 B4, R208, R209).
+
+        Wholly the hand-off: the AI Chat redirect where it may stand, else the
+        scope guard's withheld notice - never the sentence itself. Beside other
+        lines: those lines, without it, and the AI Chat action for a world part.
+        """
+        answer = result.get("answer")
+        if is_hand_off(answer):
+            redirect = model_hand_off(question, answer, ai_chat, here)
+            if redirect is not None:
+                # Not answered: the scope guard reads the redirect's own words as a decline.
+                return self._validate_answer(redirect, source="out-of-scope", question=question)
+            # R226: this machine's question says so and asks for the reading (AI Chat
+            # declines it); any other gets the neutral notice and the AI Chat action.
+            mine = hand_off_is_this_machines(question, here)
+            held = withheld_reply(self._validate_answer(result, source="connected-model", question=question),
+                                  hand_off=not mine)
+            return held if mine else dict(held, suggested_actions=[ai_chat_action(ai_chat)])
+        rest = without_hand_off(answer)
+        if rest != answer:
+            world = [WORLD_PART_ACTION] if asks_partly_about_the_world(question, here) else []
+            result = dict(result, answer=rest, suggested_actions=list(result.get("suggested_actions") or []) + world)
+        return self._validate_answer(result, source="connected-model", question=question)
+
     def _model_answer(
-        self, message: str, context: Dict[str, Any], connection: Dict[str, str]
+        self, message: str, context: Dict[str, Any], connection: Dict[str, str],
+        draft: Any = None,
     ) -> Dict[str, Any]:
         model = connection.get("model", "")
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -494,12 +560,16 @@ class DeploymentAgent:
                 )
             model = str(offered[0])
         managed = managed_local_connection(connection)
+        # VD-219 (LESSONS 26): the NPU fine-tune is asked in the JSON contract
+        # it was trained on; assistant_local_answer reads it into plain text.
+        contract = managed and asks_in_contract(connection, model)
         system_content = provider_system_prompt(
             # The standing brief rides in the system message, not the JSON
             # context object (assistant_machine_brief.brief_system_prompt).
             brief_system_prompt(
                 (
-                    LOCAL_ASSISTANT_PROMPT
+                    LOCAL_ASSISTANT_CONTRACT_PROMPT if contract
+                    else LOCAL_ASSISTANT_PROMPT
                     if connection.get("base_url", "").startswith(
                         ("http://127.0.0.1:", "http://[::1]:")
                     )
@@ -528,10 +598,14 @@ class DeploymentAgent:
             ],
             **generation_parameters(
                 connection,
-                max_tokens=reasoning_headroom_tokens(
-                    connection, assistant_budget(connection, message)["max_tokens"]
+                max_tokens=max(
+                    reasoning_headroom_tokens(
+                        connection, assistant_budget(connection, message)["max_tokens"]
+                    ),
+                    # VD-219: room for a whole contract answer, not a cap (D176).
+                    CONTRACT_ANSWER_TOKENS if contract else 0,
                 ),
-                temperature=0.1,
+                temperature=ASSISTANT_TEMPERATURE,
             ),
             **(
                 {} if managed
@@ -544,8 +618,13 @@ class DeploymentAgent:
         timeout = answer_timeout(connection, self.timeout_seconds)
         # Managed-local runs through local_answer, which retries once on a
         # degenerate (echoed or empty) reply before returning humanized text.
+        # VD-218: with a draft, the same request is streamed into it.
         if managed:
-            result = normalize_model_answer(local_answer(request_body, headers, timeout, connection, _chat_completion))
+            call = draft.completion if draft is not None else _chat_completion
+            restart = draft.restart if draft is not None else None
+            result = normalize_model_answer(
+                local_answer(request_body, headers, timeout, connection, call, restart=restart,
+                             contract=contract))
         else:
             body = _chat_completion(connection, request_body, headers, timeout)
             result = with_performance(normalize_model_answer(_parse_model_object(first_choice_content(body))), body)
@@ -621,6 +700,10 @@ class DeploymentAgent:
             return self._validate_answer(
                 recovery, source="built-in-recovery", question=message
             )
+        # Owner, VD-220: the time, date and time zone are read from this box's clock.
+        clock = clock_answer(message)
+        if clock is not None:
+            return self._validate_answer(clock, source=CLOCK_SOURCE, question=message)
 
         # A past-moment or identity question must not be answered with a
         # present reading about something else (#159). #144's rules for this
@@ -793,7 +876,7 @@ class DeploymentAgent:
                 max_tokens=reasoning_headroom_tokens(
                     connection, assistant_budget(connection, message)["max_tokens"]
                 ),
-                temperature=0.1,
+                temperature=ASSISTANT_TEMPERATURE,
             ),
         }, connection, PLANNER_PLAN_SCHEMA)
         body = _chat_completion(

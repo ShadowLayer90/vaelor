@@ -201,15 +201,20 @@ def configure_cluster(slots: Optional[int] = None) -> None:
 
 
 @contextmanager
-def cluster_inference_slot() -> Iterator[None]:
+def cluster_inference_slot(*, wait_seconds: float = 0.0) -> Iterator[None]:
     """Hold one of the bounded cluster-chat permits, or refuse fast.
 
     The engine batches, so several are admitted at once; past the bound the
     caller is refused with :data:`CLUSTER_BUSY_MESSAGE` rather than holding a
-    worker in a queue. Always released, including when the body raises.
+    worker in a queue. ``wait_seconds`` (0: refuse at once, as AI Chat does)
+    lets a caller that is not holding a request worker - a custom agent's run
+    (VD-220) - wait its turn first. Always released, including when the body
+    raises.
     """
     gate = _CLUSTER_GATE
-    if not gate.acquire(blocking=False):
+    acquired = (gate.acquire(timeout=wait_seconds) if wait_seconds and wait_seconds > 0
+                else gate.acquire(blocking=False))
+    if not acquired:
         _LOGGER.warning("cluster AI Chat slot refused: all permits are held")
         raise LocalModelBusy(CLUSTER_BUSY_MESSAGE)
     try:

@@ -5,13 +5,14 @@ from __future__ import annotations
 from flask import g, request
 
 from .agent_tasks import AgentTaskError
+from .ai_chat_model_lease import RESERVED_TASK_KEY, unattended_run
 from .assistant_memory import AssistantMemoryError
 from .assistant_skills import AssistantSkillError
 from .assistant_tools import AssistantToolError
 from .automations import AutomationError
 from .custom_agents import CustomAgentError
 from .rag_chat import RagChatError
-from .api_common import ApiContext, assistant_model_status, payload as _payload
+from .api_common import ApiContext, assistant_model_status, payload as _payload, runs_on_ai_chat
 from .api_assistant_memory_routes import register_assistant_memory_routes
 
 def register_assistant_routes(context: ApiContext) -> None:
@@ -218,7 +219,7 @@ def register_assistant_routes(context: ApiContext) -> None:
             required = set(profile["scopes"])
             profiles.append({
                 **profile,
-                "operational": bool(profile.get("enabled", True)) and model["ready"] and required.issubset(available_scopes),
+                "operational": bool(profile.get("enabled", True)) and (model["ready"] or bool(profile.get("custom"))) and required.issubset(available_scopes),
                 "model_required": True,
                 "model_ready": model["ready"],
                 "tools": [
@@ -419,8 +420,14 @@ def register_assistant_routes(context: ApiContext) -> None:
         # one. It carries no NPU execution binding (the NPU readiness gate below
         # is for the NPU binding), so the run_once GPU check is its real gate.
         use_capable = bool(body.get("use_capable_model"))
+        # VD-220: a custom agent runs on AI Chat's model, so the Assistant's readiness
+        # neither gates nor binds it. A client key may not pose as a schedule's (R204).
+        if unattended_run(body):
+            return _payload(error={"code": "invalid_agent_task", "message": RESERVED_TASK_KEY}, status=400)
+        definition = task_store.profile(str(body.get("profile", "system")), g.auth_session.username)
+        on_ai_chat = bool(definition and definition.get("custom"))
         model = assistant_model_status(callbacks, g.auth_session.username)
-        if not use_capable and not model["ready"]:
+        if not use_capable and not on_ai_chat and not model["ready"]:
             return _payload(
                 error={
                     "code": "assistant_model_required",
@@ -439,8 +446,8 @@ def register_assistant_routes(context: ApiContext) -> None:
                 idempotency_key=body.get("idempotency_key"),
                 dependencies=body.get("dependencies", []),
                 profile_version=body.get("profile_version"),
-                model_tier="capable" if use_capable else "",
-                execution_binding=None if use_capable else {
+                model_tier="capable" if use_capable and not on_ai_chat else "",
+                execution_binding=None if use_capable or on_ai_chat else {
                     "mode": model["mode"],
                     "provider": model["provider"],
                     "model": model["model"],
@@ -759,9 +766,9 @@ def register_assistant_routes(context: ApiContext) -> None:
     def assistant_automation_create():
         store = callbacks.get("automations")
         body = request.get_json(silent=True) or {}
-        if not assistant_model_status(
-            callbacks, g.auth_session.username
-        )["ready"]:
+        # VD-220: a custom agent's schedule runs on AI Chat's model, not the Assistant's.
+        actor = g.auth_session.username
+        if not runs_on_ai_chat(callbacks, actor, body.get("profile")) and not assistant_model_status(callbacks, actor)["ready"]:
             return _payload(
                 error={
                     "code": "assistant_model_required",

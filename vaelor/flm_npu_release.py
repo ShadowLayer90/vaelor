@@ -3,7 +3,7 @@
 The stock ``lemonade-server`` snap carries only public flm models, so the
 appliance's fine-tuned NPU model (Qwen3.5-4B, served on the neural processor)
 cannot arrive through it. It is delivered as a **GitHub release**: the model tar
-is ~3.35 GB, larger than a single release asset (capped at 2 GB), so it ships as
+is several GB (the pinned package's ``size_bytes``), larger than a single release asset (capped at 2 GB), so it ships as
 split ``<name>.tar.partNN`` parts. This module lists the release's assets,
 downloads those parts, concatenates them in name order into one tar, verifies
 that tar against a **pinned SHA-256** (the trust anchor is the catalog shipped in
@@ -34,21 +34,32 @@ import os
 import re
 import tarfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
-#: The split-part naming the release publishes for the NPU model. A downloaded
-#: asset is used only if its name matches this exactly, so a hostile or stray
-#: release asset cannot be pulled in as a "part". ``partNN`` is captured so the
-#: parts reassemble in NUMERIC order (``part10`` after ``part9``), not the lexical
-#: order a plain string sort would give.
-_MODEL_PART_PREFIX = "qwen35-4b-npu2.tar.part"
-_SAFE_PART_NAME = re.compile(r"^qwen35-4b-npu2\.tar\.part([0-9]{2,})$")
+from .npu_runtime_pin import serving_pair
+
+#: The split-part naming the release publishes for the NPU model: the serving
+#: pair's package names it (`npu_runtime_pin`, VD-219), so a retrained package
+#: under a new name needs no edit here. A downloaded asset is used only if its
+#: name is exactly ``<prefix>NN``, so a hostile or stray release asset cannot be
+#: pulled in as a "part". ``NN`` is read as a number so the parts reassemble in
+#: NUMERIC order (``part10`` after ``part9``), not the lexical order a plain
+#: string sort would give.
+_MODEL_PART_PREFIX = serving_pair().package.part_prefix
+
+
+def _part_index(name: str, prefix: str) -> Optional[int]:
+    """``NN`` of ``<prefix>NN`` (two or more ASCII digits), else ``None``."""
+    digits = name[len(prefix):] if name.startswith(prefix) else ""
+    if len(digits) < 2 or not (digits.isascii() and digits.isdigit()):
+        return None
+    return int(digits)
 
 #: A hard ceiling on the reassembled model, so a hostile release JSON pointing a
 #: part URL at an unbounded stream cannot exhaust the disk before the sha check.
-#: The real artifact is ~3.35 GB; 6 GiB leaves headroom without being unbounded.
+#: The packages so far are 3.2-3.4 GiB; 6 GiB leaves headroom without being unbounded.
 _MAX_MODEL_BYTES = 6 * 1024 * 1024 * 1024
 
 #: The release index is small JSON; cap its read so a hostile or MITM'd source
@@ -116,7 +127,9 @@ def _read_index(opener: Callable[[str], Any], url: str) -> bytes:
     return data
 
 
-def _release_part_urls(opener: Callable[[str], Any], release_url: str) -> List[str]:
+def _release_part_urls(
+    opener: Callable[[str], Any], release_url: str, prefix: str = _MODEL_PART_PREFIX
+) -> List[str]:
     """The model-part download URLs from a GitHub release, in numeric part order.
 
     Reads the release JSON (``.../releases/tags/<tag>``), keeps only assets whose
@@ -141,10 +154,10 @@ def _release_part_urls(opener: Callable[[str], Any], release_url: str) -> List[s
         if not isinstance(asset, dict):
             continue
         name = str(asset.get("name", ""))
-        if not name.startswith(_MODEL_PART_PREFIX):
+        if not name.startswith(prefix):
             continue
-        match = _SAFE_PART_NAME.fullmatch(name)
-        if not match:
+        index = _part_index(name, prefix)
+        if index is None:
             raise ReleaseInstallError(
                 "A release model part has an unexpected name: {}.".format(name)
             )
@@ -154,7 +167,7 @@ def _release_part_urls(opener: Callable[[str], Any], release_url: str) -> List[s
             raise ReleaseInstallError(
                 "A release model part is served from an unexpected host; refusing it."
             )
-        parts.append((int(match.group(1)), url))
+        parts.append((index, url))
     if not parts:
         raise ReleaseInstallError(
             "The release has no on-device model parts. If the repository is "
@@ -233,6 +246,7 @@ def install(
     *,
     expected_sha256: str = "",
     opener: Callable[[str], Any] = _default_opener,
+    part_prefix: str = _MODEL_PART_PREFIX,
 ) -> Dict[str, Any]:
     """Fetch, verify and unpack the NPU model release into the flm models dir.
 
@@ -270,7 +284,7 @@ def install(
 
     artifact_file = staging / "model.tar"
     try:
-        urls = _release_part_urls(opener, source_url)
+        urls = _release_part_urls(opener, source_url, part_prefix)
         got = _stream_parts_to_file(opener, urls, artifact_file)
         if got != trust:
             raise ReleaseInstallError(

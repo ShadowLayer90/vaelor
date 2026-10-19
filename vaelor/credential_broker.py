@@ -881,9 +881,12 @@ class CredentialVault:
             )
             raise error
         try:
-            if row["provider"] == "openai-compatible" and row["selected_model"]:
+            if row["provider"] == "openai-compatible":
                 profile = validate_compatible_profile(plaintext)
-                profile["model"] = row["selected_model"]
+                if row["selected_model"]:
+                    profile["model"] = row["selected_model"]
+                # VD-220: which credential this is, so the test can tell FastFlowLM (FLM_PENALTIES).
+                profile["credential_id"] = row["id"]
                 plaintext = json.dumps(profile, separators=(",", ":"))
             result = self._provider_tester(row["provider"], plaintext)
             status = "success" if result.get("ok") else "failed"

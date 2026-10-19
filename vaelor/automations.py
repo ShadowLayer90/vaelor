@@ -24,6 +24,11 @@ from .runtime_paths import env_value, state_path
 
 LOGGER = logging.getLogger(__name__)
 
+#: The task idempotency-key prefixes of a schedule's run and an alert rule's
+#: run. The agent runner reads them to tell an unattended run (VD-220).
+SCHEDULE_TASK_KEY = "automation:"
+ALERT_TASK_KEY = "trigger:"
+
 # The `worker` flag marks a signal a per-worker alert can be built on: one the
 # controller derives from a worker's reported row (control_plane_runtime
 # WORKER_SIGNAL_FIELDS), which today is cpu_temperature and memory_percent. A
@@ -803,7 +808,7 @@ class AutomationStore:
                 ),
                 kind="durable", profile=trigger["profile"], approval_required=False,
                 profile_version=(trigger["profile_version"] or None),
-                idempotency_key="trigger:{}:{}".format(trigger["id"], int(now)),
+                idempotency_key="{}{}:{}".format(ALERT_TASK_KEY, trigger["id"], int(now)),
             )
         except ValueError as error:
             self._record_trigger_error(
@@ -923,7 +928,7 @@ class AutomationRunner:
                     profile=automation["profile"],
                     profile_version=(automation["profile_version"] or None),
                     approval_required=False,
-                    idempotency_key="automation:{}:{}".format(
+                    idempotency_key=SCHEDULE_TASK_KEY + "{}:{}".format(
                         automation["id"], int(automation["next_run_at"])
                     ),
                 )

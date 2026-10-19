@@ -1,5 +1,172 @@
 # Change log
 
+## 1.5.4
+
+An Assistant release. The on-device Assistant on the neural processor (NPU) gets
+a new model, trained for the job it does, on a newer FastFlowLM. Its answers are
+read whole, shown as they are written, and built from the readings each question
+needs. Questions that are not about the appliance now go to AI Chat, and custom
+agents run on AI Chat's model instead of the NPU.
+
+### Upgrading from 1.5.3
+
+- **Update Vaelor from the console** (**System › Hardware and services ›
+  Update Vaelor**), or re-run the installer; both end in the same state.
+- **The Assistant's new runtime and model download in the background after the
+  update** (about 3.4 GB) while the current Assistant keeps answering. Vaelor
+  then switches to them, which takes the Assistant offline for about ten
+  seconds, and asks the new model a question whose answer was recorded when the
+  model was released. If the answer does not match, or the new pair does not
+  start, the machine is put back exactly as it was and the Assistant keeps
+  working as in 1.5.3. The previous runtime and model are kept beside the new
+  ones until the next switch.
+
+### Upgrading from 1.5.1 or 1.5.2
+
+- Update from the console, as from 1.5.3.
+- **One caution, for this one update:** The first update from the console into this release is applied by the updater of the release it replaces, which does not take the update lock. While that one update runs, do not start another update or run the installer. Its model refresh and build steps already take the lock, and every update after it is fully protected.
+- **Updating from 1.5.1:** the update page you start it from is 1.5.1's own and does not refresh by itself, so reload the page about a minute after you press Confirm update to follow the rest of the update.
+
+### A new Assistant model, on FastFlowLM 1.0.9
+
+- **The model was retrained for the Assistant's job.** The model 1.5.3 shipped
+  was trained only on agent tasks, never on answering an owner's questions about
+  the machine. The new one is a fresh fine-tune of Qwen3.5-4B on examples of the
+  Assistant's own answers, each written from real machine readings and checked
+  against them, together with the agent tasks and examples of handing general
+  questions to AI Chat.
+- **It runs on FastFlowLM 1.0.9** (1.5.3 used 1.0.2). The runtime and the model
+  are pinned as one pair: the installer and the console's update install both
+  or neither, check every file against the checksums pinned in Vaelor before
+  switching, and refuse a model package the runtime would quietly replace with
+  its own stock model.
+- **Measured on the Z2 Mini's NPU**, with the questions owners actually asked
+  and others the model never saw in training:
+  - every one of 44 real questions, and of 20 new held-out questions, got a
+    whole answer;
+  - Vaelor's own NPU test (appliance, diagnostics, honesty and hand-off cases)
+    passed 49 of 49, and 5 of 5 fresh honesty questions;
+  - a whole answer took 12.7 seconds (median), with the first words after
+    5.3 seconds. 1.5.3's model, given the same new readings, took about 31
+    seconds and 6.7 seconds;
+  - graded blind against the machine's readings, its answers carried about 0.2
+    errors each. 1.5.3's model carried about 1.3; that grade was made earlier,
+    by a different grader, so the comparison is approximate.
+- **Known weak spots:** working out the processor's load from its temperature
+  when the question is worded in a new way; questions about how close a reading
+  is to its limit; and two new habits, suggesting a reboot "when the GPU work
+  allows" while the GPU is idle, and suggesting freeing root disk space at 70%.
+
+### Better answers from the Assistant
+
+- **Answers appear as they are written.** If you leave or reload the page
+  mid-answer, the answer finishes in the background and is saved, so it is
+  there when you come back. **Stop** ends it.
+- **Stop no longer wears out the NPU's server.** With FastFlowLM 1.0.2, ten
+  Stops could take the Assistant down until Vaelor restarted it; Vaelor now
+  lets a stopped answer run to its end out of sight instead of hanging up on
+  it. Stop still clears the answer at once, but the NPU stays busy until the
+  stopped answer ends (about 20 seconds, measured on 1.0.2) and the next
+  question waits for it.
+- **No hidden second ask.** A reply that was only an empty tool call used to be
+  asked again silently, which doubled the wait. The honest answer from the
+  readings is shown instead, and the timing line counts every model call.
+- **Answers are read whole.** The model is asked in the reply format it was
+  trained on, and Vaelor turns that into plain text: a summary, then the
+  details, with sources on their own line. A reply that lists only sources, or
+  copies a reading back, is asked once more.
+- **Each question gets the readings it needs, kept small.** The readings the
+  question names come in detail, the rest in one line each; history is thinned
+  out. A typical prompt is now about 1,500 tokens, and at most about 1,850.
+  Measured on the Z2 Mini with 1.5.3's model, against the readings it had
+  before: the first words came after 5.6 seconds instead of 8.7, and the share
+  of wrong or invented claims fell from 33% to 8.4%.
+- **Clearer readings:** temperatures carry their own limits, the services line
+  names every service and says which are not running, the updates line says
+  plainly whether updates are waiting or a reboot is pending, and memory and
+  disk figures say "X of Y GB used (P%)".
+- **The Assistant answers "what time is it?", "what's the date?" and the time
+  zone** from the machine's own clock.
+- **Steady answers.** The Assistant asks its model at temperature 0, the
+  setting every test measured (it sent 0.1 before). Every request Vaelor sends
+  to FastFlowLM now sets its presence and frequency penalties to 0. FastFlowLM
+  keeps those settings from one request to the next, so an answer could depend
+  on the request before it; in testing, the penalties also made the model drop
+  digits from numbers.
+
+### The Assistant is for the appliance; other questions go to AI Chat
+
+- **General questions are handed to AI Chat**, with an **Open AI Chat** button:
+  for example "summarise the planet Saturn" or "what is the capital of France?". The
+  model also learnt to hand such a question over itself when the fixed rules
+  miss its wording.
+- **Appliance questions stay with the Assistant**, including ones that were
+  sent away before: the processor's speed, state or load, the graphics
+  processor, "how is the computer doing", "how do I restart Jellyfin", the load
+  average, and questions naming a cluster machine or an installed app. "US" in
+  "US dollars" is no longer read as "us", meaning this machine.
+- **When in doubt, the Assistant keeps the question.** A hand-off goes through
+  only for a recognisable general-knowledge question with no appliance word,
+  name or pointer in it ("this computer", "here", "we" and "our" count as
+  pointers). Otherwise the Assistant shows a short notice instead: for a
+  clearly appliance question it asks you to name the reading; for anything else
+  it offers AI Chat. So a few general questions get the notice rather than the
+  hand-off, for example "what's the temperature in Osaka?", which contains a
+  reading word, or "tell me a joke".
+
+### Custom agents run on AI Chat's model
+
+- **Custom agents now use the model AI Chat uses,** wherever it points: this
+  machine's GPU, the cluster, or a hosted service. They no longer run on the
+  NPU. **If AI Chat uses a hosted service, a custom agent's prompts and the
+  pages it fetches are sent to that service.**
+- With no AI Chat model set up, a custom agent says so at once and does not
+  run. If the cluster's model has been unloaded while idle, a run started by
+  hand starts waking it and reports it unavailable for that run; a scheduled or
+  alert-triggered run waits up to five minutes for the wake, then runs.
+- If AI Chat's model is busy, an agent waits its turn for up to two minutes,
+  then fails with a plain reason. AI Chat itself may briefly say the model is
+  busy while an agent step runs.
+- The agent screens say which model the agents run on and, when it is not
+  ready, what to do (for example "load it in Cluster › Deployments").
+- Built-in specialists, the deploy planner and custom-app research stay on the
+  NPU.
+
+The test suite, the training data and the developer tools also changed; none
+of that ships.
+
+### Tested live
+
+- **On the Z2 Mini, through the installer** (from a development build, not
+  from 1.5.3): the Assistant switched to FastFlowLM 1.0.9 and the new model by
+  itself in 11 seconds, every file of the model matched its checksum, the new
+  model answered the recorded question exactly, and the cluster's model kept
+  serving throughout.
+- The switch and the automatic return to the previous pair were also run on
+  the Z2 Mini's NPU with test copies: a package FastFlowLM would replace was
+  refused before anything stopped, a wrong answer put the old pair back, and
+  the old pair answered again.
+- The model measurements above were made on the Z2 Mini's NPU. The Stop
+  change was run live with 36 Stops on one FastFlowLM 1.0.2 server, with no
+  connection lost.
+
+### Not verified in this release
+
+- **The console update from 1.5.3 (or earlier) to 1.5.4 has not been run
+  live.** In particular, the Assistant's background download and switch after
+  a console update have run only on test copies, not after a real update.
+- **1.5.4 has not had a cold install,** and the model's download from this
+  release's files has not been run live: the Z2 Mini was given the same
+  package from a local copy.
+- The custom agents' move to AI Chat's model and the Assistant's new hand-off
+  notices are covered by tests and installed on the Z2 Mini, but have not yet
+  been checked in the console.
+- How long Stop keeps the NPU busy was measured on FastFlowLM 1.0.2, not on
+  1.0.9.
+- Still open from 1.5.2: the ZBook worker's build of the 4-bit guesser has run
+  live only once, and AI Chat does not yet trim a conversation to fit the
+  context window a connection declares.
+
 ## 1.5.3
 
 An update release: updating from the console now leaves a machine in the same

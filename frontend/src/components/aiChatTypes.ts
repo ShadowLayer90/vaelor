@@ -182,4 +182,10 @@ export interface AiChatSetup {
   collections: AiChatCollection[];
   limits: { document_bytes: number; collections: number };
   retrieval: string;
+  /**
+   * VD-220: the custom-agent runner's own verdict on AI Chat's model
+   * (`ai_chat_model_lease.custom_agent_readiness`): its state, whether it
+   * blocks New agent, runs and schedules, its sentence, and the model's label.
+   */
+  custom_agents?: { state: string; blocks: boolean; sentence: string; label: string };
 }

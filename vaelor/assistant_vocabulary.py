@@ -85,6 +85,10 @@ MACHINE_SET_PHRASES: Tuple[str, ...] = (
     "every machine", "each machine", "all machines", "every node", "each node", "all nodes",
 )
 
+#: The console feature's name as an owner says it. Read by the gather table
+#: and by the history scope (`assistant_machine_history`), one spelling.
+AI_CHAT_PHRASE = "ai chat"
+
 #: The serving speed, which the cluster digest carries (VD-205 item 4, review B7).
 SPEED_PHRASES: Tuple[str, ...] = ("tokens per second", "token throughput", "throughput")
 
@@ -137,6 +141,8 @@ TOOL_PHRASES: Dict[str, Tuple[str, ...]] = {
     "inference.status": MODEL_PHRASES + (
         "inference", "context window", "token", "tokens", "generation",
         "slow", "sluggish",
+        # VD-219: "is AI Chat ready to use" gathered no inference reading.
+        AI_CHAT_PHRASE,
     ),
     # The progressive and past forms were in the *answer* table and not here,
     # so "is the system updating right now" gathered nothing and the branch
@@ -155,6 +161,9 @@ TOOL_PHRASES: Dict[str, Tuple[str, ...]] = {
         # a failure admitted a service reading that had never been fetched.
         "failed", "failure", "issue", "issues",
         "is everything ok", "anything wrong", "shouldn't be", "should not be",
+        # VD-219: "has anything crashed" and "are the brokers up" gathered no
+        # service reading; the credential and workload brokers are services.
+        "crash", "crashed", "crashes", "broker", "brokers",
         RUNNING_NOT_THERMAL,
     ),
     # **The fault question, which had no tool.** VD-041 gave fault vocabulary
@@ -207,6 +216,9 @@ TOOL_PHRASES: Dict[str, Tuple[str, ...]] = {
         "online", "offline", "connection", "connectivity", "latency", "ping",
         "ip", "ips", "ip address", "ipv4", "ipv6", "address", "addresses",
         "hostname", "host name", "subnet", "gateway", "mac address",
+        # VD-219: "which interface is the default route on" and "is there a
+        # Thunderbolt link" gathered no network reading.
+        "interface", "interfaces", "default route", "routes", "thunderbolt",
     ),
     # **Retained telemetry samples, which nothing was gathering.**
     # `assistant_answer_scope.past_time_answer` reads `metrics.history` to
@@ -252,7 +264,7 @@ TOOL_PHRASES: Dict[str, Tuple[str, ...]] = {
     "workloads.inventory": (
         "app", "apps", "application", "applications", "container", "containers",
         "docker", "compose", "stack", "model", "models", "llm", "local ai",
-        "workload", "workloads", "installed", RUNNING_NOT_THERMAL,
+        "workload", "workloads", "installed", "deployed", RUNNING_NOT_THERMAL,
     ),
     "workloads.capabilities": (
         "deploy", "deployment", "install", "installing", "hugging", "catalog",
@@ -265,6 +277,9 @@ TOOL_PHRASES: Dict[str, Tuple[str, ...]] = {
         # so "how is the download going" admitted a job reading nothing had
         # fetched.
         "progress", "download", "downloading",
+        # VD-219: "did the last install finish" and "can I install Immich
+        # here" are answered by the install jobs, which nothing fetched.
+        "install", "installing", "finish", "finished",
         # ``installing`` is the running job, and it reached only
         # `workloads.capabilities` - so "is anything still installing" was
         # answered from the deployment catalogue with no job reading in hand.

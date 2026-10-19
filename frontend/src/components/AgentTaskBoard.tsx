@@ -14,6 +14,10 @@ import { useOperationOwner } from "../hooks/useOperationOwner";
 import { leakedListItems } from "../lib/leakedList";
 import type { AgentTask, AgentWriteProposal, HandoffTarget } from "./agentTypes";
 import { evidenceSourceLabel } from "../lib/evidenceSourceLabels";
+import { aiChatUnavailableSentence, GoToAiChat, isCustomAgentTask, runErrorText } from "./customAgentModel";
+
+/** Where a custom agent's run ran (VD-220): AI Chat's model, not a binding. */
+const RUNS_ON_AI_CHAT = "Runs on AI Chat's model";
 
 /** Runs per page of the Evidence card; the rest page client-side. */
 const RUNS_PER_PAGE = 6;
@@ -125,7 +129,13 @@ function AgentTaskOwner({ task, csrfToken, onRefresh }: { task: AgentTask; csrfT
       operation={owner.operation}
       title={`${applianceCopy(task.title)} · durable run owner`}
     >
-      {task.result.capability_audit?.execution_binding && (
+      {/* R192 / VD-220: the runner ignores a custom run's binding, so it is
+          never shown as one (nor offered for rebinding); it says where it ran. */}
+      {isCustomAgentTask(task) ? (
+        <dl className="as-kv ah-owner__binding">
+          <div><dt>Model</dt><dd>{RUNS_ON_AI_CHAT}</dd></div>
+        </dl>
+      ) : task.result.capability_audit?.execution_binding && (
         <dl className="as-kv ah-owner__binding">
           <div><dt>Execution binding</dt><dd className="as-mono">{task.result.capability_audit.execution_binding.mode || "active"}</dd></div>
           <div><dt>Provider</dt><dd>{task.result.capability_audit.execution_binding.provider || "Runtime selected"}</dd></div>
@@ -205,7 +215,10 @@ function RunRow({
   task: AgentTask;
 }) {
   const { busy, handoffSelections, handoffTargets } = props;
-  const primary = applianceCopy(task.result.summary || task.error || task.description);
+  const primary = applianceCopy(task.result.summary || runErrorText(task.error) || task.description);
+  const custom = isCustomAgentTask(task);
+  // A custom agent already runs on AI Chat's model: no "more capable" re-run (VD-220).
+  const escalation = !custom && task.result.escalation_available;
   const asked = applianceCopy(task.description || "");
   // #247w: a run that finished but could not verify an answer travels
   // as state "completed" with outcome "needs_input". It is not healthy
@@ -225,6 +238,7 @@ function RunRow({
       <div className="ah-run__main">
         <span className="as-small as-muted ah-run__meta">{applianceProfileLabel(task)} · run {task.id.slice(-8)} · {task.kind}</span>
         <h3 className="ah-run__title">{applianceCopy(task.title)}</h3>
+        {custom && <span className="as-small as-muted">{RUNS_ON_AI_CHAT}</span>}
         {/* A result that arrived as a Python list literal is a list, not a
             sentence with brackets and quotes in it. */}
         {listed
@@ -310,16 +324,17 @@ function RunRow({
               model available can be re-run on it. Only the model changes - the
               same approval and read-only envelope still apply. Shown only when
               escalation is available; never on a clean success. */}
-          {task.result.escalation_available && (
+          {escalation && (
             <Button disabled={busy} onClick={() => props.onEscalate(task)} type="button">Retry on the more capable model</Button>
           )}
+          {aiChatUnavailableSentence(task.error) && <GoToAiChat />}
           {hasResult && (
             <Button onClick={() => props.onDiscuss(task)} type="button">Discuss this result</Button>
           )}
           <Button aria-expanded={expanded} className="as-btn-ghost" onClick={onToggle} type="button" variant="quiet">
             {expanded ? "Hide full run details" : "View full run"}
           </Button>
-          {task.result.escalation_available && (
+          {escalation && (
             <span className="as-small as-muted">Runs the same task on the graphics model (shared with AI Chat).</span>
           )}
         </div>

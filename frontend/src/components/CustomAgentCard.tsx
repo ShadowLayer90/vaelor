@@ -5,6 +5,7 @@ import { StatusPill } from "./StatusPill";
 import type { AgentProfile, AgentTask } from "./agentTypes";
 import { agentTaskNeedsInput, agentTaskStateLabel, NEEDS_INPUT_LABEL } from "./AgentRunWorkspace";
 import { agentGrantsLine } from "./customAgentDraft";
+import { aiChatUnavailableSentence, GoToAiChat, RunsOnAiChatModel, runErrorText, type AiChatModelRead } from "./customAgentModel";
 import { evidenceSourceLabel } from "../lib/evidenceSourceLabels";
 
 export type AgentRevision = { version: number; action: string; created_at: number };
@@ -35,6 +36,7 @@ const RUN_TONE: Record<string, StatusTone> = {
  */
 export function CustomAgentCard({
   agent,
+  aiChatModel = { state: "unread" },
   appAccessOpen,
   busy,
   modelReady,
@@ -58,8 +60,11 @@ export function CustomAgentCard({
   triggerCount,
 }: {
   agent: AgentProfile;
+  /** AI Chat's model, which an Assistant custom agent runs on (VD-220). */
+  aiChatModel?: AiChatModelRead;
   appAccessOpen: boolean;
   busy: boolean;
+  /** Whether this agent may run now: AI Chat's model, which it runs on, is not known to be absent (VD-220). */
   modelReady: boolean;
   onApprove: (task: AgentTask) => void;
   onAutomate: () => void;
@@ -93,6 +98,8 @@ export function CustomAgentCard({
         <h3 className="ar-agent__name">{agent.name}</h3>
         <p className="ar-agent__purpose">{agent.description}</p>
         <span className="ar-meta">{agentGrantsLine(agent)}</span>
+        {/* VD-220: where it runs. A cluster inference agent runs on the fleet instead. */}
+        {runtimeManaged && <RunsOnAiChatModel model={aiChatModel} />}
         {/*
           * The schedule state is a pill, not a paragraph. Six agents meant six
           * copies of the same twenty-three-word notice, which is a list-level
@@ -151,7 +158,7 @@ export function CustomAgentCard({
       <div className="ar-agent__actions">
         <div className="ar-actions">
           {agent.enabled && runtimeManaged && (
-            <Button disabled={busy} disabledReason={modelReady ? undefined : runBlockedReason ?? "The Assistant model is not answering."} onClick={onRun} variant="primary">Run</Button>
+            <Button disabled={busy} disabledReason={modelReady ? undefined : runBlockedReason ?? "AI Chat's model is not available."} onClick={onRun} variant="primary">Run</Button>
           )}
           <Button onClick={onEdit}>Edit</Button>
           <MoreMenu
@@ -280,7 +287,7 @@ function CustomAgentRunRow({
             : "Approved. Waiting for the runner to pick it up."}
         </p>
       )}
-      {(task.result.summary || task.error || task.description) && <p className="ar-run__summary">{task.result.summary || task.error || task.description}</p>}
+      {(task.result.summary || task.error || task.description) && <p className="ar-run__summary">{task.result.summary || runErrorText(task.error) || task.description}</p>}
       {task.approval_context && (
         <p className="ar-meta">
           {reviewedVersion === agentVersion
@@ -319,6 +326,7 @@ function CustomAgentRunRow({
       {["failed", "cancelled", "blocked"].includes(task.state) && (
         <div className="ar-actions">
           <Button disabled={busy} onClick={onRetry}>Retry as a new run</Button>
+          {aiChatUnavailableSentence(task.error) && <GoToAiChat />}
         </div>
       )}
     </li>

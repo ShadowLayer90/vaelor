@@ -12,7 +12,11 @@ from .agent_research_relevance import clarifying_questions
 from .agent_search_planner import acquire_web_research
 from .agent_result_shape import (
     OUTCOME_NEEDS_INPUT, OUTCOME_NO_RESULT, capable_model_name,
-    escalation_offer, task_outcome,
+    escalation_offer, failure_escalation, structured_result, task_outcome,
+)
+from .ai_chat_model_lease import (
+    AGENT_MODE, AI_CHAT_UNAVAILABLE_CODE, CANCELLED, STOPPED, WAKING, AgentRunCancelled, AiChatModelBusy, bind_run,
+    custom_agent_model, unattended_run, wait_for_wake,
 )
 from .agent_tool_loop import (
     AgentToolLoopFallback,
@@ -22,7 +26,7 @@ from .agent_tool_loop import (
 )
 from .model_reachability import note_inference_outcome
 from .agent_knowledge import attach_write_proposal, retrieve_agent_knowledge
-from .agent_tasks import AgentTaskError
+from .agent_tasks import AI_CHAT_LANE, ASSISTANT_LANE, AgentTaskError
 from .assistant_action_proposals import (
     ActingProposalError,
     managed_projects,
@@ -98,60 +102,6 @@ def _pinned_app_operation(grants: list[dict[str, Any]], grant_id: str, operation
             if isinstance(operation, dict) and str(operation.get("operation_id", "")) == operation_id:
                 return grant, operation
     return None, None
-
-
-def _structured_result(value: Any) -> dict[str, Any]:
-    """Normalize model output into the fields the UI and audit ledger understand."""
-    if not isinstance(value, dict):
-        raise AgentTaskError("The selected model did not return a structured result.")
-
-    def strings(key: str, limit: int = 8) -> list[str]:
-        raw = value.get(key, [])
-        if isinstance(raw, str):
-            raw = [raw]
-        if not isinstance(raw, list):
-            return []
-        return [" ".join(str(item).split())[:800] for item in raw[:limit] if str(item).strip()]
-
-    def references(key: str) -> list[dict[str, str]]:
-        raw = value.get(key, [])
-        if not isinstance(raw, list):
-            return []
-        result = []
-        for item in raw[:20]:
-            if not isinstance(item, dict):
-                continue
-            source = str(item.get("source") or item.get("url") or item.get("title") or "").strip()[:400]
-            summary = " ".join(str(item.get("summary") or item.get("excerpt") or "").split())[:800]
-            if source:
-                result.append({"source": source, "summary": summary})
-        return result
-
-    normalized: dict[str, Any] = {
-        "source": str(value.get("source", "custom-agent-model"))[:80],
-        "summary": " ".join(str(value.get("summary", "Review completed.")).split())[:1200],
-        "findings": strings("findings"),
-        "recommendations": strings("recommendations"),
-        "next_actions": strings("next_actions"),
-        "evidence": references("evidence"),
-        "sources": references("sources"),
-        # A model that recognises an ambiguous or under-specified task may ask
-        # for more detail rather than guess. Kept here so the runner can surface
-        # it; the runner's own deterministic questions (#247w) are the guarantee
-        # when the model does not, since normalization otherwise drops it.
-        "clarifications": strings("clarifications"),
-        "warnings": strings("warnings"),
-        "errors": strings("errors"),
-        "executed_changes": False,
-        # A run that never reached the model is not the same as one that did.
-        # This was previously visible only as the first line of the findings
-        # list, inside a collapsed disclosure, under a green "completed" badge.
-        "degraded": bool(value.get("fallback_used")),
-    }
-    answer = " ".join(str(value.get("answer", "")).split())[:5000]
-    if answer:
-        normalized["answer"] = answer
-    return normalized
 
 
 #: Fact keys produced by the guarded web pipeline. Everything else in `facts` -
@@ -237,8 +187,16 @@ class AgentTaskRunner:
         administrator_resolver=None,
         memory_store=None,
         learning_store=None,
+        ai_chat_model=None,
     ):
         self.store = store
+        # VD-220: a zero-arg callable answering AI Chat's model for one custom
+        # agent's run (the control plane passes AI Chat's cluster wake). None:
+        # the agent's own broker, no wake; a double with no broker asks status.
+        self.ai_chat_model = ai_chat_model or (
+            (lambda: custom_agent_model(agent.credential_broker))
+            if hasattr(agent, "credential_broker") else None
+        )
         self.tools = tools
         self.agent = agent
         # A queued task carries an actor but no role, and the queue outlives the
@@ -260,26 +218,31 @@ class AgentTaskRunner:
         self.connector_runtime = connector_runtime
         self.app_capability_broker = app_capability_broker
         self._stop = threading.Event()
-        self._thread = None
+        self._threads = []
 
     def start(self):
-        if self._thread and self._thread.is_alive():
+        if any(thread.is_alive() for thread in self._threads):
             return
         self.store.recover_stale()
-        self._thread = threading.Thread(
-            target=self._loop, name="pm-agent-task-runner", daemon=True
-        )
-        self._thread.start()
+        # VD-220 (review R204): one lane per model. A custom agent waiting for
+        # AI Chat's model (a wake, a busy turn) never holds up an NPU run.
+        self._threads = [
+            threading.Thread(target=self._loop, args=(lane,), daemon=True,
+                             name="pm-agent-task-runner-" + lane)
+            for lane in (ASSISTANT_LANE, AI_CHAT_LANE)
+        ]
+        for thread in self._threads:
+            thread.start()
 
     def stop(self):
         self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=3)
+        for thread in self._threads:
+            thread.join(timeout=3)
 
-    def _loop(self):
+    def _loop(self, lane=None):
         while not self._stop.is_set():
             try:
-                completed = self.run_once()
+                completed = self.run_once(lane)
             except Exception:
                 # A malformed persisted definition or an unavailable backing
                 # store must not kill the appliance's sole durable runner.
@@ -300,10 +263,18 @@ class AgentTaskRunner:
             )
             return False
 
-    def run_once(self):
-        task = self.store.claim_next()
+    def run_once(self, lane=None):
+        task = self.store.claim_next(lane) if lane else self.store.claim_next()
         if task is None:
             return None
+        bind_run(lambda: self.store.heartbeat(task["id"]))
+        try:
+            return self._run_task(task)
+        finally:
+            bind_run(None)
+
+    def _run_task(self, task):
+        profile = {}
         try:
             self.store.heartbeat(task["id"])
             current_profile = self.store.profile(task["profile"], task["actor"])
@@ -332,8 +303,10 @@ class AgentTaskRunner:
                 )
                 if self.preference_store is not None else ""
             )
+            # A binding records the Assistant's model; a custom agent runs on AI
+            # Chat's (VD-220), so an old NPU binding never blocks it (LESSONS 22).
             binding = task.get("execution_binding") or {}
-            if binding:
+            if binding and not profile.get("custom"):
                 bound_mode = str(binding.get("mode", "")).strip().lower()
                 if bound_mode in {"local", "provider"}:
                     mode = bound_mode
@@ -370,7 +343,24 @@ class AgentTaskRunner:
             model_tier = "capable" if str(task.get("model_tier") or "").strip().lower() == "capable" else ""
             if model_tier == "capable":
                 mode = "capable"
+            capable = model_tier == "capable"
             if profile.get("custom"):
+                # VD-220 (owner): AI Chat's model, wherever it points, never the
+                # NPU; with none the run fails now with the reason - no wait.
+                mode, model_tier = AGENT_MODE, ""
+                chosen = self.ai_chat_model() if self.ai_chat_model else None
+                if chosen is not None and chosen.state == WAKING and unattended_run(task):
+                    # VD-220 (owner): a schedule or alert run waits for the
+                    # wake it started, bounded; a hand-started run does not.
+                    chosen = wait_for_wake(self.ai_chat_model, wait=self._stop.wait,
+                                           heartbeat=lambda: self.store.heartbeat(task["id"]))
+                    if chosen.state in (CANCELLED, STOPPED):
+                        # Cancelled: already ended. Stopped: left running for
+                        # recover_stale. Either way nothing is sent.
+                        return self.store.get(task["id"], task["actor"])
+                if chosen is not None and chosen.connection is None:
+                    raise AgentTaskError(AI_CHAT_UNAVAILABLE_CODE + ": " + chosen.reason)
+                capable = bool(chosen and chosen.capable)
                 if not hasattr(self.agent, "status"):
                     raise AgentTaskError(
                         "model_configuration: custom agents require a configured AI model runtime."
@@ -646,7 +636,7 @@ class AgentTaskRunner:
                         self.agent, self.tools, task["description"], profile,
                         model_context, mode, actor=task["actor"],
                         administrator=administrator, granted_scopes=scopes,
-                        web_access=web_access, capable=(model_tier == "capable"),
+                        web_access=web_access, capable=capable,
                     )
                     tool_loop_audit = {
                         "path": "native_tool_loop", "invocations": loop_invocations,
@@ -742,7 +732,7 @@ class AgentTaskRunner:
                 sanitize_proposed_operations(result)
                 if profile.get("custom") else []
             )
-            result = _structured_result(result)
+            result = structured_result(result)
             # #247w / LESSONS 8: the surfaced "sources it used" must be the run's
             # real, relevance-filtered candidate set - never a URL the model
             # invented. The gate is the GRANT, not search success: a web-enabled
@@ -819,7 +809,8 @@ class AgentTaskRunner:
                 "user_context_policy": context_policy,
                 # Which model tier actually ran: the default NPU deployment-agent
                 # model, or the GPU ai-chat model a user escalated onto.
-                "model_tier": "gpu/ai-chat" if model_tier == "capable" else "npu/deployment-agent",
+                "model_tier": "ai-chat" if profile.get("custom") else (
+                    "gpu/ai-chat" if model_tier == "capable" else "npu/deployment-agent"),
                 "direct_network": False,
                 "shell": False,
                 "secret_access": False,
@@ -958,7 +949,8 @@ class AgentTaskRunner:
             # GPU model. The GPU lease is probed only when the run underperformed,
             # so a clean native-tool-loop delivery's path is byte-for-byte the same.
             fell_back = loop_was_eligible and (tool_loop_audit or {}).get("path") == "prefetch_fallback"
-            if model_tier != "capable" and (
+            # A custom agent already runs on AI Chat's model: nothing to offer.
+            if model_tier != "capable" and not profile.get("custom") and (
                 result.get("degraded")
                 or result.get("outcome") in (OUTCOME_NO_RESULT, OUTCOME_NEEDS_INPUT)
                 or fell_back
@@ -977,23 +969,14 @@ class AgentTaskRunner:
                 task["id"], task["actor"], "completed", result=result
             )
         except Exception as error:
+            if isinstance(error, AgentRunCancelled):
+                return self.store.get(task["id"], task["actor"])
             message = " ".join(str(error).split())[:400]
             safe_error = (
-                message if isinstance(error, AgentTaskError)
+                message if isinstance(error, (AgentTaskError, AiChatModelBusy))
                 else "The agent could not complete this task. Retry once or review the selected model."
             )
-            # A failure is the clearest case for offering the capable GPU model -
-            # the NPU one did not complete the task at all - unless this run was
-            # already on the capable tier or no GPU model is available.
-            failure_result = None
-            try:
-                offer = escalation_offer(
-                    capable_model_name(self.agent),
-                    model_tier=str(task.get("model_tier") or ""), failed=True,
-                )
-                failure_result = {"escalation_available": offer} if offer else None
-            except Exception:
-                failure_result = None
+            failure_result = failure_escalation(self.agent, task, custom=bool(profile.get("custom")))
             return self.store.transition(
                 task["id"], task["actor"], "failed", error=safe_error,
                 result=failure_result,

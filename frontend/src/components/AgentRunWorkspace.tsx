@@ -2,6 +2,7 @@ import type { AgentTask } from "./agentTypes";
 import { leakedListItems } from "../lib/leakedList";
 import { Button, Notice } from "./ui";
 import { evidenceSourceLabel } from "../lib/evidenceSourceLabels";
+import { AiChatUnavailableNotice, aiChatUnavailableSentence } from "./customAgentModel";
 
 /**
  * The result of running an agent, shown where the run was started.
@@ -118,6 +119,9 @@ export function AgentRunResult({ task }: { task: AgentTask }) {
     && !result.clarifications?.length;
 
   if (task.state === "failed" || task.state === "blocked") {
+    // VD-220: AI Chat's model could not take the run - said plainly, with the way there.
+    const unavailable = aiChatUnavailableSentence(task.error);
+    if (unavailable) return <AiChatUnavailableNotice sentence={unavailable} />;
     return (
       <Notice severity="danger">
         <span>{task.error || result.summary || "This run did not produce a result."}</span>
@@ -195,39 +199,12 @@ export function AgentRunResult({ task }: { task: AgentTask }) {
   );
 }
 
-/**
- * The user-triggered re-run on the more capable model.
- *
- * A custom agent runs on the small NPU model by default. When that run
- * underperforms - it fails, falls back to built-in diagnostics, or produces no
- * usable answer - and a GPU model is available, the run carries
- * `escalation_available` and the user can re-run the SAME task on the graphics
- * model that powers AI Chat. It is never shown on a clean success. The action
- * changes only the model, not what the run is allowed to do.
+/*
+ * This surface is the custom-agent run dialog's only. A custom agent runs on
+ * AI Chat's model (VD-220), so it carries no "more capable model" re-run: an
+ * old run that still has `escalation_available` is shown without it. Built-in
+ * appliance checks keep theirs on the History board (AgentTaskBoard).
  */
-export function EscalationAction({
-  task,
-  busy,
-  onEscalate,
-}: {
-  task: AgentTask;
-  busy: boolean;
-  onEscalate: () => void;
-}) {
-  const escalation = task.result?.escalation_available;
-  if (!escalation) return null;
-  return (
-    <div className="ar-escalate">
-      <Button disabled={busy} onClick={onEscalate} type="button" variant="primary">
-        Retry on the more capable model
-      </Button>
-      <p className="ar-meta">
-        Runs the same task on the graphics model (shared with AI Chat).
-      </p>
-    </div>
-  );
-}
-
 export function AgentRunWorkspace({
   task,
   busy,
@@ -236,7 +213,6 @@ export function AgentRunWorkspace({
   onRetry,
   onClose,
   onRunAgain,
-  onEscalate,
 }: {
   task: AgentTask;
   busy: boolean;
@@ -245,7 +221,6 @@ export function AgentRunWorkspace({
   onRetry: () => void;
   onClose: () => void;
   onRunAgain: () => void;
-  onEscalate: () => void;
 }) {
   const finished = ["completed", "archived", "failed", "cancelled", "blocked"].includes(task.state);
   // Stopped short of an answer: failed, cancelled or blocked (STOPPED, less a finished archive).
@@ -256,7 +231,6 @@ export function AgentRunWorkspace({
         <p className="ar-run-request"><strong>You asked:</strong> {task.description}</p>
         <AgentRunProgress task={task} />
         {finished && <AgentRunResult task={task} />}
-        {finished && <EscalationAction busy={busy} onEscalate={onEscalate} task={task} />}
       </div>
       <div className="as-dialog__foot">
         {task.state === "needs_approval" && (

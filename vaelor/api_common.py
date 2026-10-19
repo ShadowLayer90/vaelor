@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
+import sqlite3
 from functools import wraps
 from typing import Any, Dict, Optional
 
@@ -99,6 +100,22 @@ def assistant_model_status(callbacks: Dict[str, Any], actor: str) -> Dict[str, A
         "model": status.get("model") or "",
         "provider": status.get("provider") or "",
     }
+
+
+def runs_on_ai_chat(callbacks: Dict[str, Any], actor: str, profile: Any) -> bool:
+    """Whether ``profile`` is a custom agent, which runs on AI Chat's model.
+
+    VD-220 (owner): a custom agent runs on AI Chat's model, never the
+    Assistant's NPU one, so the Assistant's readiness gates neither its runs nor
+    its schedules. A profile that cannot be looked up is not treated as custom:
+    it keeps the Assistant's gate (fails closed).
+    """
+    task_store = callbacks.get("agent_tasks")
+    try:
+        definition = task_store.profile(str(profile or "system"), actor) if task_store else None
+    except (AttributeError, LookupError, TypeError, ValueError, sqlite3.Error):
+        return False
+    return bool(definition and definition.get("custom"))
 
 
 class ApiContext:

@@ -60,6 +60,12 @@ class AgentTaskError(ValueError):
     pass
 
 
+#: The runner's two lanes (VD-220): built-in specialists on the Assistant's
+#: model, and custom agents on AI Chat's.
+ASSISTANT_LANE = "assistant"
+AI_CHAT_LANE = "ai-chat"
+
+
 #: The rows one actor may see: the tasks it owns and the tasks assigned to it.
 #: Written once so every read that filters by actor filters the same way.
 _VISIBLE_TO_ACTOR = "(actor=? OR assigned_to=?)"
@@ -945,7 +951,13 @@ class AgentTaskStore:
                 )
         return len(rows)
 
-    def claim_next(self):
+    def claim_next(self, lane: Optional[str] = None):
+        """Claim the oldest ready durable task, or ``None``.
+
+        ``lane`` (VD-220, review R204): "assistant" claims only built-in
+        profiles (the NPU), "ai-chat" only custom agents (AI Chat's model), so
+        a custom agent waiting on AI Chat's model never holds up an NPU run.
+        """
         claimed = None
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")  # pairs-with: sqlite-begin-immediate
@@ -953,6 +965,8 @@ class AgentTaskStore:
                 "SELECT * FROM agent_tasks WHERE kind='durable' AND state='ready' ORDER BY created_at"
             ).fetchall()
             for row in candidates:
+                if lane is not None and (row["profile"] in PROFILES) != (lane == ASSISTANT_LANE):
+                    continue
                 dependencies = connection.execute(
                     """
                     SELECT t.state FROM agent_task_dependencies d

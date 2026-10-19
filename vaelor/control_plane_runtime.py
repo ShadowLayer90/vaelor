@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .agent_api import AgentApiTokenStore
 from .agent_deployments import AgentDeploymentStore
 from .agent_task_runner import AgentTaskRunner
+from .ai_chat_model_lease import custom_agent_model
 from .agent_tasks import AgentTaskStore
 from .api_v2 import create_api_v2_blueprint
 from .appliance_recovery import (
@@ -502,6 +503,9 @@ class ControlPlaneRuntime:
             # wired: it is stored global, so feeding it to agents needs an
             # explicit per-agent memory permission that does not exist yet.
             learning_store=self.application_learning,
+            # VD-220: AI Chat's model, and AI Chat's wake for a scaled-to-zero cluster.
+            ai_chat_model=lambda: custom_agent_model(
+                self.credential_broker, cluster_wake=lambda: self._cluster_wake("ai-chat")),
         )
         self.task_runner.start()
         # Alert delivery: a fired trigger reaches a human out-of-band (email /

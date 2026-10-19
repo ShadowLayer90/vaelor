@@ -410,6 +410,15 @@ def _without_the_deflections(text: Any) -> Tuple[str, int]:
     return " ".join(kept), withheld
 
 
+def kept_sentences(text: Any) -> str:
+    """The sentences of ``text`` that do not decline - what :func:`guarded_answer` keeps.
+
+    VD-218 (R122): a streamed draft shows only these, so a sentence the final
+    answer withholds never reaches the page first.
+    """
+    return _without_the_deflections(text)[0]
+
+
 def misrouted_refusal(question: Any, answer_text: Any, source: str = "") -> bool:
     """Whether this answer declines a question VD-042 puts on this surface.
 
@@ -500,24 +509,56 @@ def guarded_answer(question: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     if not misrouted_refusal(question, payload.get("answer", ""), source):
         return _not_a_success(payload, source)
     kept, withheld = _without_the_deflections(payload.get("answer", ""))
+    return withheld_reply(payload, kept, withheld)
+
+
+#: VD-220 R223: in place of the model's hand-off of a question it may not send
+#: away. Neutral - it never claims the question is about this appliance - and
+#: the caller adds the "Open AI Chat" action, so an over-withheld world question
+#: is one click from AI Chat while nothing is sent there on the model's word.
+HAND_OFF_HELD = (
+    "I answer questions about this appliance; if this one is a general "
+    "question, AI Chat is the place to ask it."
+)
+
+
+#: The evidence line beside :data:`HAND_OFF_HELD` (R226: it agrees with the notice).
+_HAND_OFF_HELD_EVIDENCE = (
+    "The Assistant's model judged this question general. Vaelor did not pass it "
+    "to AI Chat on the model's word alone; the owner can ask it there."
+)
+
+
+def withheld_reply(payload: Dict[str, Any], kept: str = "", withheld: int = 1, *,
+                   hand_off: bool = False) -> Dict[str, Any]:
+    """``payload`` with its declining sentences withheld - the guard's notice in their place.
+
+    VD-220 R208: the answer path also calls it for the model's hand-off of a
+    question that is this machine's, which :func:`misrouted_refusal` does not
+    judge when the question has no appliance word ("what version is this").
+    ``hand_off`` (R223, R226) gives the neutral notice instead, for a hand-off
+    of a question not clearly this machine's - one the guard never withholds,
+    since it judges only questions with an appliance word.
+    """
+    if scope_guarded(payload):
+        return payload
     guarded = dict(payload)
     guarded["answer"] = (
-        "{}\n\n{}".format(kept, _PARTLY_WITHHELD_NOTE) if kept
+        HAND_OFF_HELD if hand_off
+        else "{}\n\n{}".format(kept, _PARTLY_WITHHELD_NOTE) if kept
         else _WITHHELD_ANSWER
     )
+    summary = _HAND_OFF_HELD_EVIDENCE if hand_off else (
+        "{} sentence{} of the prepared answer declined a question "
+        "about this appliance. Questions about this appliance are "
+        "the Assistant's to answer, so {} withheld rather than "
+        "shown.".format(
+            withheld, "" if withheld == 1 else "s",
+            "it was" if withheld == 1 else "they were",
+        )
+    )
     guarded["evidence"] = [
-        {
-            "source": SCOPE_GUARD_EVIDENCE,
-            "summary": (
-                "{} sentence{} of the prepared answer declined a question "
-                "about this appliance. Questions about this appliance are "
-                "the Assistant's to answer, so {} withheld rather than "
-                "shown.".format(
-                    withheld, "" if withheld == 1 else "s",
-                    "it was" if withheld == 1 else "they were",
-                )
-            ),
-        },
+        {"source": SCOPE_GUARD_EVIDENCE, "summary": summary},
         *[item for item in payload.get("evidence", []) if isinstance(item, dict)],
     ][:10]
     guarded["suggested_actions"] = []

@@ -762,17 +762,6 @@ details[open] > .ar-disc .ar-disc__chevron { transform: rotate(90deg); }
 
 .ar-run-result h4 { margin: 0; }
 
-.ar-escalate {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-row);
-}
-
-.ar-escalate p { margin: 0; }
-
 @media (max-width: 720px) {
   .ar-routines__title {
     font-size: var(--font-size-ui-xl);

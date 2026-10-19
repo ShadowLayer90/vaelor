@@ -11,6 +11,8 @@ export interface PerformanceSummary {
   ttft_seconds?: number;
   prefill_tps?: number;
   decode_tps?: number;
+  /** How many model calls the answer took, when more than one (VD-218). */
+  model_calls?: number;
 }
 
 function seconds(value: number): string {
@@ -25,13 +27,18 @@ function seconds(value: number): string {
  *
  * Each present field becomes one middot-separated clause, in the fixed order
  * total, TTFT, prefill, decode - e.g.
- * `total 2.7s · TTFT 0.78s · prefill 49 tok/s · decode 14 tok/s`.
+ * `total 2.7s · TTFT 0.78s · prefill 49 tok/s · decode 14 tok/s`, with
+ * `2 model calls` after the total when the answer took more than one.
  */
 export function performanceLine(performance?: PerformanceSummary | null): string {
   if (!performance) return "";
   const parts: string[] = [];
   if (typeof performance.total_seconds === "number") {
     parts.push(`total ${seconds(performance.total_seconds)}`);
+  }
+  // VD-218: a total summed over a retried ask says so, or it reads as one call.
+  if (typeof performance.model_calls === "number" && performance.model_calls > 1) {
+    parts.push(`${performance.model_calls} model calls`);
   }
   if (typeof performance.ttft_seconds === "number") {
     parts.push(`TTFT ${seconds(performance.ttft_seconds)}`);

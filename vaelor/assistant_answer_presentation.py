@@ -488,6 +488,18 @@ def asks_about_identity(message: str) -> bool:
 # disagree about whether one of these is appliance business. Do not reimplement
 # the markers in a caller (#98).
 
+#: This machine named by a noun - "this box", "the spare node". One spelling for
+#: AI Chat's decline (`chat_appliance_scope`) and the Assistant's own pointer
+#: test (`assistant_intents._THIS_MACHINE`), VD-220 R207 / LESSONS 6: the
+#: Assistant read "how hot is the box" as pointing nowhere while AI Chat
+#: declined it as this machine's.
+MACHINE_NOUN_POINTER = (
+    r"\bthis\s+(?:appliance|machine|box|thing|unit|node|device|server|system|pi|host)\b"
+    # "the current appliance state", "the spare node" - up to two words
+    # between the article and the noun, because people qualify the noun.
+    r"|\bthe\s+(?:\w+\s+){0,2}(?:appliance|box|unit|node)\b"
+)
+
 #: Whether a question points at *this* machine rather than the world.
 #:
 #: **#205 H1, the adversarial recheck.** A host-fact detector that fires on the

@@ -11,7 +11,7 @@ import { AssistantChatComposer, AssistantResponseStatus } from "./AssistantChatC
 import { AssistantConversationBar } from "./AssistantConversationBar";
 import { AssistantEngineSummary } from "./AssistantEngineSummary";
 import { AssistantIntelligenceDrawer } from "./AssistantIntelligenceDrawer";
-import { AssistantMessage } from "./AssistantMessage";
+import { AssistantDraftMessage, AssistantMessage } from "./AssistantMessage";
 import { AssistantModelSleepNote, AssistantModelState } from "./AssistantModelState";
 import { ASSISTANT_TAB_PLACES } from "./AssistantNavigationTabs";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -172,6 +172,7 @@ export function AgentAssistantPanel(props: AgentAssistantPanelProps) {
       chat.chatMessages.length,
       chat.chatMessages.at(-1)?.content,
       chat.chatRequestActive,
+      chat.draftAnswer,
       chat.chatNotice,
       chat.conversationId,
     ],
@@ -393,8 +394,10 @@ export function AgentAssistantPanel(props: AgentAssistantPanelProps) {
                 onReview={props.setProposalReview}
               />
             ))}
+            {chat.draftAnswer && <AssistantDraftMessage text={chat.draftAnswer} />}
             <AssistantResponseStatus
               active={chat.chatRequestActive}
+              label={chat.answerStreaming ? "Writing the answer" : undefined}
               onCancel={chat.cancelRequest}
               startedAt={chat.requestStartedAt}
             />

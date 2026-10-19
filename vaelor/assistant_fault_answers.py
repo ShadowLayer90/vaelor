@@ -54,6 +54,8 @@ READING_BACKED_SOURCES = frozenset({
     "built-in-serving",
     # Review round 2 (S4): what happened on this controller, from its records.
     "built-in-history",
+    # VD-220 (owner): the time, date and time zone, from this machine's clock.
+    "built-in-clock",
 })
 
 

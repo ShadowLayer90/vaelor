@@ -28,14 +28,28 @@ import type {
  *
  * Every clause is checkable. Nothing was changed because the Assistant
  * proposes changes and never makes them without a separate approval; the
- * appliance may still finish because aborting the request closes this
- * browser's connection and does not reach the run behind it; and it lands in
- * the saved history because `/assistant/chat` writes the turn server-side.
+ * appliance may still finish because the Stop request did not reach it (or
+ * found nothing running), and a closed connection alone lets an answer finish
+ * (owner, VD-218); and it lands in the saved history because `/assistant/chat`
+ * writes the turn server-side.
  */
 export const STOPPED_RESPONSE =
   "You stopped this response. Your question above was not answered and nothing "
   + "on this appliance was changed. The appliance may still finish the answer — "
   + "if it does, it is saved with this chat.";
+
+/**
+ * A Stop the appliance confirmed (VD-218): `POST /assistant/chat/stop` found the
+ * answer and stopped it, so the model is free and the chat records the stop.
+ * Said whether or not the model had started writing - the stop works either way.
+ */
+export const STOPPED_ON_APPLIANCE_RESPONSE =
+  "You stopped this response. Your question above was not answered and nothing "
+  + "on this appliance was changed. The appliance stopped writing the answer as "
+  + "well, so ask again when you are ready.";
+
+/** How long the page waits for the appliance to confirm a Stop before saying it may still finish. */
+const STOP_REQUEST_TIMEOUT_MS = 5000;
 
 export interface AssistantChatController {
   /** True when a restored transcript ends on a question still being answered. */
@@ -49,6 +63,10 @@ export interface AssistantChatController {
   chatMessages: ChatMessage[];
   chatNotice: string;
   chatRequestActive: boolean;
+  /** The answer as the on-device model writes it; "" when nothing is being written (VD-218). */
+  draftAnswer: string;
+  /** True once the model has started writing this answer, before any text may show. */
+  answerStreaming: boolean;
   /** Epoch ms the in-flight request started, or 0. Survives a tab change. */
   requestStartedAt: number;
   confirmChatDelete: boolean;
@@ -121,9 +139,15 @@ export function useAssistantChat(session: Session): AssistantChatController {
     setChatNoticeRefused(refused);
   }, []);
   const [requestStartedAt, setRequestStartedAt] = useState(0);
+  const [draftAnswer, setDraftAnswer] = useState("");
+  const [answerStreaming, setAnswerStreaming] = useState(false);
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   const newChatGeneration = useRef(0);
   const chatAbort = useRef<AbortController | null>(null);
+  /** The in-flight ask's idempotency key, which names it to the Stop request. */
+  const inFlightKey = useRef("");
+  /** Whether the appliance confirmed the Stop; null when none was sent. */
+  const stopRequest = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     // The history load is withdrawn with the surface, so neither its second
@@ -211,6 +235,8 @@ export function useAssistantChat(session: Session): AssistantChatController {
     setChatBusy(false);
     setRequestStartedAt(0);
     setAwaitingAnswer(false);
+    setDraftAnswer("");
+    setAnswerStreaming(false);
   }, []);
 
   const seedChat = useCallback((draft: string, notice: string) => {
@@ -224,6 +250,8 @@ export function useAssistantChat(session: Session): AssistantChatController {
     setChatBusy(false);
     setRequestStartedAt(0);
     setAwaitingAnswer(false);
+    setDraftAnswer("");
+    setAnswerStreaming(false);
     setChatInput(draft);
     setChatNotice(notice);
   }, []);
@@ -352,11 +380,15 @@ export function useAssistantChat(session: Session): AssistantChatController {
     // key and the appliance dedupes it instead of writing a second user turn or
     // starting a second inference.
     const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `assistant-${Date.now()}`;
+    inFlightKey.current = idempotencyKey;
+    stopRequest.current = null;
     setChatMessages((current) => [
       ...current,
       { role: "user", content: question, created_at: Math.floor(Date.now() / 1000) },
     ]);
     try {
+      // VD-218: the model's words appear as it writes them; the answer that
+      // arrives last replaces the draft and is what the chat keeps.
       const answer = await apiRequest<AssistantAnswer>(
         "/assistant/chat",
         {
@@ -374,10 +406,19 @@ export function useAssistantChat(session: Session): AssistantChatController {
             conversation_id: conversationId || undefined,
             idempotency_key: idempotencyKey,
           }),
+          answerStream: {
+            onStarted: () => {
+              if (generation === newChatGeneration.current) setAnswerStreaming(true);
+            },
+            onDraft: (text) => {
+              if (generation === newChatGeneration.current) setDraftAnswer(text);
+            },
+          },
         },
         session.csrf_token,
       );
       if (generation !== newChatGeneration.current) return;
+      setDraftAnswer("");
       setConversationId(answer.conversation_id);
       setChatMessages((current) => [
         ...current,
@@ -420,11 +461,15 @@ export function useAssistantChat(session: Session): AssistantChatController {
          * second copy of it is what corrupted the input — and the stop says
          * so in the transcript, where the reader is looking.
          */
+        // VD-218: say what Stop did - stopped on the appliance, or (when the
+        // request did not get there) possibly still finishing.
+        const stoppedThere = await (stopRequest.current ?? Promise.resolve(false));
+        if (generation !== newChatGeneration.current) return;
         setChatMessages((current) => [
           ...current,
           {
             role: "assistant",
-            content: STOPPED_RESPONSE,
+            content: stoppedThere ? STOPPED_ON_APPLIANCE_RESPONSE : STOPPED_RESPONSE,
             created_at: Math.floor(Date.now() / 1000),
             metadata: { stopped: true },
           },
@@ -480,11 +525,27 @@ export function useAssistantChat(session: Session): AssistantChatController {
         setChatRequestActive(false);
         setChatBusy(false);
         setRequestStartedAt(0);
+        setDraftAnswer("");
+        setAnswerStreaming(false);
       }
     }
   }, [chatInput, conversationId, refreshConversations, session.csrf_token]);
 
-  const cancelRequest = useCallback(() => chatAbort.current?.abort(), []);
+  /*
+   * VD-218 (owner 2026-10-16): a closed connection lets the answer finish, so
+   * Stop has to say so to the appliance. The request names the ask by its own
+   * idempotency key; the abort then releases this page.
+   */
+  const cancelRequest = useCallback(() => {
+    if (chatAbort.current && inFlightKey.current) {
+      stopRequest.current = apiRequest<{ stopped?: boolean }>(
+        "/assistant/chat/stop",
+        { method: "POST", body: JSON.stringify({ idempotency_key: inFlightKey.current }), timeoutMs: STOP_REQUEST_TIMEOUT_MS },
+        session.csrf_token,
+      ).then((result) => Boolean(result?.stopped), () => false);
+    }
+    chatAbort.current?.abort();
+  }, [session.csrf_token]);
 
   return {
     archiveConversation,
@@ -499,6 +560,8 @@ export function useAssistantChat(session: Session): AssistantChatController {
     chatNoticeRefused,
     chatRequestActive,
     confirmChatDelete,
+    draftAnswer,
+    answerStreaming,
     conversationId,
     conversations,
     conversationView,

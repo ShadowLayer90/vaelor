@@ -13,6 +13,7 @@ import type { AgentProfile, Automation, CapabilityDisclosure, Trigger } from "./
 import { AssistantBarActions } from "./assistantBar";
 import { isWorkerCapableSource, triggerLimits } from "./automationValidation";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { aiChatModelBlocks, GoToAiChat, useAiChatModel } from "./customAgentModel";
 import { Icon, ICON_SIZE } from "./Icon";
 import { ModalShell } from "./ModalShell";
 import { StatusPill } from "./StatusPill";
@@ -258,17 +259,37 @@ export function AgentCenterAutomationsPanel({
       }).finally(() => { setAnswered(false); setPending(""); });
     }
   };
-  const openDialog = (kind: "schedule" | "trigger") => { setPending(""); setSawBusy(false); setSubmittedHere(false); setOpen(kind); };
+  const aiChatModel = useAiChatModel();
+  const openDialog = (kind: "schedule" | "trigger") => {
+    setPending(""); setSawBusy(false); setSubmittedHere(false); setOpen(kind);
+    // A schedule opened while only custom agents can be scheduled starts on one (VD-220).
+    if (kind === "schedule" && blockedFor(profile) && firstOpenAgent) onSetProfile(firstOpenAgent.id);
+  };
   const dialogError = open && submittedHere && noticeRefused && notice ? notice : "";
 
   const modelPill = <StatusPill label={modelReady ? "Read-only runs" : modelConfigured ? "Model not answering" : "Model not set up"} status={modelReady ? "healthy" : "degraded"} />;
   const modelReason = modelConfigured ? "Waiting for the Assistant model to answer" : "No Assistant model is set up";
+  // VD-220: a built-in check runs on the Assistant's model, a custom agent on
+  // AI Chat's, so whether a schedule can be made depends on its profile. Only
+  // an AI Chat read that says "no model" holds a custom agent back (LESSONS 8).
+  const aiChatBlocked = aiChatModelBlocks(aiChatModel);
+  const isCustom = (id: string) => Boolean(profiles.find((item) => item.id === id)?.custom);
+  const blockedFor = (id: string) => isCustom(id) ? aiChatBlocked : modelReady ? undefined : modelReason;
+  const firstOpenAgent = profiles.find((item) => item.custom && item.operational !== false && !aiChatBlocked);
+  const canSchedule = modelReady || Boolean(firstOpenAgent);
   // `modelReady` is "the model is answering" (ACC-136); a model that was
   // never set up is a different sentence from one that is down.
+  const assistantDown = modelConfigured ? "The Assistant model is not answering" : "No Assistant model is set up";
+  // Both models held back: say each, in the backend's words for AI Chat's, with the way there (kb R214).
+  const bothBlocked = Boolean(aiChatBlocked) && profiles.some((item) => item.custom);
   const modelNotice = !modelReady && (
-    <Notice severity="warning">{modelConfigured
-      ? "The Assistant model is not answering, so new schedules cannot be created until it does."
-      : "No Assistant model is set up yet. Connect or select one before scheduling appliance checks or agent work."}</Notice>
+    <Notice severity="warning">{firstOpenAgent
+      ? `${assistantDown}, so appliance checks cannot be scheduled. Custom agents run on AI Chat's model and can still be scheduled.`
+      : bothBlocked
+        ? <span className="ar-notice-row"><span>{assistantDown}, so appliance checks cannot be scheduled. {aiChatBlocked}</span><GoToAiChat /></span>
+        : modelConfigured
+          ? "The Assistant model is not answering, so new schedules cannot be created until it does."
+          : "No Assistant model is set up yet. Connect or select one before scheduling appliance checks or agent work."}</Notice>
   );
 
   const scheduleFields = (
@@ -288,7 +309,10 @@ export function AgentCenterAutomationsPanel({
     </>
   );
   const scheduleSubmit = (
-    <Button disabled={busy || !automationName.trim() || !automationPrompt.trim() || !automationScheduleValid} disabledReason={modelReady ? undefined : modelReason} type="submit" variant="primary">Create schedule</Button>
+    <>
+      {isCustom(profile) && aiChatBlocked && <GoToAiChat />}
+      <Button disabled={busy || !automationName.trim() || !automationPrompt.trim() || !automationScheduleValid} disabledReason={blockedFor(profile)} type="submit" variant="primary">Create schedule</Button>
+    </>
   );
   const triggerFields = (
     <>
@@ -377,11 +401,11 @@ export function AgentCenterAutomationsPanel({
   });
 
   const newScheduleButton = (variant: "primary" | "secondary") => (
-    <Button disabled={!modelReady} disabledReason={modelReady || variant === "primary" ? undefined : modelReason} onClick={() => openDialog("schedule")} variant={variant}><Icon className="ar-btn-icon" name="add" size={ICON_SIZE.inline} />New schedule</Button>
+    <Button disabled={!canSchedule} disabledReason={canSchedule || variant === "primary" ? undefined : modelReason} onClick={() => openDialog("schedule")} variant={variant}><Icon className="ar-btn-icon" name="add" size={ICON_SIZE.inline} />New schedule</Button>
   );
   const newRuleButton = <Button onClick={() => openDialog("trigger")}><Icon className="ar-btn-icon" name="add" size={ICON_SIZE.inline} />New alert rule</Button>;
   const schedulesEmpty = (
-    <EmptyState action={<Button disabled={!modelReady} onClick={() => openDialog("schedule")}>New schedule</Button>}
+    <EmptyState action={<Button disabled={!canSchedule} onClick={() => openDialog("schedule")}>New schedule</Button>}
       icon={<Icon name="activity" size={18} />} text="Create a safe health check or recurring review." title="No schedules yet" />
   );
   const rulesEmpty = (

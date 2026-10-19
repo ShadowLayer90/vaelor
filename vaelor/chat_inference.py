@@ -29,8 +29,10 @@ from .model_profiles import (
 )
 from .model_reachability import note_inference_outcome, recorded_failures
 from .managed_local_credentials import PREFIX as MANAGED_LOCAL_PREFIX
-from .model_credential_roles import (
-    AI_CHAT_NEVER_ON_THE_ASSISTANT_NPU, ai_chat_may_use, ai_chat_may_use_lease,
+from .model_credential_roles import ai_chat_may_use
+from .ai_chat_model_lease import (  # noqa: F401 - the AI Chat names stay importable here
+    AI_CHAT_CLUSTER_NOT_SERVING, CHOOSE_AN_AI_CHAT_CONNECTION, CLUSTER_NOT_SERVING,
+    OPENAI_BASE_URL, OPENAI_DEFAULT_MODEL, resolve_ai_chat_model,
 )
 from .provider_runtime import assistant_budget, managed_local_connection
 from .chat_hosted import HostedChatError, answer_hosted, read_thinking
@@ -52,12 +54,6 @@ from .local_inference_gate import (
 
 logger = logging.getLogger(__name__)
 
-#: What AI Chat answers when nothing it may use holds its lease.
-CHOOSE_AN_AI_CHAT_CONNECTION = "Choose an AI Chat connection before sending a message."
-
-
-OPENAI_BASE_URL = "https://api.openai.com/v1"
-OPENAI_DEFAULT_MODEL = "gpt-5.6-terra"
 
 # A cited answer is the long case, not the short one: the model reads the
 # question plus up to six retrieved passages and then has to quote them back
@@ -212,16 +208,9 @@ AI_CHAT_WAKING_MESSAGE = (
     "this can take a minute. Retry shortly."
 )
 
-#: What AI Chat answers in Mode B while the cluster holds no lease for it: the
-#: cluster is loading, or its model was unloaded by hand (W4d-D26). AI Chat is
-#: never parked on the NPU Assistant meanwhile, so this is the honest answer
-#: rather than "choose a connection", which the cluster forbids in Mode B.
+#: The code AI Chat answers its cluster-not-serving sentence with (a 503); the
+#: sentence is `ai_chat_model_lease`'s, the one resolver of AI Chat's model.
 AI_CHAT_CLUSTER_NOT_SERVING_CODE = "chat_cluster_not_serving"
-AI_CHAT_CLUSTER_NOT_SERVING = (
-    "GPU clustering serves AI Chat, and its model is not serving right now: it "
-    "is still loading, or it was unloaded in Cluster > Deployments. Load it "
-    "there, or retry once it has finished loading."
-)
 
 #: The resource ``service.name`` AI-Chat spans carry, kept distinct from the
 #: gateway's ``vaelor-inference-gateway`` so Phoenix files the two serving paths
@@ -348,23 +337,6 @@ class ChatInference:
         """
         return [item for item in self.connections() if ai_chat_may_use(item)]
 
-    def _refuse_a_lease_ai_chat_may_not_use(self, lease) -> None:
-        """Never send AI Chat to the Assistant's NPU model (VD-210 owner rule).
-
-        A lease written before VD-202 can still name it: the vault refuses the
-        assignment but still resolves an old one. It reads here as no model
-        chosen, with the reason, and the row is left for the owner's next pick
-        to replace - never rewritten behind them.
-        """
-        try:
-            listed = self.broker.list()
-        except CredentialError as error:
-            raise ChatInferenceError(str(error)) from error
-        if not ai_chat_may_use_lease(lease, listed):
-            raise ChatInferenceError(
-                AI_CHAT_NEVER_ON_THE_ASSISTANT_NPU + " " + CHOOSE_AN_AI_CHAT_CONNECTION
-            )
-
     def assignment_refusal(self, credential_id: str = "") -> str:
         """Why AI Chat cannot take ``credential_id`` right now, or ``""``.
 
@@ -467,27 +439,22 @@ class ChatInference:
         return connection if connection_locality(connection).get("local") else None
 
     def _connection(self, model: str = ""):
-        try:
-            lease = self.broker.resolve_active("ai-chat")
-        except CredentialError as error:
-            if self.cluster_mode_active():
-                raise ChatInferenceError(
-                    AI_CHAT_CLUSTER_NOT_SERVING,
-                    code=AI_CHAT_CLUSTER_NOT_SERVING_CODE, status=503,
-                ) from error
-            raise ChatInferenceError(CHOOSE_AN_AI_CHAT_CONNECTION) from error
-        self._refuse_a_lease_ai_chat_may_not_use(lease)
-        if lease.get("provider") == "openai":
-            connection = {
-                **lease, "base_url": OPENAI_BASE_URL,
-                "api_key": lease.get("token", ""),
-                "model": model or lease.get("model") or OPENAI_DEFAULT_MODEL,
-            }
-        else:
-            connection = {**lease, "model": model or lease.get("model", "")}
-        if not connection.get("base_url"):
-            raise ChatInferenceError("The AI Chat connection is incomplete.")
-        return connection
+        """AI Chat's model, asked of the one resolver custom agents share (VD-220).
+
+        A lease left on the Assistant's NPU model is never sent to (VD-210): it
+        reads as no model chosen, with the reason, and the row is left for the
+        owner's next pick to replace - never rewritten behind them.
+        """
+        resolved = resolve_ai_chat_model(
+            self.broker, model=model, cluster_mode_active=self.cluster_mode_active,
+        )
+        if resolved.connection is not None:
+            return resolved.connection
+        if resolved.state == CLUSTER_NOT_SERVING:
+            raise ChatInferenceError(
+                resolved.reason, code=AI_CHAT_CLUSTER_NOT_SERVING_CODE, status=503,
+            )
+        raise ChatInferenceError(resolved.reason)
 
     def thinking(self, model: str = "") -> Dict[str, Any]:
         """The thinking control for the active connection and ``model`` (VD-209)."""

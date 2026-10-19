@@ -189,6 +189,13 @@ def probe_ssh_sign_in(
 
 def _test_compatible(secret_value: str) -> Dict[str, Any]:
     profile = validate_compatible_profile(secret_value)
+    # VD-220 (owner): every request to FastFlowLM states its penalties. Imported
+    # here: inference_client imports the broker, which imports this module.
+    from .flm_service import FLM_PENALTIES
+    from .inference_client import flm_connection
+
+    identity = json.loads(secret_value).get("credential_id") or ""
+    flm = flm_connection(dict(profile, provider="openai-compatible", credential_id=str(identity)))
     try:
         model_data = compatible_request(profile, "/models")
         models = model_data.get("data", [])
@@ -210,6 +217,7 @@ def _test_compatible(secret_value: str) -> Dict[str, Any]:
                 "messages": [{"role": "user", "content": "Reply with OK."}],
                 "temperature": 0,
                 "max_tokens": 2,
+                **(FLM_PENALTIES if flm else {}),
             },
             timeout=45,
         )

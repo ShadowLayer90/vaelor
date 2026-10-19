@@ -70,7 +70,7 @@ export function ActivationDialog({ agent, busy, canTest, error, onActivate, onCl
  * created this dialog becomes the run's own surface and follows it through
  * approval, execution and result, so nobody goes hunting for the outcome.
  */
-export function RunDialog({ activeRun, agent, busy, error, onApprove, onCancelRun, onClose, onEscalate, onRequestChange, onRetry, onRunAgain, onSubmit, request, requestError }: {
+export function RunDialog({ activeRun, agent, busy, error, onApprove, onCancelRun, onClose, onRequestChange, onRetry, onRunAgain, onSubmit, request, requestError }: {
   activeRun: AgentTask | null;
   agent: AgentProfile;
   busy: boolean;
@@ -78,7 +78,6 @@ export function RunDialog({ activeRun, agent, busy, error, onApprove, onCancelRu
   onApprove: () => void;
   onCancelRun: () => void;
   onClose: () => void;
-  onEscalate: () => void;
   onRequestChange: (value: string) => void;
   onRetry: () => void;
   onRunAgain: () => void;
@@ -96,7 +95,6 @@ export function RunDialog({ activeRun, agent, busy, error, onApprove, onCancelRu
             onApprove={onApprove}
             onCancel={onCancelRun}
             onClose={onClose}
-            onEscalate={onEscalate}
             onRetry={onRetry}
             onRunAgain={onRunAgain}
             task={activeRun}

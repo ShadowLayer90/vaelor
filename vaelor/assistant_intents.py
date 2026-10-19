@@ -45,13 +45,18 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Set, Tuple
 
 from .answer_evidence import describe_missing, first_sentence, sentence
 from .assistant_answer_presentation import (
-    asks_about_host_facts, asks_about_identity, is_appliance_question,
+    MACHINE_NOUN_POINTER, asks_about_host_facts, asks_about_identity, is_appliance_question,
 )
+from .assistant_question_shape import (
+    asks_about_this_processor, asks_for_a_past_window, asks_for_overview, history_arguments,
+    names_an_app,
+)
+from .assistant_machine_names import names_something_here
 from .assistant_vocabulary import BASE_TOOLS, REGEX_PREFIX, TOOL_PHRASES
 from .model_credential_roles import ai_chat_may_use
 
 __all__ = [
-    "BASE_TOOLS", "matched_intents", "matched_phrases", "named_subjects",
+    "BASE_TOOLS", "asks_for_a_past_window", "history_arguments", "asks_for_overview", "names_an_app", "matched_intents", "matched_phrases", "named_subjects",
     "select_tools", "order_facts_by_relevance",
     "is_out_of_scope_question", "knowledge_redirect", "chat_destination",
     "world_followup",
@@ -249,6 +254,19 @@ def select_tools(message: str, *, base: Sequence[str] = BASE_TOOLS) -> Set[str]:
 
     selected: Set[str] = set(base)
     selected.update(matched_intents(message))
+    from .provider_runtime import asks_about_the_whole_machine
+
+    if asks_about_the_whole_machine(message):
+        selected.update(_BROAD_TOOLS)
+    # VD-219: an app named by its name reads the app inventory - is it
+    # installed already, which ports are taken.
+    if names_an_app(message):
+        selected.add("workloads.inventory")
+    # VD-219: a question naming a window of time reads the retained samples
+    # for it ("was the GPU busy in the last 15 minutes"); the window parser
+    # is the history answer's own, so the two cannot disagree.
+    if asks_for_a_past_window(message):
+        selected.add("metrics.history")
     # A checkpoint question is meaningless without knowing what it protects.
     if "recovery.checkpoints" in selected:
         selected.add("workloads.inventory")
@@ -367,6 +385,13 @@ _CONTROL_PLANE_WORDS = frozenset({
     "checkpoints", "job", "jobs", "approval", "approve", "template",
     "blueprint", "lease", "broker", "mfa", "passkey", "quota", "vnc", "kvm",
     "kiosk",
+    # **VD-220 R210: the accelerator this appliance reads, by its own name.**
+    # "what is the npu doing" was redirected by the bare opener. Here, not in
+    # `is_appliance_question`, so AI Chat's decline is unchanged; "npu" is also a
+    # generic subject below, so "what is an NPU?" still redirects as "what is a
+    # GPU?" does (VD-121). The other R210 words are two-word terms or need a
+    # software verb (`names_something_here`, R216).
+    "npu",
 })
 
 #: Generic computing concepts that live in `_CONTROL_PLANE_WORDS` only so a
@@ -383,7 +408,7 @@ _CONTROL_PLANE_WORDS = frozenset({
 #: owned operational vocabulary is deliberately excluded.
 _GENERIC_COMPUTING_SUBJECT = frozenset({
     "system", "systems", "os", "machine", "machines", "hardware",
-    "firmware", "bios", "kernel", "kernels", "software",
+    "firmware", "bios", "kernel", "kernels", "software", "npu",
 })
 
 # Anything addressed to this Assistant, or to the machine it speaks for, is in
@@ -391,9 +416,15 @@ _GENERIC_COMPUTING_SUBJECT = frozenset({
 # here". The bare possessive "my" is deliberately absent - it was already found
 # to make "Draft an email to my landlord" appliance business - but every other
 # deictic stays, because suppressing the redirect is the safe direction.
+# "us" is matched case-sensitively: "US" in "in US dollars" or "the US
+# election" is a country, and reading it as "us" held every markets question
+# on the Assistant (VD-220, kb R189).
 _DEICTIC_WORDS = (
-    r"you|you'?re|your|yours|yourself|we|our|us|"
-    r"this|these|those|here|locally|on\s+box"
+    r"you|you'?re|your|yours|yourself|we|our|(?-i:us|Us)|"
+    r"this|these|those|here|locally|on\s+box|"
+    # VD-220 R218: "what make of computer am I talking to?" is about the machine
+    # the owner is talking to - this one.
+    r"(?:am\s+i|are\s+we)\s+(?:talking|speaking|chatting)\s+(?:to|with)"
 )
 
 #: The register an owner uses about the machine in front of them.
@@ -418,8 +449,14 @@ _SELF_REFERENCE = re.compile(
 #: Every way a sentence can point at this machine. Composed from the deictics
 #: rather than written out again: two hand-maintained spellings of one idea is
 #: LESSONS 6, and these two would have been read side by side in one function.
+#: This machine by a noun: AI Chat's spelling, shared (VD-220 R207), plus "the
+#: machine" and "this computer" / "this pc", which AI Chat leaves out. Bare
+#: "the computer", "the host", "the system" are not here: "who invented the
+#: computer mouse", "how does the immune system work" (R223).
+_MACHINE_BY_NOUN = MACHINE_NOUN_POINTER + r"|\bthe\s+machine\b|\bthis\s+(?:computer|pc)\b"
+
 _THIS_MACHINE = re.compile(
-    r"\b(?:" + _DEICTIC_WORDS + r"|" + _OWNER_REGISTER_WORDS + r")\b",
+    r"\b(?:" + _DEICTIC_WORDS + r"|" + _OWNER_REGISTER_WORDS + r")\b|" + _MACHINE_BY_NOUN,
     re.IGNORECASE,
 )
 
@@ -454,6 +491,19 @@ _KNOWLEDGE_REQUEST = re.compile(
     r"write\s+(?:me\s+)?(?:a|an|the)|draft\s+(?:me\s+)?(?:a|an)|"
     r"give\s+me\s+(?:a|an|some)|who\s+won|what\s+year|capital\s+of|"
     r"recipe\s+for)\b",
+    re.IGNORECASE,
+)
+
+#: VD-220 (kb R187): the research asks - "Give a concise factual summary of the
+#: planet Saturn." Read only at the last step of `is_out_of_scope_question`,
+#: never by `_rests_on_one_borrowed_word`: "give a summary of the last hour"
+#: borrows one reading word in this form and is this machine's history, so a
+#: sentence naming any reading, control-plane word or pointer stays here. There
+#: is no "overview of" or "history of": both words are readings, so a sentence
+#: using them never reaches the last step.
+_RESEARCH_REQUEST = re.compile(
+    r"\b(?:summary\s+of|facts\s+about|"
+    r"give\s+(?:a|an)\s+(?:[\w-]+\s+){0,3}?(?:summary|explanation|description))\b",
     re.IGNORECASE,
 )
 
@@ -576,7 +626,7 @@ def _rests_on_one_borrowed_word(text: str) -> bool:
     return len(matched_phrases(text)) < _CORROBORATING_PHRASES
 
 
-def is_out_of_scope_question(message: str) -> bool:
+def is_out_of_scope_question(message: str, here: Iterable[str] = ()) -> bool:
     """Whether nothing on this machine can evidence ``message``.
 
     Every gate below returns ``False`` - "answer it normally" - so the redirect
@@ -598,7 +648,16 @@ def is_out_of_scope_question(message: str) -> bool:
     text = str(message or "")
     if len(_WORD.findall(text)) < _MINIMUM_WORDS:
         return False
+    # VD-220 R210 (VD-042): a machine, app or catalog entry of this appliance,
+    # by name, is this machine's question - the caller passes what the turn read.
+    # Its clock is a reading of this machine too (owner, VD-220).
+    from .assistant_clock_answer import asks_the_clock
+
+    if names_something_here(text, here) or asks_the_clock(text):
+        return False
     if matched_intents(text) and not _rests_on_one_borrowed_word(text):
+        return False
+    if asks_about_this_processor(text):
         return False
     # An appliance identity/version question ("what version am I on?") is
     # answered on-box by `assistant_answer_scope.identity_answer`, which
@@ -625,7 +684,7 @@ def is_out_of_scope_question(message: str) -> bool:
     # and is still answered here.
     if _names_control_plane(text) and not _is_bare_generic_definition(text):
         return False
-    if _SELF_REFERENCE.search(text):
+    if _SELF_REFERENCE.search(text) or _POINTS_HERE.search(text):
         return False
     # **A definition request is AI Chat's, even when it names appliance hardware
     # (VD-121).** VD-035 sends general-knowledge questions to AI Chat, but the
@@ -659,7 +718,78 @@ def is_out_of_scope_question(message: str) -> bool:
         return False
     if _KNOWLEDGE_REQUEST.search(text):
         return True
+    if _RESEARCH_REQUEST.search(text):
+        return True
     return _KNOWLEDGE_OPENER.match(text.strip()) is not None
+
+
+
+def hand_off_may_stand(message: str, here: Iterable[str] = ()) -> bool:
+    """Whether the Assistant may send ``message`` to AI Chat when its model says so.
+
+    VD-220 B4, owner D337: only for a world question that is not this machine's
+    (`hand_off_is_this_machines`), names no "we", uses no control-plane word (VD-042,
+    R207, R219). One decision for every reader (LESSONS 6, R208).
+    """
+    text = str(message or "")
+    if hand_off_is_this_machines(text, here) or _WE.search(text):
+        return False
+    if _names_control_plane(text) and not _is_bare_generic_definition(text):
+        return False
+    # R219, R223: and it is recognisably a world question (one reading of the
+    # forms, `_WORLD_SUBQUESTION` included: "Population of Japan?"). "sup" and
+    # "Anything weird going on?" are turns with this Assistant; a world question
+    # with no form gets the neutral notice and its one-click AI Chat action.
+    return bool(_asks_for_world_knowledge(text) or _WORLD_SUBQUESTION.search(text)
+                or _RESEARCH_REQUEST.search(text))
+
+
+#: VD-220 R219, R226: a pointer at this machine - "is it supported here", "this
+#: computer", "how is the computer doing" (this machine by its noun, asked how it
+#: is now). Not "you", "it" or "my": "can you explain how vaccines work" (N244).
+_POINTS_HERE = re.compile(
+    r"\b(?:here|locally|on\s+box|(?:am\s+i|are\s+we)\s+(?:talking|speaking|chatting)\s+(?:to|with)|"
+    r"(?:is|'s)\s+the\s+(?:computer|pc|host|system|device|server)\s+(?:doing|holding\s+up|up\s+to))\b|"
+    + _MACHINE_BY_NOUN,
+    re.IGNORECASE,
+)
+#: "we/our/us" keep a hand-off from standing (owner, safety first) but do not make a
+#: question this machine's: "why do we dream" (R226).
+_WE = re.compile(r"\b(?:we|our|ours|(?-i:us))\b", re.IGNORECASE)
+
+
+def names_this_appliance(message: str, here: Iterable[str] = ()) -> bool:
+    """Whether ``message`` says anything only this appliance answers (VD-220 B4).
+
+    A machine, app or term of its own (:func:`names_something_here`), a reading
+    phrase, an appliance word, its clock, its processor, identity or a host
+    fact. Not `names_an_app`, which is gather-only (#190, R223).
+    """
+    from .assistant_clock_answer import asks_the_clock
+
+    text = str(message or "")
+    return bool(names_something_here(text, here) or matched_intents(text) or is_appliance_question(text)
+                or asks_the_clock(text) or asks_about_this_processor(text) or asks_about_identity(text)
+                or asks_about_host_facts(text))
+
+
+#: The action beside an answer whose other part was general knowledge.
+WORLD_PART_ACTION = "Open AI Chat for the general-knowledge part."
+
+
+def asks_partly_about_the_world(message: str, here: Iterable[str] = ()) -> bool:
+    """Whether a coordinated part of ``message`` is not this machine's (R209; "tell me a joke" too)."""
+    return any(not hand_off_is_this_machines(part, here)
+               for part in _COMPOUND_COORDINATOR.split(str(message or "")) if part.strip())
+
+
+def hand_off_is_this_machines(message: str, here: Iterable[str] = ()) -> bool:
+    """Whether ``message`` is clearly this appliance's (R226): its words, or a pointer here.
+
+    It picks the withheld hand-off's notice: this machine's (no AI Chat action, AI
+    Chat declines it) or the neutral one with the action."""
+    text = str(message or "")
+    return bool(names_this_appliance(text, here) or _POINTS_HERE.search(text))
 
 
 #: A coordinator joining two questions, and a *world* sub-question beside an
@@ -723,7 +853,7 @@ def world_followup(message: str) -> Optional[Dict[str, str]]:
                 "which AI Chat can answer - it is this appliance's "
                 "general-question surface."
             ),
-            "action": "Open AI Chat for the general-knowledge part.",
+            "action": WORLD_PART_ACTION,
         }
     return None
 
@@ -798,16 +928,50 @@ _CHAT_ACTIONS = {
 }
 
 
+def ai_chat_action(ai_chat: Optional[Mapping[str, Any]] = None) -> str:
+    """The "Open AI Chat" action for AI Chat's state (VD-220 R223: the withheld hand-off's)."""
+    state = str(dict(ai_chat or {}).get("state") or CHAT_UNKNOWN)
+    return _CHAT_ACTIONS.get(state, _CHAT_ACTIONS[CHAT_UNKNOWN])
+
+
 def knowledge_redirect(
-    message: str, ai_chat: Optional[Mapping[str, Any]] = None
+    message: str, ai_chat: Optional[Mapping[str, Any]] = None, here: Iterable[str] = (),
 ) -> Optional[Dict[str, Any]]:
     """An honest redirect for a question this machine holds no evidence for.
 
     Returns ``None`` for everything else, so a caller that consults it
     unconditionally still answers every appliance question it always did.
     """
-    if not is_out_of_scope_question(message):
+    if not is_out_of_scope_question(message, here):
         return None
+    return _chat_redirect(ai_chat, (
+        "No appliance fact tool covers this question, so Vaelor "
+        "answered nothing about this machine."
+    ))
+
+
+def model_hand_off(
+    message: str, answer: Any, ai_chat: Optional[Mapping[str, Any]] = None, here: Iterable[str] = (),
+) -> Optional[Dict[str, Any]]:
+    """The AI Chat redirect in place of the model's hand-off, where it may stand.
+
+    VD-220 B4: the same payload as :func:`knowledge_redirect` - the same words,
+    the same "AI Chat" link - with evidence saying the model judged it. ``None``
+    when ``answer`` is not wholly the hand-off, or when the question is this
+    machine's (:func:`hand_off_may_stand`); the answer path then shows the
+    scope guard's withheld notice in its place (R208).
+    """
+    from .assistant_contract_reader import is_hand_off
+
+    if not is_hand_off(answer) or not hand_off_may_stand(message, here):
+        return None
+    return _chat_redirect(ai_chat, (
+        "The Assistant's model judged this question to be outside the "
+        "appliance, so Vaelor answered nothing about this machine."
+    ))
+
+
+def _chat_redirect(ai_chat: Optional[Mapping[str, Any]], scope: str) -> Dict[str, Any]:
     destination = dict(ai_chat or {})
     state = str(destination.get("state") or CHAT_UNKNOWN)
     if state not in _CHAT_SENTENCES:
@@ -827,13 +991,7 @@ def knowledge_redirect(
     return {
         "answer": "{} {}".format(_SCOPE_SENTENCE, _CHAT_SENTENCES[state]),
         "evidence": [
-            {
-                "source": "assistant.scope",
-                "summary": (
-                    "No appliance fact tool covers this question, so Vaelor "
-                    "answered nothing about this machine."
-                ),
-            },
+            {"source": "assistant.scope", "summary": scope},
             {"source": "ai-chat.connections", "summary": summary},
         ],
         "suggested_actions": [_CHAT_ACTIONS[state]],

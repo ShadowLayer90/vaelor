@@ -293,6 +293,16 @@ class HardwareBridgeClient:
         value = self._request("flm_binary_present")
         return value if isinstance(value, dict) else {}
 
+    def flm_runtime_switch(self) -> dict[str, Any]:
+        """Have the root bridge move FastFlowLM to the staged serving pair (VD-219).
+
+        No payload: the pair is the bridge's own pin. Make the client with a
+        timeout of ``npu_runtime_switch.SWITCH_CALL_SECONDS``: the move waits for
+        a short answer from the NPU, and for the old pair's when it is put back.
+        """
+        value = self._request("flm_runtime_switch")
+        return value if isinstance(value, dict) else {}
+
     def flm_install_release(self, source_url: str, expected_sha256: str) -> dict[str, Any]:
         """Install a fine-tuned NPU model from a pinned release, as root.
 

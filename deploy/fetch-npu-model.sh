@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 #
-# Fetch and install the Vaelor NPU assistant model (Qwen3.5-4B-NPU2) from the
-# GitHub release. The model is ~3.35 GB, so it ships as split <2 GB parts (a
+# Fetch and install the Vaelor NPU assistant model package from the GitHub
+# release. WHICH package - its name, part names, release and SHA-256 - is the
+# installed Vaelor package's serving pair (vaelor/npu_runtime_pin.py, VD-219),
+# read through `python -I -m vaelor.npu_runtime_pin shell`, so this script and
+# the console's Install action can never pin two different packages, and the
+# package always matches the FastFlowLM runtime the same pin names. The package is several GB (its exact size is pinned with it, NPU_PACKAGE_BYTES), so it ships as split <2 GB parts (a
 # GitHub release asset is capped at 2 GB). This script downloads the parts,
 # reassembles the tar, verifies its checksum, and unpacks it into the
 # FastFlowLM models directory (/var/lib/vaelor/flm/models).
@@ -17,18 +21,42 @@
 #   - have `gh` installed and authenticated (`gh auth login`), OR
 #   - export GH_TOKEN with a token that can read the repo.
 #
-# Usage:  deploy/fetch-npu-model.sh
+# Usage:  deploy/fetch-npu-model.sh   (after Vaelor is installed)
 # Env:    VAELOR_REPO (default ShadowLayer90/vaelor)
-#         VAELOR_RELEASE_TAG (default v1.5.3)
+#         VAELOR_RELEASE_TAG (default v1.5.4)
 #         FLM_MODELS_DIR (default /var/lib/vaelor/flm/models)
+#         VAELOR_PYTHON (default /opt/vaelor/venv/bin/python)
 set -Eeuo pipefail
 
+PIN_PYTHON="${VAELOR_PYTHON:-/opt/vaelor/venv/bin/python}"
+# The pin is KEY=value lines of plain tokens; each is checked before it is used,
+# never eval'd.
+if ! pin_lines="$("${PIN_PYTHON}" -I -m vaelor.npu_runtime_pin shell)"; then
+  echo "ERROR: the model package is named by the installed Vaelor package, and"     "${PIN_PYTHON} could not say which; install Vaelor first." >&2
+  exit 1
+fi
+NPU_MODEL_NAME="" NPU_PART_PREFIX="" NPU_PACKAGE_SHA="" NPU_PACKAGE_BYTES=""
+while IFS="=" read -r key value; do
+  value="${value%$'\r'}"
+  [[ "${value}" =~ ^[A-Za-z0-9._:+-]+$ ]] || continue
+  case "${key}" in
+    NPU_MODEL_NAME | NPU_PART_PREFIX | NPU_PACKAGE_SHA | NPU_PACKAGE_BYTES)
+      printf -v "${key}" '%s' "${value}" ;;
+  esac
+done <<<"${pin_lines}"
+if [[ -z "${NPU_MODEL_NAME}" || -z "${NPU_PART_PREFIX}" ||
+  ! "${NPU_PACKAGE_SHA}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "ERROR: the installed Vaelor package names no complete NPU model package." >&2
+  exit 1
+fi
+
 REPO="${VAELOR_REPO:-ShadowLayer90/vaelor}"
-TAG="${VAELOR_RELEASE_TAG:-v1.5.3}"
+TAG="${VAELOR_RELEASE_TAG:-v1.5.4}"
 MODELS_DIR="${FLM_MODELS_DIR:-/var/lib/vaelor/flm/models}"
-MODEL_NAME="Qwen3.5-4B-NPU2"
-PART_GLOB="qwen35-4b-npu2.tar.part*"
-EXPECT_SHA="80401bba2fc26896a7cac8ef23629ee495b20b1b853bfb9ce5202562772ca0e4"
+MODEL_NAME="${NPU_MODEL_NAME}"
+PART_PREFIX="${NPU_PART_PREFIX}"
+PART_GLOB="${PART_PREFIX}*"
+EXPECT_SHA="${NPU_PACKAGE_SHA}"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -63,7 +91,13 @@ normalise_model_modes() {
   fi
 }
 
-echo "Fetching ${MODEL_NAME} from ${REPO} release ${TAG} ..."
+# The size printed is the pinned package's own (LESSONS 5: a typed "~3.35 GB" outlived its package).
+if [[ "${NPU_PACKAGE_BYTES}" =~ ^[0-9]+$ ]]; then
+  npu_size="$(awk -v b="${NPU_PACKAGE_BYTES}" 'BEGIN { printf "%.2f GiB", b / 1073741824 }')"
+else
+  npu_size="size not stated by the pin"
+fi
+echo "Fetching ${MODEL_NAME} (${npu_size}) from ${REPO} release ${TAG} ..."
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   gh release download "$TAG" --repo "$REPO" --pattern "$PART_GLOB" --dir "$tmp"
 elif [[ -n "${GH_TOKEN:-}" ]]; then
@@ -74,7 +108,7 @@ elif [[ -n "${GH_TOKEN:-}" ]]; then
   # real JSON walk that reads exactly each asset's own id+name is safe to rely
   # on. Each part is streamed by its id (the id endpoint with the octet-stream
   # Accept is what serves private assets).
-  REPO="$REPO" TAG="$TAG" DEST="$tmp" python3 - <<'PY'
+  REPO="$REPO" TAG="$TAG" DEST="$tmp" PART_PREFIX="$PART_PREFIX" python3 - <<'PY'
 import json
 import os
 import sys
@@ -106,7 +140,7 @@ with fetch("{}/releases/tags/{}".format(api, tag),
 count = 0
 for asset in release.get("assets", []):
     name = str(asset.get("name", ""))
-    if not name.startswith("qwen35-4b-npu2.tar.part"):
+    if not name.startswith(os.environ["PART_PREFIX"]):
         continue
     print("  - {}".format(name))
     url = "{}/releases/assets/{}".format(api, asset["id"])
@@ -129,7 +163,7 @@ else
   # repo is private the API returns 404, and the message says how to authenticate
   # - so a private repo still gets a clear instruction rather than a raw error.
   echo "  (no gh / GH_TOKEN - downloading the public release assets)"
-  REPO="$REPO" TAG="$TAG" DEST="$tmp" python3 - <<'PY'
+  REPO="$REPO" TAG="$TAG" DEST="$tmp" PART_PREFIX="$PART_PREFIX" python3 - <<'PY'
 import json
 import os
 import sys
@@ -167,7 +201,7 @@ except urllib.error.HTTPError as error:
 count = 0
 for asset in release.get("assets", []):
     name = str(asset.get("name", ""))
-    if not name.startswith("qwen35-4b-npu2.tar.part"):
+    if not name.startswith(os.environ["PART_PREFIX"]):
         continue
     url = asset.get("browser_download_url")
     if not url:
@@ -189,7 +223,7 @@ PY
 fi
 
 shopt -s nullglob
-parts=("${tmp}"/qwen35-4b-npu2.tar.part*)
+parts=("${tmp}/${PART_PREFIX}"*)
 if (( ${#parts[@]} == 0 )); then
   echo "ERROR: no model parts were downloaded." >&2
   exit 1

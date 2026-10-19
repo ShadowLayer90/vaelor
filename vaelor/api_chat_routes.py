@@ -8,6 +8,7 @@ import sqlite3
 
 from flask import g, request
 
+from .ai_chat_model_lease import custom_agent_readiness
 from .api_common import ApiContext, payload as _payload
 from .chat_connections import LOCAL_BY_ADDRESS, LOCALITY_UNKNOWN, describe_connections
 from .copilot_setup import hardware_inventory
@@ -259,6 +260,9 @@ def register_chat_routes(context: ApiContext) -> None:
             # nothing is probed or predicted - and a model that starts answering
             # drops out of this map on its own.
             "unavailable_models": unavailable_models,
+            # VD-220: the runner's own verdict on AI Chat's model for custom
+            # agents (state, whether it blocks, its sentence), read with no wake.
+            "custom_agents": custom_agent_readiness(getattr(inference, "broker", None)),
         })
 
     @blueprint.get("/inference/status")

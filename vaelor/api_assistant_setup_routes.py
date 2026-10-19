@@ -14,8 +14,10 @@ from .assistant_action_requests import (
     outstanding_actions,
 )
 from .assistant_acting_wiring import operator_act_scopes
+from .assistant_stream import STOPPED_ANSWER, record_stopped, stop_running, streamed_answer, wants_stream
+from .inference_stream import AnswerStopped
 from .assistant_answer_presentation import navigation_steps
-from .assistant_intents import chat_destination, select_tools
+from .assistant_intents import chat_destination, history_arguments, select_tools
 from .assistant_log_answers import logs_arguments
 from .assistant_machine_names import as_records, machine_directory, machines_named, unknown_bare_name, unknown_machine
 from .assistant_machine_brief import machine_brief
@@ -370,6 +372,30 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
     @blueprint.post("/assistant/chat")
     @require_auth("operator", csrf=True)
     def assistant_chat():
+        # VD-218: a client that accepts the stream sees the local model's text
+        # as it is written; every other turn returns exactly as before.
+        if wants_stream(request.headers.get("Accept", "")):
+            body = request.get_json(silent=True) or {}
+            return streamed_answer(
+                assistant_chat_turn, actor=g.auth_session.username,
+                key=str(body.get("idempotency_key", "")).strip(), question=body.get("message", ""))
+        return assistant_chat_turn(None)
+
+    @blueprint.post("/assistant/chat/stop")
+    @require_auth("operator", csrf=True)
+    def assistant_chat_stop():
+        # VD-218 (owner 2026-10-16): only an explicit Stop stops an answer; a
+        # closed page lets it finish. Named by the ask's own idempotency key,
+        # and only the account that asked can stop it.
+        key = str((request.get_json(silent=True) or {}).get("idempotency_key", "")).strip()
+        if key and stop_running(g.auth_session.username, key):
+            return _payload({"stopped": True})
+        return _payload(error={
+            "code": "assistant_answer_not_running",
+            "message": "No answer of yours is being written under that request, so nothing was stopped.",
+        }, status=404)
+
+    def assistant_chat_turn(draft):
         agent = callbacks.get("deployment_agent")
         registry = callbacks.get("assistant_tools")
         assistant_store = callbacks.get("assistant_memory")
@@ -455,6 +481,9 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
                             # Review S7: the journal tool needs the service
                             # the question names (the control plane if none).
                             else logs_arguments(message) if tool_name == "logs.service"
+                            # VD-219: history is read over the window the
+                            # question names, not the newest 30 rows.
+                            else history_arguments(message) if tool_name == "metrics.history"
                             else {},
                             actor=g.auth_session.username,
                             administrator=g.auth_session.role == "administrator",
@@ -572,6 +601,7 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
                 granted_scopes=operator_act_scopes(
                     callbacks.get("workload_act_grants"), g.auth_session.username
                 ),
+                **({"draft": draft} if draft is not None else {}),
             )
             # A change request must never be answered with only the current
             # state. If nothing downstream raised an approval for it, say
@@ -683,6 +713,13 @@ def register_assistant_setup_routes(context: ApiContext) -> None:
                     message_id=reply["id"],
                     brief_text=brief["text"],
                 )
+        except AnswerStopped:
+            # VD-218: the owner pressed Stop and the model was stopped. The
+            # transcript says so, so a reload's resume-poll is not left waiting.
+            abandon()
+            record_stopped(assistant_store, conversation["id"], actor)
+            return _payload(error={"code": "assistant_answer_stopped", "message": STOPPED_ANSWER},
+                            status=499)
         except LocalModelBusy as error:
             # LocalModelBusy is a RuntimeError, outside answer()'s except tuple
             # (OSError, ValueError, KeyError, URLError), so it arrives uncaught

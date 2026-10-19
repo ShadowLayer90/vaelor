@@ -464,8 +464,17 @@ def _post(
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if connection.get("api_key"):
         headers["Authorization"] = "Bearer {}".format(connection["api_key"])
+    # VD-218 / R136: a FastFlowLM generation is never hung up on while it
+    # runs (inference_client.flm_plain_post). Imported here: inference_client
+    # imports this module through model_profiles.
+    from .inference_client import flm_connection, flm_plain_post
+
+    url = "{}/chat/completions".format(str(connection["base_url"]).rstrip("/"))
+    if flm_connection(dict(connection)):
+        raw = flm_plain_post(dict(connection), url, payload, headers, timeout, MAX_PROBE_RESPONSE_BYTES)
+        return json.loads(raw[:MAX_PROBE_RESPONSE_BYTES].decode("utf-8", "replace"))
     request = urllib.request.Request(
-        "{}/chat/completions".format(str(connection["base_url"]).rstrip("/")),
+        url,
         data=json.dumps(payload).encode("utf-8"),
         headers=headers,
         method="POST",

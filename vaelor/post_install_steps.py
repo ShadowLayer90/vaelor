@@ -83,6 +83,10 @@ STEPS = (
     Step("vllm_moe_hip_build", "build", 390, "build Vaelor's HIP expert kernels (VD-216)", True),
     Step("vllm_guesser_build", "build", 1230, "build the 4-bit guesser (VD-216)", True),
     Step("vllm_overlay_prune", "apply", 60, "remove retired kernel versions (VD-216)"),
+    # Starts a background move and returns: the NPU package is gigabytes, more
+    # than this budget, and the reload must not wait for it (`npu_runtime_switch`).
+    Step("npu_runtime_switch", "start", 30,
+         "move the NPU Assistant to its pinned FastFlowLM and model (VD-219)"),
 )
 
 #: What all the steps together may take. Under the 600 s every broker so far

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from .ai_chat_model_lease import (
+    AGENT_MODE, OPENAI_BASE_URL, OPENAI_DEFAULT_MODEL, custom_agent_model,
+    resolve_ai_chat_model,
+)
 from .credential_broker import CredentialError
 from .hosted_providers import OFF_MACHINE_KINDS
-from .inference_client import OPENAI_BASE_URL
-from .model_credential_roles import ai_chat_may_use_lease
 from .runtime_paths import env_value
-
-OPENAI_DEFAULT_MODEL = "gpt-5.6-terra"
 
 #: VD-207: why escalation to AI Chat's model is unavailable when that model is
 #: off this machine. The owner decided such an escalation needs their approval
@@ -101,29 +101,29 @@ def resolve_model_connection(
     normalized_mode = str(mode).strip().lower()
     if normalized_mode == "basic":
         return None
+    if normalized_mode == AGENT_MODE:
+        # VD-220 (owner): a custom agent runs on AI Chat's model wherever it
+        # points - hosted included - and never on the NPU ``deployment-agent``
+        # model; with none it is None, never a fall-through to the Assistant's
+        # lease or the environment. Not an escalation: no capable marker.
+        return custom_agent_model(credential_broker).connection
     if normalized_mode in CAPABLE_MODES:
         # Escalation: run this on the capable GPU model that powers AI Chat.
         # It is a DIFFERENT lease ("ai-chat"), never the NPU deployment-agent,
         # and it never falls through to the environment NPU configuration: if no
         # GPU lease is active the graphics model is genuinely unavailable and the
         # caller must see None so it can tell the user, not silently downshift.
-        if credential_broker is None:
+        # AI Chat's model is asked of the one resolver AI Chat and custom agents
+        # share (VD-220, LESSONS 6). It never wakes a cluster from here, and a
+        # stale lease on the Assistant's NPU model reads as none (VD-210).
+        conn = resolve_ai_chat_model(credential_broker).connection
+        if conn is None:
             return None
-        try:
-            lease = credential_broker.resolve_active("ai-chat")
-            listed = credential_broker.list()
-        except CredentialError:
-            return None
-        if not ai_chat_may_use_lease(lease, listed):
-            # VD-210 owner rule: a stale AI Chat lease on the Assistant's NPU
-            # model is not a capable GPU model, and AI Chat never uses it.
-            return None
-        if off_machine_lease(lease):
+        if off_machine_lease(conn):
             # VD-207: escalating to an external model needs the owner's
             # approval each time, and that approval is not built yet - so it
             # fails closed for every off-machine kind, OpenAI included.
             return None
-        conn = _lease_connection(lease)
         # Stamp the escalation marker server-side, from the broker lease, so
         # every tier consumer treats the capable pass as capable regardless of
         # the model NAME the lease carries. The GPU fork lease deliberately

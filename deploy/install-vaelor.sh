@@ -13,7 +13,7 @@ migrate=0
 # Only an explicit --without-docker declines it (#207).
 with_docker="yes"
 skip_system_packages=0
-# The NPU Assistant model (~3.35 GB) is fetched by default on a box that has a
+# The NPU Assistant model (several GB) is fetched by default on a box that has a
 # neural accelerator, so a fresh Strix Halo appliance is turnkey. --without-npu-model
 # defers that large download; install it later with deploy/fetch-npu-model.sh.
 without_npu_model=0
@@ -111,7 +111,7 @@ Usage: install-vaelor.sh [--wheel FILE] [options]
                        Native-package integration only; required OS packages
                        (including InfluxDB 1.x and Docker) must already be
                        installed
-  --without-npu-model  Do not fetch the on-device NPU Assistant model (~3.35 GB)
+  --without-npu-model  Do not fetch the on-device NPU Assistant model (several GB)
                        during install. It is fetched by default where a neural
                        accelerator is present; use this to defer that large
                        download and run deploy/fetch-npu-model.sh yourself later.
@@ -297,7 +297,7 @@ if [[ -z "${wheel}" ]]; then
     }
   fi
   wheel_repo="${VAELOR_REPO:-ShadowLayer90/vaelor}"
-  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5.3}"
+  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5.4}"
   wheel_dl_dir="$(mktemp -d)"
   echo "No local wheel; downloading it from ${wheel_repo} release ${wheel_tag} ..."
   wheel="$(VAELOR_REPO="${wheel_repo}" VAELOR_TAG="${wheel_tag}" \
@@ -1444,16 +1444,21 @@ install_amd_smi || true
 # because installing an NPU runtime on a host with no neural processor turns
 # "we did not look" into "we looked and there is nothing".
 #
-# Source stated plainly: the pinned FastFlowLM v1.0.2 portable Linux release
-# from github.com/ROCm/FastFlowLM, verified against a recorded SHA-256 - an
-# unverified runtime is never placed on the appliance. v1.0.2 is pinned
-# deliberately: v1.0.3 rejects the v1.0.2 model ("version 1.0.2 < 1.0.3").
-# Non-fatal on every failure - no network, a 404, a checksum mismatch, or a
-# missing curl/tar - so an appliance never fails to install because an optional
-# AI runtime could not be fetched. The NPU model itself is fetched by
-# install_npu_model just below (folded into this installer), which reuses
-# deploy/fetch-npu-model.sh to place it under /var/lib/vaelor/flm/models.
-FLM_VERSION="1.0.2"
+# Source stated plainly: the FastFlowLM portable Linux release the installed
+# Vaelor package pins (vaelor/npu_runtime_pin.py: the runtime and the model
+# package are pinned as ONE serving pair, because a package is converted for one
+# FastFlowLM - 1.0.3 refuses a 1.0.2 package, "version 1.0.2 < 1.0.3"), from
+# github.com/ROCm/FastFlowLM, verified against its pinned SHA-256 by
+# `python -I -m vaelor.npu_runtime_files install-runtime` - an unverified
+# runtime is never placed on the appliance. That places a runtime only where
+# there is none: a box on another FastFlowLM is moved WITH its model package by
+# the post-install step the model refresh runs after the health gate (VD-219),
+# the same step the console update runs, and never has its runtime replaced alone here.
+# Non-fatal on every failure - no network, a 404, a checksum mismatch - so an
+# appliance never fails to install because an optional AI runtime could not be
+# fetched. The NPU model itself is fetched by install_npu_model just below,
+# which reuses deploy/fetch-npu-model.sh to place it under
+# /var/lib/vaelor/flm/models.
 FLM_ROOT="/var/lib/vaelor/flm"
 install_fastflowlm() {
   # G2 (VD-194): a cluster worker has no Assistant; its controller's serves.
@@ -1474,61 +1479,22 @@ install_fastflowlm() {
   # unprivileged executor can traverse and probe it. fetch-npu-model.sh installs
   # the NPU model into ${FLM_ROOT}/models.
   install -d -m 0755 -o root -g root "${FLM_ROOT}" "${FLM_ROOT}/models"
-  # Idempotent: a matching version marker beside an installed wrapper means the
-  # pinned runtime is already in place, so skip the re-download.
-  local marker="${FLM_ROOT}/.vaelor-flm-version"
-  if [[ -x "${FLM_ROOT}/flm" ]] &&
-    [[ "$(cat "${marker}" 2>/dev/null || true)" == "${FLM_VERSION}" ]]; then
-    echo "FastFlowLM ${FLM_VERSION} is already installed at ${FLM_ROOT}; leaving it alone."
-    return 0
-  fi
   # An offline native-package install must not reach out to GitHub: a pre-built
-  # image provisions the runtime at build time (the marker check above then
-  # skips), so defer the network fetch the way the ROCm steps do.
+  # image provisions the runtime at build time, so defer the network fetch the
+  # way the ROCm steps do.
   if ((skip_system_packages)); then
     echo "Native-package install: FastFlowLM is left to the image."
     return 0
   fi
-  if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
-    echo "curl or tar is unavailable; the NPU Assistant will report as" \
-      "unavailable until FastFlowLM is installed at ${FLM_ROOT}." >&2
+  # Idempotent: a box already on the pinned runtime is left alone, and says so.
+  if ! "${vaelor_venv_python}" -I -m vaelor.npu_runtime_files install-runtime; then
+    echo "The NPU Assistant will report as unavailable until FastFlowLM is" \
+      "installed at ${FLM_ROOT}." >&2
     return 0
   fi
-  # Pinned FastFlowLM v1.0.2 portable Linux release, SHA-256 verified.
-  local flm_url="https://github.com/ROCm/FastFlowLM/releases/download/v1.0.2/fastflowlm_1.0.2_linux.tar.gz"
-  local flm_sha="7a6f8a30db3ce832cc546c89ce6bc6e686289f93a75f457fae575cfa33a4604a"
-  local tmp_tarball
-  tmp_tarball="$(mktemp)" || return 0
-  if ! curl -fL "${flm_url}" -o "${tmp_tarball}"; then
-    echo "The FastFlowLM tarball could not be downloaded; the NPU Assistant" \
-      "will report as unavailable until FastFlowLM is installed at ${FLM_ROOT}." >&2
-    rm -f "${tmp_tarball}"
-    return 0
-  fi
-  if ! echo "${flm_sha}  ${tmp_tarball}" | sha256sum -c - >/dev/null 2>&1; then
-    echo "The FastFlowLM tarball failed SHA-256 verification and was NOT" \
-      "installed; the NPU Assistant will report as unavailable until FastFlowLM" \
-      "is installed at ${FLM_ROOT}." >&2
-    rm -f "${tmp_tarball}"
-    return 0
-  fi
-  # Self-contained tarball: top-level flm (wrapper), flm-real (binary), lib/,
-  # xclbins/. Unpack directly into the runtime dir.
-  if ! tar -xzf "${tmp_tarball}" -C "${FLM_ROOT}"; then
-    echo "The FastFlowLM tarball could not be extracted; the NPU Assistant will" \
-      "report as unavailable until FastFlowLM is installed at ${FLM_ROOT}." >&2
-    rm -f "${tmp_tarball}"
-    return 0
-  fi
-  rm -f "${tmp_tarball}"
-  chmod +x "${FLM_ROOT}/flm" "${FLM_ROOT}/flm-real" 2>/dev/null || true
   # Run the wrapper once as root to materialize the XRT lib symlinks it creates
   # on first run (lib/x86_64-linux-gnu). Non-fatal - the deploy step relaunches.
   HOME=/root "${FLM_ROOT}/flm" version >/dev/null 2>&1 || true
-  printf '%s\n' "${FLM_VERSION}" >"${marker}"
-  echo "FastFlowLM ${FLM_VERSION} installed at ${FLM_ROOT} from ROCm/FastFlowLM," \
-    "a pinned release verified against its SHA-256. The NPU model is installed" \
-    "by deploy/fetch-npu-model.sh into ${FLM_ROOT}/models."
 }
 install_fastflowlm || true
 
@@ -1549,14 +1515,14 @@ normalise_npu_model_modes() {
   done
 }
 
-# The NPU Assistant model (Qwen3.5-4B-NPU2, ~3.35 GB) FastFlowLM serves. This is
+# The NPU Assistant model (Qwen3.5-4B-NPU2, several GB) FastFlowLM serves. This is
 # the step that used to be a separate `deploy/fetch-npu-model.sh` run; folding it
 # in makes a fresh Strix Halo box turnkey (the owner's ask - one install command,
 # not two). It reuses that same script rather than duplicating its download so the
 # reassembly, SHA-256 verification and unpack stay in one place.
 #
 # Gated exactly like install_fastflowlm above (x86_64 with a neural-accelerator
-# device bound), so a host with no NPU never pulls 3.35 GB it cannot use. Opt out
+# device bound), so a host with no NPU never pulls several GB it cannot use. Opt out
 # with --without-npu-model to defer the large download. Idempotent: a model
 # already unpacked into the FLM models dir is left alone (its modes apart - see
 # normalise_npu_model_modes below). Skipped on an offline
@@ -1584,7 +1550,7 @@ install_npu_model() {
     return 0
   fi
   # Idempotent: any model already unpacked under the FLM models dir means the
-  # fetch is done - do not re-download ~3.35 GB on a re-run. Matched on "a
+  # fetch is done - do not re-download several GB on a re-run. Matched on "a
   # subdirectory exists" rather than the model name so a future model rename
   # needs no change here.
   if compgen -G "${FLM_ROOT}/models/*/" >/dev/null 2>&1; then
@@ -1606,6 +1572,14 @@ install_npu_model() {
       "Install FLM, then run deploy/fetch-npu-model.sh." >&2
     return 0
   fi
+  # The package is converted for one FastFlowLM (VD-219). A box on another one
+  # gets the runtime and its package together from the post-install step, so a
+  # package that would not run beside this runtime is not fetched alone.
+  if ! "${vaelor_venv_python}" -I -m vaelor.npu_runtime_files runtime-matches; then
+    echo "FastFlowLM at ${FLM_ROOT} is not the version this release's NPU model" \
+      "needs; the post-install step moves both together."
+    return 0
+  fi
   # Reuse the standalone fetch script beside this installer (the repo layout is
   # deploy/install-vaelor.sh + deploy/fetch-npu-model.sh, so it sits in
   # ${script_dir}). It reassembles the split release parts, verifies the tar's
@@ -1619,7 +1593,14 @@ install_npu_model() {
       "${FLM_ROOT}/models." >&2
     return 0
   fi
-  echo "Fetching the NPU Assistant model (~3.35 GB) - the large step; this can" \
+  # The size is the pinned package's own, read from the installed pin (LESSONS 5).
+  local npu_bytes npu_size="several GB"
+  npu_bytes="$("${vaelor_venv_python}" -I -m vaelor.npu_runtime_pin shell 2>/dev/null |
+    sed -n 's/^NPU_PACKAGE_BYTES=\([0-9][0-9]*\)$/\1/p')" || npu_bytes=""
+  if [[ -n "${npu_bytes}" ]]; then
+    npu_size="$(awk -v b="${npu_bytes}" 'BEGIN { printf "%.2f GiB", b / 1073741824 }')"
+  fi
+  echo "Fetching the NPU Assistant model (${npu_size}) - the large step; this can" \
     "take a while on a slow link ..."
   if FLM_MODELS_DIR="${FLM_ROOT}/models" bash "${fetch_script}"; then
     echo "NPU Assistant model installed under ${FLM_ROOT}/models."

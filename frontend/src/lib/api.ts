@@ -1,4 +1,10 @@
 import type { ApiEnvelope } from "../types";
+import {
+  ASSISTANT_STREAM_MEDIA_TYPE,
+  type AnswerStreamHandlers,
+  isAnswerStream,
+  readAnswerStream,
+} from "./assistantStream";
 
 export const SESSION_EXPIRED_EVENT = "vaelor:session-expired";
 /** Dispatched with the re-read `Session` as `detail` when the signed-in
@@ -34,6 +40,13 @@ export class ApiError extends Error {
 
 interface ApiRequestOptions extends RequestInit {
   timeoutMs?: number;
+  /**
+   * Read the Assistant's answer as it is written (VD-218): sends
+   * `Accept: application/x-ndjson` and calls these while the stream lasts.
+   * The promise still resolves to the final answer's data, or rejects with the
+   * same errors an unstreamed request does.
+   */
+  answerStream?: AnswerStreamHandlers;
 }
 
 /**
@@ -130,9 +143,9 @@ async function apiRequestUncached<T>(
     cacheFetchIdentity = fetch;
   }
   const method = (options.method ?? "GET").toUpperCase();
-  const { timeoutMs = ["GET", "HEAD"].includes(method) ? 8000 : 60000, ...fetchOptions } = options;
+  const { timeoutMs = ["GET", "HEAD"].includes(method) ? 8000 : 60000, answerStream, ...fetchOptions } = options;
   const headers = new Headers(options.headers);
-  headers.set("Accept", "application/json");
+  headers.set("Accept", answerStream ? `${ASSISTANT_STREAM_MEDIA_TYPE}, application/json` : "application/json");
   if (options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
@@ -211,6 +224,20 @@ async function apiRequestUncached<T>(
     window.clearTimeout(timeout);
   }
   signalSessionExpired(path, response.status);
+  if (answerStream && isAnswerStream(response)) {
+    const outcome = await readAnswerStream(response, answerStream);
+    if ("dropped" in outcome) {
+      // The same codes an unstreamed request gets, so the caller's Stop and
+      // live-drop handling (useResumedAnswer) treat both alike.
+      if (options.signal?.aborted) throw cancelledRequest();
+      throw new ApiError(
+        "The appliance could not complete that request. It may be busy or briefly unreachable — try again.",
+        503,
+        "service_unavailable",
+      );
+    }
+    return envelopeData<T>(outcome.body as ApiEnvelope<T> | undefined, outcome.status);
+  }
   let envelope: ApiEnvelope<T>;
   try {
     envelope = (await response.json()) as ApiEnvelope<T>;
@@ -221,12 +248,17 @@ async function apiRequestUncached<T>(
       "invalid_response",
     );
   }
-  if (!response.ok || !envelope.ok || envelope.data === undefined) {
+  return envelopeData<T>(envelope, response.status, response.ok);
+}
+
+/** An envelope's data, or the `ApiError` it carries. */
+function envelopeData<T>(envelope: ApiEnvelope<T> | undefined, status: number, ok = status < 400): T {
+  if (!ok || !envelope?.ok || envelope.data === undefined) {
     throw new ApiError(
-      envelope.error?.message ?? "The request could not be completed.",
-      response.status,
-      envelope.error?.code,
-      envelope.error ?? {},
+      envelope?.error?.message ?? "The request could not be completed.",
+      status,
+      envelope?.error?.code,
+      envelope?.error ?? {},
     );
   }
   return envelope.data;

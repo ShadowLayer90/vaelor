@@ -17,6 +17,7 @@ const labels: Record<string, string> = {
   "ai-chat.connections": "AI Chat connections",
   "apps.catalog": "App catalog",
   "assistant.capability": "What the Assistant can do",
+  "assistant.clock": "This machine's clock",
   "assistant.fallback": "The Assistant's fallback answer",
   "assistant.machine-brief": "This machine's standing facts",
   "assistant.machine-events": "What happened on a machine",

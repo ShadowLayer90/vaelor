@@ -12,7 +12,7 @@ console, all on the box, nothing forced through the cloud. Add a second machine 
 the same console serves models across both.**
 
 ![License](https://img.shields.io/badge/license-GPL--2.0-blue)
-![Release](https://img.shields.io/badge/release-1.5.3-orange)
+![Release](https://img.shields.io/badge/release-1.5.4-orange)
 ![Flagship](https://img.shields.io/badge/flagship-HP%20Z2%20Mini%20G1a%20·%20Strix%20Halo-orange)
 ![Also runs on](https://img.shields.io/badge/also%20runs%20on-HP%20ZBook%20Ultra%20G1a%20·%20Raspberry%20Pi%205-informational)
 ![Arch](https://img.shields.io/badge/arch-x86--64%20%7C%20ARM64-lightgrey)
@@ -293,7 +293,7 @@ the first visit. See [SECURE_ACCESS.md](SECURE_ACCESS.md). The first visit asks 
 create the administrator account. The installer adopts Docker if it is already present and asks before installing
 it when it is not.
 
-The installer downloads from the **`v1.5.3`** release by default. Set `VAELOR_RELEASE_TAG`
+The installer downloads from the **`v1.5.4`** release by default. Set `VAELOR_RELEASE_TAG`
 to install from another release (for example
 `sudo VAELOR_RELEASE_TAG=v1.5.2 ~/vaelor/deploy/install-vaelor.sh --unattended`), or pass
 `--wheel /path/to/…whl` to install a specific build. `deploy/fetch-npu-model.sh` reads the

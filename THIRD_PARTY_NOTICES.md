@@ -39,7 +39,7 @@ each is governed by its own licence, which applies to whoever runs it.
 
 | Component | Source | When it is fetched | Licence |
 | --- | --- | --- | --- |
-| FastFlowLM runtime 1.0.2 | [ROCm/FastFlowLM](https://github.com/ROCm/FastFlowLM) release, SHA-256 verified | install, on a machine with a neural accelerator | split: MIT orchestration code, proprietary NPU kernels — see below |
+| FastFlowLM runtime 1.0.9 | [ROCm/FastFlowLM](https://github.com/ROCm/FastFlowLM) release, SHA-256 verified | install or update, on a machine with a neural accelerator | split: MIT orchestration code, NPU binaries under the FastFlowLM NPU Binary License — see below |
 | InfluxDB 1.12.4 | InfluxData's package pool, SHA-256 verified | install | MIT |
 | Telegraf 1.32.3 | InfluxData's downloads, SHA-256 verified | staged at install on the controller; copied by the controller to each cluster worker | MIT |
 | vLLM pull request #59448 (one file's change to `triton_unified_attention.py`) | [vllm-project/vllm](https://github.com/vllm-project/vllm), the PR's diff at pinned commits, SHA-256 verified | install, on the controller; applied on each GPU machine to the pinned vLLM 0.27 image's own copy of that file, which is then mounted into vLLM's container | Apache-2.0 |
@@ -61,10 +61,13 @@ and its publisher; Vaelor neither grants nor narrows it.
 ## FastFlowLM
 
 The Assistant's NPU tier runs on FastFlowLM's `flm` runtime, which Vaelor
-supervises directly. The installer downloads the pinned upstream release
-(v1.0.2) from [ROCm/FastFlowLM](https://github.com/ROCm/FastFlowLM), verifies
-its SHA-256, and installs it under `/var/lib/vaelor/flm`. **No Vaelor artifact
-contains any FastFlowLM code or binary.**
+supervises directly. The installer, and the console's update, download the
+pinned upstream release (v1.0.9) from
+[ROCm/FastFlowLM](https://github.com/ROCm/FastFlowLM), verify its SHA-256, and
+install it under `/var/lib/vaelor/flm`. On a machine updated from an earlier
+Vaelor, the release it ran before (v1.0.2) is put back if the new one fails its
+health check, and is otherwise kept beside it until the next move. **No Vaelor
+artifact contains any FastFlowLM code or binary.**
 
 ### Attribution
 
@@ -78,68 +81,83 @@ Powered by [FastFlowLM](https://github.com/ROCm/FastFlowLM)
 Keep it there. Removing it while driving the runtime withdraws the
 acknowledgement the upstream project asks for.
 
-### The licence is split, and the two upstream sources disagree
+### The licence is split
 
 Two different sets of terms cover two different parts of FastFlowLM, and they
-must not be summarised as one.
+must not be summarised as one. This describes the v1.0.9 release Vaelor pins.
 
 - **Orchestration code and CLI tools — MIT.** `LICENSE_RUNTIME.txt` is a
   standard MIT licence, `Copyright (c) 2025 FastFlowLM`. Redistribution requires
   preserving that copyright notice and the full licence text. MIT is compatible
-  with Vaelor's GPL-2.0-only distribution. This half is not in dispute.
-- **NPU binary kernels — the two sources conflict.**
-  - The project README describes them as free for any use including commercial
-    use, with no further condition.
-  - `TERMS.md`, in the same repository, states the binary components are
-    **"NOT open source"**, says they are covered by pending patents, and caps
-    free commercial use by revenue: above **USD 10 million** annual revenue an
-    explicit commercial licence is required (`info@fastflowlm.com`).
+  with Vaelor's GPL-2.0-only distribution.
+- **NPU binaries — the FastFlowLM NPU Binary License.** `LICENSE_BINARY.txt`,
+  `Copyright (c) 2026 Advanced Micro Devices, Inc.`, covers the NPU kernel
+  binaries (`.xclbin` files) and the prebuilt NPU engine libraries. It says they
+  are not open source, and permits anyone to use, copy and redistribute them for
+  any purpose, commercial use included, provided they are redistributed
+  unmodified with that licence included. They are provided as is, without
+  warranty.
 
-`TERMS.md` is titled *Terms of Use for Proprietary Binaries* and is the more
-specific document, so it is the one to rely on. Its section headings are
-*Open-Source Code (MIT License)* and *Proprietary Binaries (NPU Kernels)* — the
-split is deliberate upstream, not an artefact of how it is being read here.
+The earlier v1.0.2 release, which a machine updated from an earlier Vaelor
+keeps beside v1.0.9, has no `LICENSE_BINARY.txt`. Its binaries were covered by
+`TERMS.md` (*Terms of Use for Proprietary Binaries*), which stated they are not
+open source, said they are covered by pending patents, and capped free
+commercial use at USD 10 million of annual revenue, above which a commercial
+licence was required (`info@fastflowlm.com`).
 
 ### Why Vaelor downloads the runtime instead of shipping it
 
-**`TERMS.md` grants no redistribution or bundling right for the proprietary
-kernels.** It sets out a usage model for whoever runs them and is silent on
-shipping them inside another product. Silence is not permission, and a
-proprietary, patent-pending binary shipped alongside GPL-2.0-only work would
-raise a combination question this notice cannot settle. So Vaelor ships none of
-it: the installer fetches the runtime from upstream's own release onto the
-machine that runs it, and the operator who runs it is bound by its terms.
-Release rule 5 below applies if that ever changes. This notice records
-provenance and is not a substitute for legal advice.
+Vaelor ships none of FastFlowLM: the installer fetches the runtime from
+upstream's own release onto the machine that runs it, and the operator who
+runs it is bound by its terms. The v1.0.9 binary licence would allow the
+binaries to be redistributed unmodified with their licence, but shipping
+proprietary binaries alongside GPL-2.0-only work raises a combination question
+this notice cannot settle, and a download keeps each release under its own
+upstream terms. Release rule 5 below applies if that ever changes. This notice
+records provenance and is not a substitute for legal advice.
 
 ## The on-device Assistant model
 
-The model the Assistant runs on the NPU, `Qwen3.5-4B-NPU2`, is a fine-tune of
-the Qwen3.5-4B model converted to FastFlowLM's NPU model format. It is published
-as split assets on the Vaelor GitHub release (a release asset is capped at
-2 GB) and is verified against a SHA-256 pinned in the Vaelor wheel before it is
-unpacked. It is not part of the wheel or the source tree.
+The model the Assistant runs on the NPU is a fine-tune of the Qwen3.5-4B model
+converted to FastFlowLM's NPU model format. FastFlowLM serves it under the name
+`Qwen3.5-4B-NPU2`; this release's package is `ff-4b-v219r3p2-flm1.0.9`, for
+FastFlowLM 1.0.9. It is published as split assets on the Vaelor GitHub release
+(a release asset is capped at 2 GB) and is verified against a SHA-256 pinned in
+the Vaelor wheel before it is unpacked. It is not part of the wheel or the
+source tree.
 
 **Licence: Apache License, Version 2.0.** It is a modified version of
 [Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) (Copyright 2026 Alibaba
 Cloud, Apache-2.0), built on FastFlowLM's NPU conversion of that model,
-[FastFlowLM/Qwen3.5-4B-NPU2](https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2),
+[FastFlowLM/Qwen3.5-4B-NPU2](https://huggingface.co/FastFlowLM/Qwen3.5-4B-NPU2)
+(its `flm_q4k_high_precision` revision, the one FastFlowLM 1.0.9 installs),
 which is also Apache-2.0. What Vaelor changed:
 
-- `model.q4nx`: the language weights were fine-tuned (full-parameter) on
-  examples of Vaelor's tool calls, then converted to FastFlowLM's q4nx format.
-- `tokenizer.json` differs from FastFlowLM's published file, and `config.json`
-  is FastFlowLM's file with its `flm_version` set to 1.0.2.
-- `vision_weight.q4nx`, `tokenizer_config.json` and `chat_template.jinja` are
-  FastFlowLM's files, unchanged.
+- `model.q4nx`: the language weights of Qwen3.5-4B were fine-tuned
+  (full-parameter) on examples of Vaelor's tool calls and of the Assistant's
+  answers about the appliance, written from real machine readings, including
+  examples that hand general questions over to AI Chat. They were then
+  converted to FastFlowLM's q4nx format (Q4_K) for FastFlowLM 1.0.9.
+- `vaelor-package.json` was added: it names the package and lists the SHA-256
+  of every file, so Vaelor can check the folder before serving it.
+- `config.json`, `tokenizer.json`, `tokenizer_config.json`,
+  `chat_template.jinja` and `vision_weight.q4nx` are FastFlowLM's files from
+  that revision, unchanged.
 
 The release that carries the model parts also carries
-`qwen35-4b-npu2.LICENSE.txt`: the full licence text, the copyright notice and
-this list of changes. Keep that file with the model if you redistribute it.
+`ff-4b-v219r3p2-flm1.0.9.LICENSE.txt`: the full licence text, the copyright
+notice and this list of changes. Keep that file with the model if you
+redistribute it.
+
+The earlier package, `qwen35-4b-npu2` (published with Vaelor 1.5 to 1.5.3 for
+FastFlowLM 1.0.2), carries its own licence file and list of changes on those
+releases. On a machine updated from an earlier Vaelor, it is put back if the
+new one fails its health check, and is otherwise kept beside it until the next
+move.
 
 The model's licence covers the weights only. Running them on the NPU uses
-FastFlowLM's runtime and its proprietary NPU kernels, whose separate terms are
-described above.
+FastFlowLM's runtime and its NPU binaries, whose separate terms are described
+above.
 
 ## Hugeicons
 

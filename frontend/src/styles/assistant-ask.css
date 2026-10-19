@@ -228,6 +228,12 @@
   border-style: dashed;
 }
 
+/* VD-218: the answer while it is written. Same bubble, a dashed edge saying it
+   is provisional; the finished answer replaces the whole turn. */
+.as-msg--draft .as-bubble--ai {
+  border-style: dashed;
+}
+
 /* Evidence used: a card that opens to its sources, each with its reading. */
 .as-evidence {
   padding: 12px 14px;

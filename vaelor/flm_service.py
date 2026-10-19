@@ -100,6 +100,16 @@ RESERVED_CONTROL_PLANE_PORTS = frozenset({34001, 34002})
 #: LAN. A non-loopback host is refused by :func:`flm_serve_command`.
 FLM_HOST = "127.0.0.1"
 
+#: VD-219 / VD-220 B4 (kb N224, G172, G178; owner ruling in VD-220): every
+#: request Vaelor sends to FastFlowLM states presence and frequency penalty 0.
+#: FLM's Qwen3.5 defaults (presence 1.5, frequency 1.0) apply even at
+#: temperature 0 and drop digits an answer needs ("used of GB"), and a value a
+#: request sets stays on the server for every later request that sends none -
+#: so a request that left them out would be answered by whichever came first.
+#: Added at the FLM boundaries only: ``inference_client.flm_plain_post``,
+#: ``inference_stream.stream_chat_completion`` and the runtime switch's probe.
+FLM_PENALTIES = {"presence_penalty": 0.0, "frequency_penalty": 0.0}
+
 #: The one subcommand this module ever runs. Named so the argv builder cannot be
 #: repurposed into an arbitrary ``flm`` invocation by a caller passing a verb.
 FLM_SERVE_SUBCOMMAND = "serve"

@@ -112,8 +112,6 @@ export function ClusterInferenceAgentsPanel({ session }: { session: Session }) {
           clusterModelNote={clusterModelNote || inferenceModelNotice(serving)}
           clusterModelServing={clusterModelServing}
           csrfToken={session.csrf_token}
-          modelLabel=""
-          modelReady={false}
           onChanged={() => { void load(); }}
           profiles={profiles}
           surface="inference"

@@ -26,6 +26,28 @@ reply back to plain text rather than steering the model harder. And because a
 single small model is never perfectly reliable, :func:`is_degenerate` /
 :func:`with_retry_nudge` let the caller retry once when the first reply still
 echoes or comes back empty, before the scope guard degrades it.
+
+**A tool call is never re-sent (VD-218, kb R120).** Measured on the Z2
+2026-10-16 with the product's own request: "Hi" came back as one nameless tool
+call - ~15 s of hidden generation, no text - in 6 of 7 asks, and a question with
+no readings in 3 of 3. The full re-send recovered 2 of 4 at a cost of 11-25 s
+more, and a retry with a much smaller prompt (no machine brief) recovered 0 of
+5 - all ten of those calls were tool calls too. So a reply that is only a tool
+call ends the model's part at once: :class:`UnusableReply` says so and the
+Assistant answers from the readings it already gathered. Every call an ask
+makes is counted in its timing line (:func:`combined_performance`).
+
+**The NPU fine-tune is asked in the contract it was trained on (VD-219,
+LESSONS 26).** ff-4b-h learned one reply shape - a JSON object with summary,
+findings, recommendations, next_actions, and sources last - and never saw the
+Assistant's "plain text" prompt. Asked for plain text it wrote a half-remembered
+version of that shape: of 44 real questions on the Z2, 14 cut off, 10
+malformed, 3 a copied reading and 2 a sources list with no answer. The model is
+now asked in its contract (:data:`CONTRACT_MODELS`), and :func:`contract_text`
+reads the reply - whole, cut off or malformed - into plain lines: the summary,
+then the details, never a key, a brace or the sources (those become evidence,
+:func:`cited_evidence`). A reply that only cites or only copies a reading is
+asked once more with its answer opened for it (:data:`SUMMARY_PRIMER`).
 """
 
 from __future__ import annotations
@@ -33,11 +55,25 @@ from __future__ import annotations
 import ast
 import functools
 import json
+import logging
 from typing import Any, Dict, List, Tuple
 
+from .assistant_contract_reader import (
+    CITATION_KEYS,
+    DETAIL_KEYS,
+    LEAD_KEYS,
+    cited_evidence,
+    cites_only,
+    contract_text,
+    contract_values,
+    copies_reading,
+    is_lead_key,
+)
 from .assistant_memory_framing import MEMORY_INSTRUCTION_POLICY
 from .assistant_scope_guard import echoes_prompt_envelope
 from .provider_runtime import assistant_context
+
+_LOGGER = logging.getLogger(__name__)
 
 #: One line added to the *retry* only. Kept to a single sentence on purpose:
 #: the fix is the natural-language format, not the instruction, and piling
@@ -54,16 +90,43 @@ _RETRY_NUDGE = (
 #: rather than changing two things at once.
 _NO_THINK = "\n/no_think"
 
-#: Keys a JSON-shaped reply uses to carry the actual answer sentence, richest
-#: first. The 4B most often leads a real answer with ``summary``; the others are
-#: the shapes seen across the live battery.
-_LEAD_KEYS = ("answer", "summary", "response", "reply", "text", "message", "result")
+#: The keys a reply answers, details and cites with live with the reader.
+_LEAD_KEYS, _DETAIL_KEYS, _CITATION_KEYS = LEAD_KEYS, DETAIL_KEYS, CITATION_KEYS
 
-#: List-valued keys whose entries expand on the lead sentence.
-_DETAIL_KEYS = (
-    "details", "findings", "notes", "issues", "recommendations", "checks",
-    "next_actions", "actions", "observations",
-)
+#: VD-219 / R126: the opening of the one re-ask's reply. The first key the
+#: fine-tune writes decides the answer: primed with this, 5 of 5 sources-only
+#: asks answered; primed with a sources list, a question that normally answers
+#: wrote only sources, 2 of 2. Sent as the assistant turn, with no nudge.
+SUMMARY_PRIMER = '{"summary":"'
+
+#: VD-219: the room a contract answer is given. Not a cap (the owner rejected
+#: capping answers, D176): 14 of 44 real answers ran into the old 320.
+#: PROVISIONAL until measured on the Z2 against 512 and 1024.
+CONTRACT_ANSWER_TOKENS = 768
+
+def asks_in_contract(connection: Dict[str, str], model: str = "") -> bool:
+    """Whether this connection is the NPU fine-tune, asked in its trained JSON contract.
+
+    VD-219 / R139 item 5 (LESSONS 5): keyed on what the model IS, not on its
+    tag - FastFlowLM's stock model and other runtimes also serve ``qwen3.5:4b``.
+    It is the Assistant's on-device NPU credential (the id marker the vault
+    writes) serving the catalog's NPU release (``model_catalog.NPU_RELEASE_MODELS``,
+    whose release tag follows a rename). The marker with another model is said
+    in the log, not silently asked in the plain prompt.
+    """
+    from .model_catalog import NPU_RELEASE_MODELS
+    from .model_credential_roles import ASSISTANT_NPU_PREFIX
+
+    if not str(connection.get("credential_id") or "").startswith(ASSISTANT_NPU_PREFIX):
+        return False
+    tags = {str(item.get("release_tag") or "").lower() for item in NPU_RELEASE_MODELS
+            if item.get("surface") == "assistant"}
+    served = str(model or connection.get("model", "")).strip().lower()
+    if served not in tags:
+        _LOGGER.warning("The Assistant's NPU model %r is not the catalog's fine-tune %s; "
+                        "it is asked in the plain-text prompt (VD-219).", served, sorted(tags))
+        return False
+    return True
 
 
 def local_user_content(
@@ -100,7 +163,8 @@ def local_turn(
     parts = [str(message).strip()]
     if isinstance(facts, dict) and facts:
         lines = "\n".join(
-            "- {}: {}".format(key, json.dumps(value, separators=(",", ":"), default=str))
+            "- {}: {}".format(key, value if isinstance(value, str)
+                              else json.dumps(value, separators=(",", ":"), default=str, ensure_ascii=False))
             for key, value in facts.items()
         )
         parts.append("Current readings from this machine:\n" + lines)
@@ -159,6 +223,74 @@ NO_USABLE_REPLY = (
     "reply, one cut off before it said anything, or only a list of internal "
     "names), so there is no answer to show. Ask again."
 )
+
+
+class UnusableReply(ValueError):
+    """No text the owner could be shown, with the timing of every call that tried.
+
+    A ``ValueError`` so the Assistant's answer guard degrades it as it does
+    every other unreadable reply; ``performance`` lets that degraded answer still
+    say how long the model spent (VD-218: the timing line counts every call).
+    """
+
+    def __init__(self, message: str, performance: Dict[str, Any]) -> None:
+        super().__init__(message)
+        self.performance = performance
+
+
+#: VD-218 / R120: the reply was a tool call with no name and no text. The
+#: Assistant offers no tools, so this is the model not answering - said once,
+#: never re-sent (the measured re-send recovered half, at double the wait).
+EMPTY_TOOL_CALL_REPLY = (
+    "The on-device model started a tool call instead of answering, and the "
+    "Assistant gives it no tools, so it wrote no text to show."
+)
+
+#: VD-218: the reply named readings to fetch instead of answering. Every
+#: reading this question selected was already gathered and sent, so the answer
+#: comes from those, not from a second ask.
+NAMED_TOOL_CALL_REPLY = (
+    "The on-device model asked to read {} instead of answering from the "
+    "readings it was sent, so it wrote no text to show."
+)
+
+
+def tool_call_names(body: Any) -> List[str]:
+    """The first choice's tool-call function names; ``[""]`` for a nameless one.
+
+    FastFlowLM reports a call it parsed from the model's own output as
+    ``finish_reason: tool_calls`` - sometimes with the call list, and its name
+    empty (R120). Either signal counts; an ordinary reply yields ``[]``.
+    """
+    choices = body.get("choices") if isinstance(body, dict) else None
+    choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+    message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+    calls = message.get("tool_calls") or []
+    names = [str((call.get("function") or {}).get("name") or "").strip()
+             for call in calls if isinstance(call, dict)]
+    if not names and choice.get("finish_reason") == "tool_calls":
+        return [""]
+    return names
+
+
+def combined_performance(timings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """One timing line for an ask that called the model ``len(timings)`` times.
+
+    VD-218 / R120: the line used to carry the LAST call only, so a re-sent ask
+    that took 26 s said 11 s. ``total_seconds`` is now every call's wall clock
+    summed and ``model_calls`` says how many there were; the rates and the
+    time to first token are the last call's, the one whose text is shown.
+    """
+    if len(timings) <= 1:
+        return dict(timings[0]) if timings else {}
+    last = next((item for item in reversed(timings) if item), {})
+    combined: Dict[str, Any] = {
+        key: last[key] for key in ("ttft_seconds", "prefill_tps", "decode_tps") if key in last
+    }
+    combined["total_seconds"] = round(sum(
+        float(item.get("total_seconds") or 0) for item in timings), 3)
+    combined["model_calls"] = len(timings)
+    return combined
 
 
 def reply_text(body: Any) -> Any:
@@ -255,100 +387,105 @@ def _render_value(value: Any) -> str:
 
 
 def _render_dict(parsed: Dict[str, Any]) -> str:
-    """A readable sentence or two from a JSON-shaped reply.
+    """A readable sentence or two from a JSON-shaped reply with no answer the reader found.
 
-    A lead key carries the answer sentence; the detail lists expand it. When the
-    reply has neither - a bare ``{"cpu_temperature": 40.8, ...}`` reading - the
-    fields are rendered as ``key: value`` prose rather than dropped, so nothing
-    the model actually said is lost.
+    The citation keys are never shown (R139). A value that is a sentence, or a
+    list of them, is shown as written, without its key; a bare reading - a
+    ``{"cpu_temperature": 40.8}`` number or word - keeps its field name, said
+    as words, because the value means nothing without it.
     """
     pieces = []
-    for key in _LEAD_KEYS:
-        rendered = _render_value(parsed.get(key)) if key in parsed else ""
-        if rendered:
-            pieces.append(rendered if rendered.endswith((".", "!", "?")) else rendered + ".")
-            break
-    for key in _DETAIL_KEYS:
-        if key in parsed:
-            rendered = _render_value(parsed.get(key))
-            if rendered:
-                pieces.append(rendered if rendered.endswith((".", "!", "?")) else rendered + ".")
-    if pieces:
-        return " ".join(pieces)
-    # No named answer field: render the whole object as readable pairs.
-    pairs = [
-        "{}: {}".format(str(key).replace("_", " "), _render_value(value))
-        for key, value in parsed.items()
-        if _render_value(value)
-    ]
-    return "; ".join(pairs)
+    for key, value in parsed.items():
+        rendered = _render_value(value)
+        if not rendered or str(key).strip().lower() in _CITATION_KEYS:
+            continue
+        sentences = isinstance(value, list) or (isinstance(value, str) and len(value.split()) > 2)
+        pieces.append(rendered if sentences else "{}: {}".format(
+            str(key).replace("_", " ").strip(), rendered))
+    return "; ".join(pieces)
 
 
-def local_answer(request_body, headers, timeout, connection, call) -> Dict[str, Any]:
+def _continues_primer(content: Any) -> bool:
+    """Whether a primed reply is the rest of the opened summary, not a reply of its own.
+
+    A server that continues the assistant turn returns ``Docker is idle.",...``:
+    no opener of its own, and the summary's closing quote inside.
+    """
+    text = str(content or "").lstrip()
+    return bool(text) and text[0] not in '{["`' and ('",' in text or text.rstrip().endswith('"}'))
+
+
+def needs_primer(content: Any, sent: str) -> bool:
+    """Whether a reply only cites (R126) or only copies a reading (R130) - asked again, primed."""
+    return cites_only(content) or copies_reading(content, sent)
+
+
+def local_answer(request_body, headers, timeout, connection, call, *, restart=None,
+                 contract=False) -> Dict[str, Any]:
     """One managed-local answer: call, retry once if degenerate, humanize.
 
-    ``call`` is :func:`vaelor.inference_client.chat_completion`, passed in rather
-    than imported so this module stays free of the client's import graph. The
-    retry mutates the user turn in place - it is the same logical generation, one
-    more try - and never fires when the first reply already answered, which is
-    the measured common case.
+    ``call`` is :func:`vaelor.inference_client.chat_completion`, or a streamed
+    call with the same signature (:mod:`vaelor.assistant_stream`), passed in
+    rather than imported so this module stays free of the client's import graph.
+    The retry is the same logical generation, one more try, and never fires when
+    the first reply already answered, which is the measured common case, nor when
+    the reply was a tool call (VD-218). ``restart`` runs before a retry, so text
+    a streamed first try already put on the page is taken back.
+
+    VD-219: the retry opens the model's reply for it (:data:`SUMMARY_PRIMER`,
+    no nudge) when the model was asked in its trained ``contract``, or when the
+    reply only cited or only copied a reading; otherwise it carries the
+    plain-sentences nudge as before. The cited readings come back as evidence.
     """
-    body = call(connection, request_body, headers, timeout)
-    content = reply_text(body)
-    if is_degenerate(content) or not shown_text(content):
-        message = request_body["messages"][-1]
-        message["content"] = with_retry_nudge(message["content"])
+    timings: List[Dict[str, Any]] = []
+    sent = str(request_body["messages"][-1].get("content") or "")
+
+    def ask() -> Any:
         body = call(connection, request_body, headers, timeout)
+        timings.append(body.get("performance") or {} if isinstance(body, dict) else {})
         content = reply_text(body)
-    if not str(content or "").strip() or (
+        names = tool_call_names(body)
+        if names and not str(content or "").strip():
+            # VD-218 / R120 (LESSONS 1, 16): never re-sent. Named or not, the
+            # readings this question selected were already sent; a second ask
+            # recovered half the time at double the wait.
+            named = [name for name in names if name]
+            raise UnusableReply(
+                NAMED_TOOL_CALL_REPLY.format(", ".join(named)) if named else EMPTY_TOOL_CALL_REPLY,
+                combined_performance(timings))
+        return content
+
+    content = ask()
+    primed = needs_primer(content, sent)
+    if primed or is_degenerate(content) or not shown_text(content):
+        if restart is not None:
+            restart()
+        if contract or primed:
+            # VD-219 / R126: the first key decides the answer; open it.
+            request_body["messages"].append({"role": "assistant", "content": SUMMARY_PRIMER})
+            content = ask()
+            if _continues_primer(content):
+                content = SUMMARY_PRIMER + str(content)
+        else:
+            message = request_body["messages"][-1]
+            message["content"] = with_retry_nudge(message["content"])
+            content = ask()
+    # VD-218: the line counts every call the ask made, not the last one.
+    performance = combined_performance(timings)
+    if not str(content or "").strip() or needs_primer(content, sent) or (
         not is_degenerate(content) and not shown_text(content)
     ):
-        # W5-D1, W6-2 (LESSONS 1, 8): nothing to show, twice - judged on the
-        # text the owner would see, so a bare code fence or an unreadable
-        # object opener is no answer either. Shown, it was an empty bubble.
-        raise ValueError(NO_USABLE_REPLY)
-    # The raw body carries the wall-clock and usage timings the client attached
-    # (inference_client.PERFORMANCE_KEY); pass it on so the Assistant can show
-    # the same compact performance line AI Chat does. Empty when unreported.
-    performance = body.get("performance", {}) if isinstance(body, dict) else {}
+        # W5-D1, W6-2, VD-219 (LESSONS 1, 8): nothing to show, twice - judged
+        # on the text the owner would see, so a bare code fence, an unreadable
+        # object opener, a sources list or a copied reading is no answer either.
+        raise UnusableReply(NO_USABLE_REPLY, performance)
     if is_degenerate(content):
         # Still echoed after the retry. Hand the raw text on so the
         # scope guard recognises the envelope and degrades it - humanizing an
         # echo would flatten its keys into prose and slip it past that guard.
         return {"answer": str(content or "").strip(), "performance": performance}
-    return {"answer": humanize_answer(content), "performance": performance}
-
-
-def _salvage_truncated(text: str) -> str:
-    """The lead answer sentence from an unterminated JSON reply, or ``""``.
-
-    The 4B's output budget is finite and it favours a verbose JSON reply, so a
-    real answer is routinely cut off before its closing brace - unparseable, but
-    the ``"summary": "..."`` sentence at the front is intact and is the answer.
-    Read with string scanning rather than a regex so this module adds no
-    module-level matching pattern (test_vocabulary_reachability). Both quote
-    styles; the value runs to its closing quote, or to end-of-text when the
-    model stopped mid-sentence.
-    """
-    for key in _LEAD_KEYS:
-        for quote in ('"', "'"):
-            marker = quote + key + quote
-            head = text.find(marker)
-            if head < 0:
-                continue
-            after = text[head + len(marker):].lstrip()
-            if not after.startswith(":"):
-                continue
-            after = after[1:].lstrip()
-            if not after or after[0] not in "\"'":
-                continue
-            value_quote = after[0]
-            body = after[1:]
-            end = body.find(value_quote)
-            value = (body if end < 0 else body[:end]).replace('\\"', '"').strip()
-            if value:
-                return value if value.endswith((".", "!", "?")) else value + "."
-    return ""
+    return {"answer": humanize_answer(content), "performance": performance,
+            "evidence": cited_evidence(content, sent)}
 
 
 def shown_text(content: Any) -> str:
@@ -364,7 +501,12 @@ def shown_text(content: Any) -> str:
     ``[1]``, ``{name}``) included; the first cut refused every one of them.
     """
     text = humanize_answer(content).strip()
-    if truncated_json(text) or (internal_names_only(text) and not _is_excerpt(content)):
+    if truncated_json(text) or cites_only(content) or (
+            internal_names_only(text) and not _is_excerpt(content)):
+        # VD-219 / R126: a sources list is no answer, whatever its entries say.
+        return ""
+    if text.startswith(("{", "[")) and (contract_values(text) or '":' in text or "':" in text):
+        # VD-219 / R139: still an object with keys after every reading - never shown raw.
         return ""
     return text
 
@@ -546,20 +688,31 @@ def humanize_answer(content: Any) -> str:
     """A managed-local reply as plain text.
 
     A JSON-shaped reply (which the 4B favours even when asked for prose) is
-    flattened to sentences. When the model ran out of budget mid-object the JSON
-    will not parse, so the lead answer sentence is salvaged from the raw text
-    rather than shown with its braces. Anything that is not JSON at all is
-    returned as written, minus a code fence. The scope guard still runs on the
-    result, so an echo the model wrapped in prose is caught downstream.
+    read with :func:`contract_text` - whole, cut off or malformed - into its
+    summary and detail lines, finished sentences only (VD-219). An object with
+    no answer key, such as a bare reading, is rendered as readable pairs.
+    Anything that is not JSON at all is returned as written, minus a code fence;
+    prose before an object is kept, and the object is read only when it is the
+    reply's own tail - one that runs on into more prose is an example the
+    answer quotes (R139). The scope guard still runs on the result, so an echo
+    the model wrapped in prose is caught downstream.
     """
     text = _strip_code_fence(str(content or "").strip())
-    parsed = _parse_object(text)
-    if isinstance(parsed, dict):
-        rendered = _render_dict(parsed)
-        if rendered:
-            return rendered
-    if text.lstrip().startswith(("{", "[")):
-        salvaged = _salvage_truncated(text)
-        if salvaged:
-            return salvaged
-    return text
+    start = text.find("[") if text.startswith("[") else text.find("{")
+    if start < 0:
+        return text
+    prose, tail = text[:start].strip(), text[start:]
+    if prose:
+        try:
+            _value, end = json.JSONDecoder().raw_decode(tail)
+        except ValueError:
+            return text
+        if tail[end:].strip():
+            return text
+    rendered = contract_text(tail[1:].lstrip() if tail[1:].lstrip().startswith("{") else tail)
+    if not rendered:
+        parsed = _parse_object(tail)
+        rendered = _render_dict(parsed) if isinstance(parsed, dict) else ""
+    if not rendered:
+        return text
+    return prose + "\n" + rendered if prose else rendered

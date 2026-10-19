@@ -800,11 +800,6 @@ export function AgentCenter({ session }: { session: Session }) {
               triggers={automation.triggers}
             />
           }
-          clusterModelServing={clusterModelServing}
-          modelLabel={agentStatus?.model ?? agentStatus?.provider ?? "Selected model"}
-          modelNotAnsweringReason={readiness.notAnsweringReason}
-          modelReady={modelReady}
-          modelStatusResolved={modelStatusResolved}
           onChanged={() => void refresh()}
           onViewRun={revealAgentRun}
           profiles={profiles}

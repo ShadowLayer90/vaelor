@@ -6,7 +6,9 @@ import json
 import re
 from typing import Any, Dict, NamedTuple, Tuple
 
-from .assistant_intents import SWEEP_PHRASES
+from .assistant_intents import SWEEP_PHRASES, asks_for_a_past_window, asks_for_overview, names_an_app
+from .assistant_question_shape import asks_to_compose
+from .assistant_model_readings import bounded_turns, fit_readings, topics_of
 from .assistant_vocabulary import BASE_TOOLS, UPTIME_PHRASES, literal_phrases
 from .phrase_match import mentions
 from .telemetry_trend import SUBJECT_NOT_RETAINED
@@ -548,10 +550,13 @@ _TOPIC_KEYS: Tuple[Topic, ...] = tuple(
         # Led by the verdict, then the readings a summary is made of. The
         # words are `assistant_intents._BROAD_PHRASES`' and are this row's own:
         # they select a set of tools, so no shared fact-tool word carries them.
+        # VD-219: ranked by what an overview is made of - CPU, memory, GPU,
+        # storage, services - with the long network listing last, so a budget
+        # that cannot hold them all drops the network, not the GPU.
         (SWEEP_PHRASES,
-         ("health.status", "system.telemetry", "services.status",
-          "storage.status", "network.status", "gpu.status", "npu.status",
-          "updates.status")),
+         ("health.status", "system.telemetry", "gpu.status", "storage.status",
+          "services.status", "npu.status", "updates.status",
+          "network.status")),
         # ``cpu``/``cpus`` are here for the telemetry, not the fan: a bare
         # "what is my cpu doing" gathers no cooling reading, so admitting
         # `cooling.status` for them costs nothing and admitting
@@ -607,6 +612,13 @@ _TOPIC_KEYS: Tuple[Topic, ...] = tuple(
 )
 
 
+#: VD-219: the readings an on-device answer may carry, in characters (about
+#: 3.1 per prompt token, measured with the served tokenizer). With the system
+#: prompt and brief (about 1,050 tokens) a typical ask stays near 2,000 tokens
+#: and a whole-machine sweep under 3,000 - the owner's prompt-size rule.
+LOCAL_FACT_CHARS = 2400
+LOCAL_SWEEP_CHARS = 4200
+
 #: The share of the context budget the facts may take; the rest is left for the
 #: conversation, the memories and any reviewed guidance.
 FACT_BUDGET_SHARE = 0.75
@@ -619,6 +631,49 @@ _NAMED_FIRST = ("inference.status",)
 
 def _encoded_size(value: Any) -> int:
     return len(json.dumps(value, separators=(",", ":"), default=str))
+
+
+def asks_about_the_whole_machine(question: str) -> bool:
+    """Whether ``question`` is about this machine as a whole (VD-219).
+
+    Either it says so (`asks_for_overview`), or it names no reading and points
+    at this machine as a machine ("Is the box behaving?"). Chit-chat and world
+    questions ("Tell me a joke", "Should I buy Bitcoin?") point at nothing here
+    and get the one-line status only (kb R155; the owner's prompt-size rule).
+    """
+    if asks_for_overview(question):
+        return True
+    lower = str(question).lower()
+    # An app question is about the app and the room for it, not the whole machine (kb R151).
+    if (names_an_app(question) or asks_to_compose(question)
+            or any(mentions(lower, topic.terms) for topic in _TOPIC_KEYS)
+            or not _THIS_MACHINE_NAMED.search(lower)):
+        return False
+    from .assistant_intents import is_out_of_scope_question
+
+    return not is_out_of_scope_question(question)
+
+
+#: This machine named as a machine, or the Assistant's own "here".
+_THIS_MACHINE_NAMED = re.compile(
+    r"\b(?:this|the|my)\s+(?:machine|appliance|box|computer|pc|server|system|hardware)\b"
+    r"(?!\s+learning\b)"
+    r"|\b(?:on|in)\s+here\b")
+
+
+def subject_readings(question: str, facts: Dict[str, Any]) -> set:
+    """The readings ``question`` is about, shown in detail; the rest are shown as one line each (VD-219)."""
+    if asks_about_the_whole_machine(question):
+        return set()
+    lower = str(question).lower()
+    subjects = {tool for tool in facts if tool not in BASE_TOOLS and mentions(lower, literal_phrases(tool))}
+    if names_an_app(question):
+        subjects.add("workloads.inventory")
+    if asks_for_a_past_window(question):
+        subjects.add("metrics.history")
+    if topics_of(question):
+        subjects.add("system.telemetry")
+    return subjects
 
 
 def ordered_fact_keys(question: str, facts: Dict[str, Any]) -> list:
@@ -635,21 +690,40 @@ def ordered_fact_keys(question: str, facts: Dict[str, Any]) -> list:
     """
     lower = str(question).lower()
     named, supporting = [], []
+    overview = asks_about_the_whole_machine(question)
     for topic in _TOPIC_KEYS:
-        if not mentions(lower, topic.terms):
+        # The sweep row inherits every word of its readings; it is a sweep only
+        # when a sweep phrase or an overview asked for it.
+        sweep = topic.extra == SWEEP_PHRASES and (overview or mentions(lower, topic.extra))
+        if not (sweep or mentions(lower, topic.terms)):
             continue
         for tool in topic.tools:
-            if tool in BASE_TOOLS:
+            # VD-219: a sweep is answered from its whole row, telemetry
+            # included - as a base reading it used to rank behind every named
+            # one, and the budget dropped the CPU and memory figures first.
+            if sweep:
+                named.append(tool)
+            elif tool in BASE_TOOLS:
                 supporting.append(tool)
             elif mentions(lower, literal_phrases(tool)) or mentions(lower, topic.extra):
                 named.append(tool)
             else:
                 supporting.append(tool)
     named.sort(key=lambda tool: 0 if tool in _NAMED_FIRST else 1)
-    # Base readings arrive only through a row that asked for them: they are
-    # gathered for every question, so their presence says nothing about this one.
+    # VD-219: the app a question names, and the window of time it names, are
+    # its subject; `select_tools` gathered their readings for that reason.
+    # Named readings first: a gather-only reading never evicts the one the
+    # question names (kb R154).
+    named = named + [tool for tool, asked in (("metrics.history", asks_for_a_past_window(question)),
+                                              ("workloads.inventory", names_an_app(question))) if asked]
+    # VD-219 (LESSONS 11): every gathered reading is ranked, telemetry
+    # included. Base readings used to arrive only through a row that asked for
+    # them, so 52 overview, greeting and topic phrasings the rows did not know
+    # reached the model with the identity reading alone (59% of 2,640 routed
+    # training prompts). A reading the route chose is shown unless the budget
+    # cannot hold it.
     rest = [key for key in sorted(facts) if key not in BASE_TOOLS]
-    ordered = [key for key in dict.fromkeys([*named, *supporting, *rest])
+    ordered = [key for key in dict.fromkeys([*named, *supporting, *rest, *BASE_TOOLS])
                if key in facts and key != "system.identity"]
     if "system.identity" in facts:
         ordered.append("system.identity")
@@ -673,26 +747,35 @@ def assistant_context(question: str, value: Any, connection: Dict[str, str]) -> 
     facts = appliance.get("facts", {}) if isinstance(appliance, dict) else {}
     facts = facts if isinstance(facts, dict) else {}
     budget = assistant_budget(connection, question)["context_chars"]
+    # VD-219, the owner's rule: the prompt is as small as it can be while
+    # keeping what the question needs. The question's subject is shown in
+    # detail, everything else as one line, to a budget; nothing is cut
+    # mid-field (`assistant_model_readings`).
     fact_budget = int(budget * FACT_BUDGET_SHARE)
-    selected_facts: Dict[str, Any] = {}
-    used = 0
-    for key in ordered_fact_keys(question, facts):
-        size = _encoded_size(facts[key])
-        if selected_facts and used + size > fact_budget:
-            continue
-        selected_facts[key] = facts[key]
-        used += size
-    compact_value = {
-        # The standing brief rides in the system message
-        # (``brief_system_prompt``), where the topic filter cannot reach it.
-        "facts": selected_facts,
+    local = managed_local_connection(connection or {})
+    if local:
+        whole = asks_about_the_whole_machine(question)
+        fact_budget = min(fact_budget, LOCAL_SWEEP_CHARS if whole else LOCAL_FACT_CHARS)
+    selected_facts = fit_readings(
+        ordered_fact_keys(question, facts), facts, fact_budget,
+        detailed=subject_readings(question, facts), topics=topics_of(question), question=question)
+    rest: Dict[str, Any] = {
         "conversation": value.get("conversation", [])[-4:],
         "memories": value.get("memories", [])[:2],
     }
+    if local:
+        # The earlier turns and notes are under the same rule (kb R159):
+        # each shortened, the oldest turn dropped first.
+        rest["conversation"], rest["memories"] = bounded_turns(rest["conversation"], rest["memories"])
     guidance = reviewed_guidance(value)
     if guidance:
-        compact_value["guidance"] = guidance
-    return provider_context(compact_value, max_chars=budget)
+        rest["guidance"] = guidance
+    room = budget - _encoded_size(selected_facts)
+    if _encoded_size(rest) > room:
+        rest = provider_context(rest, max_chars=max(MIN_STRING_LIMIT * 10, room))
+    # The standing brief rides in the system message (``brief_system_prompt``),
+    # where the topic filter cannot reach it.
+    return {"facts": selected_facts, **rest}
 
 
 #: How much of one matched skill's guidance travels to the model.

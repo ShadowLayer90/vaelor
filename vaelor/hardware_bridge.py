@@ -301,13 +301,78 @@ class _HardwareRuntime(
         (VD-001): `FlmProcess.start` is a non-atomic check-then-act, so two threads
         unlocked could orphan a second flm-real pinning NPU pages; the reentrant
         RLock serializes it so only one is ever tracked.
+
+        VD-219: refused while :meth:`flm_runtime_switch` moves the folder, after
+        putting back any move the journal says is unfinished, and when the folder
+        holds a model this runtime would replace with its stock one.
         """
         with self._lock:
+            self._npu_runtime_ready_to_start(str(tag))
             return self._flm().start(str(tag), ctx_len=int(ctx_len), port=int(port))
+
+    def _npu_runtime_ready_to_start(self, tag: str = "") -> None:
+        """Raise unless FastFlowLM's folder may be served from now. Under ``self._lock``.
+
+        Read at EVERY start (R165 R1: a once-per-bridge latch let the executor
+        start FastFlowLM from a half-moved folder after a move failed in the
+        same process). Costs one small journal read when nothing is wrong.
+        """
+        if getattr(self, "_npu_moving", False):
+            raise ValueError("The NPU Assistant's runtime is being moved; it starts again when "
+                             "the move has finished.")
+        from .flm_service import FLM_MODEL_PATH
+        from .npu_runtime_files import start_refusal
+        from .npu_runtime_switch import recover, unsettled
+
+        root = Path(FLM_MODEL_PATH)
+        if unsettled(root):
+            try:
+                said = recover(root)
+            except OSError as error:
+                raise ValueError("An interrupted move of the NPU Assistant's runtime could not "
+                                 "be put back ({}); FastFlowLM is not started.".format(error)) from error
+            print(said, file=sys.stderr, flush=True)
+        refused = start_refusal(root, tag) if tag else ""
+        if refused:
+            raise ValueError("FastFlowLM was not started on {}: {}.".format(tag, refused))
+
+    def flm_runtime_switch(self) -> dict[str, Any]:
+        """Move FastFlowLM's folder to this release's pinned target pair, as root (VD-219).
+
+        No arguments: the pair is :data:`vaelor.npu_runtime_pin.TARGET_PAIR`, staged
+        and checked by ``vaelor.npu_runtime_switch update`` before this is asked
+        (LESSONS 18: a privileged verb takes nothing a client chooses). One move at
+        a time. ``self._lock`` is held only while FastFlowLM is stopped, the folder
+        renamed and a process started (R165 R7), and every other ``flm_*`` verb is
+        refused until the move ends, so the executor's restart watch cannot launch
+        from a half-moved folder. A pair put back after failing its check is
+        refused here too (R165 R6), until root runs ``... npu_runtime_switch retry``.
+        """
+        from . import npu_runtime_pin
+        from .flm_service import FLM_MODEL_PATH
+        from .npu_runtime_switch import NO_TARGET, switch_to_staged
+
+        target = npu_runtime_pin.TARGET_PAIR
+        if target is None:
+            return {"moved": False, "reason": NO_TARGET}
+        mover = self._family_lock("npu-move")
+        if not mover.acquire(blocking=False):
+            return {"moved": False, "pair": target.key, "reason": "a move is already running"}
+        try:
+            with self._lock:
+                self._npu_moving = True
+            return switch_to_staged(Path(FLM_MODEL_PATH), target, self._flm(),
+                                    critical=lambda: self._lock)
+        finally:
+            self._npu_moving = False
+            mover.release()
 
     def flm_stop(self) -> dict[str, Any]:
         """Stop flm-real (a service stop, never a reboot, VD-019), under ``self._lock`` as :meth:`flm_start`."""
         with self._lock:
+            if getattr(self, "_npu_moving", False):
+                raise ValueError("The NPU Assistant's runtime is being moved; it is stopped and "
+                                 "started by the move.")
             return self._flm().stop()
 
     def flm_status(self) -> dict[str, Any]:
@@ -376,7 +441,21 @@ class _HardwareRuntime(
                 "Only the on-device model release this appliance ships with can "
                 "be installed."
             )
+        from .npu_runtime_files import installed_runtime
+        from .npu_runtime_pin import serving_pair
+
+        # VD-219: the package is converted for one FastFlowLM; beside another it
+        # serves nothing. A box still on the previous runtime gets both together
+        # from the post-install move (`npu_runtime_switch`), never the package alone.
+        have = installed_runtime(Path(FLM_MODEL_PATH))
+        wanted = serving_pair().runtime.version
+        if have and have != wanted:
+            raise ValueError(
+                "This model needs FastFlowLM {}, and this machine has {}; the update "
+                "moves both together.".format(wanted, have)
+            )
         with self._lock:
+            self._npu_runtime_ready_to_start()
             # Stop any running flm-real before replacing the model files it may
             # have open. A no-op on a fresh box; on a re-install over a live model
             # it frees the files, and the deploy step relaunches flm-real after.
@@ -650,6 +729,9 @@ class _Handler(socketserver.StreamRequestHandler):
                 data = runtime.flm_status()
             elif action == "flm_binary_present":
                 data = runtime.flm_binary_present()
+            elif action == "flm_runtime_switch":
+                # No payload is read: the pair is this package's own pin.
+                data = runtime.flm_runtime_switch()
             elif action == "flm_install_release":
                 if not isinstance(payload, dict):
                     raise ValueError("Invalid model install request.")

@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
 
 from .assistant_time_windows import MACHINE_OWNER, Window, window_or_reason
+from .assistant_vocabulary import AI_CHAT_PHRASE
 from .telemetry_ingest_status import BACKLOG_REFUSAL, CLOCK_SKEW_REFUSAL
 from .telemetry_store import MAX_HISTORY_WINDOW_SECONDS
 from .telemetry_trend import span
@@ -382,7 +383,7 @@ class HistoryRead(NamedTuple):
 _EVERY_MACHINE_HISTORY = ("cluster", "fleet", "every machine's", "all machines'")
 #: Console features that have no telemetry history of their own; their past is
 #: never answered from this controller's rows (review round 3, N-S1).
-_FEATURE_WORDS = ("ai chat", "llm server", "llm-server", "assistant")
+_FEATURE_WORDS = (AI_CHAT_PHRASE, "llm server", "llm-server", "assistant")
 
 
 def history_scope(message: str, appliance: Mapping[str, Any]) -> Any:

@@ -110,6 +110,8 @@ export interface AgentTask {
      * model (shared with AI Chat). Set only when the run underperformed - it
      * failed, delivered degraded, produced no result, or an eligible tool loop
      * fell back - AND a GPU model is available. Absent on a clean success.
+     * Built-in appliance checks only: a custom agent already runs on AI Chat's
+     * model (VD-220), so the screens never offer it for one, even on an old run.
      */
     escalation_available?: {
       model_tier: "capable";

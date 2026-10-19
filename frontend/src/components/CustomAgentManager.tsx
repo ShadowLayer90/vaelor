@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { automationIsActive } from "../lib/automationStatus";
 import { AssistantBarActions, useInAssistantBar } from "./assistantBar";
@@ -10,6 +10,11 @@ import { EMPTY_DRAFT, type Draft, type KnowledgeCollection } from "./customAgent
 import { Icon } from "./Icon";
 import { IntegrationCapabilitiesContainer } from "./IntegrationCapabilitiesContainer";
 import type { AgentConnector, AgentProfile, AgentTask, Automation, Trigger } from "./agentTypes";
+import type { AiChatSetup } from "./aiChatTypes";
+import {
+  AiChatModelBanner, aiChatModelBlocks, aiChatModelFromSetup, AiChatModelPill, aiChatUnavailableSentence, GoToAiChat,
+  runErrorText, type AiChatModelRead,
+} from "./customAgentModel";
 import { Button, EmptyState, Notice, Textarea } from "./ui";
 
 /*
@@ -35,14 +40,9 @@ const EMPTY_AUTOMATION: AutomationForm = {
  */
 export function CustomAgentManager({
   automations = [],
-  barStatus,
   clusterModelNote = "",
   clusterModelServing = false,
   csrfToken,
-  modelLabel,
-  modelNotAnsweringReason = "",
-  modelReady,
-  modelStatusResolved = true,
   onChanged,
   onViewRun,
   profiles,
@@ -53,23 +53,13 @@ export function CustomAgentManager({
   triggers = [],
 }: {
   automations?: Automation[];
-  /** The page's model pill, drawn before New agent in the Assistant's top bar. */
-  barStatus?: ReactNode;
-  /** A cluster inference model is serving. The inference workshop authors on
-      it; the Assistant workshop only points to where cluster agents are built. */
+  /** A cluster inference model is serving: the inference workshop authors on it. */
   clusterModelServing?: boolean;
   /** The inference workshop's sentence about the cluster model its agents
       answer with: a paused one (asleep and waking on request, or unloaded by
       hand), or which model serves, or why none does (ACC-079). */
   clusterModelNote?: string;
   csrfToken: string;
-  modelLabel: string;
-  /** Non-empty when the configured Assistant model is not answering (from the
-      shared `assistantModelReadiness` projection). Run stays off meanwhile. */
-  modelNotAnsweringReason?: string;
-  modelReady: boolean;
-  /** False until the Assistant's readiness has been read: no "connect a model" claim before then (VD-200). */
-  modelStatusResolved?: boolean;
   onChanged: () => void;
   onViewRun?: (task: AgentTask) => void;
   profiles: AgentProfile[];
@@ -111,6 +101,8 @@ export function CustomAgentManager({
   const [activeRunId, setActiveRunId] = useState("");
   const [automationAgent, setAutomationAgent] = useState<AgentProfile | null>(null);
   const [automationForm, setAutomationForm] = useState<AutomationForm>(EMPTY_AUTOMATION);
+  // AI Chat's model, which custom agents run on (VD-220), read with the collections below.
+  const [aiChatModel, setAiChatModel] = useState<AiChatModelRead>({ state: "reading" });
   const [connectorAudit, setConnectorAudit] = useState<Record<string, Array<Record<string, unknown>>>>({});
   // The topmost open dialog, in render order; a refusal goes to it, or to the page when none is open.
   const topDialog = deleting ? "delete" : automationAgent ? "automation" : testAgent ? "run" : activationAgent ? "activation" : draft ? "editor" : "";
@@ -132,19 +124,16 @@ export function CustomAgentManager({
   // Authoring needs no model server-side (custom_agents.create and .draft are
   // model-free); the gate exists so a definition has a model that can back it.
   // Each workshop gates on ITS OWN backing model: a cluster agent on the
-  // serving cluster model, an Assistant agent on the Assistant model. The
-  // Assistant workshop (Routines) once opened on the cluster model and saved
-  // an "assistant" agent that could neither run nor deploy (ACC-137); cluster
-  // agents are authored in Cluster > Agents & tools, where they deploy from.
-  const authoringReady = isInference ? clusterModelServing : modelReady;
-  // Anything that sends work to the Assistant model (Run, test runs,
-  // automations) needs it answering, not merely configured (ACC-136).
-  const modelAnswering = modelReady && !modelNotAnsweringReason;
-  // Why Run is off, said beside it: a configured model that is down is a
-  // different sentence from one that was never connected.
-  const runBlockedReason = modelAnswering ? undefined
-    : modelReady ? "The Assistant model is not answering, so runs stay off until it does."
-      : "Runs need a connected Assistant model.";
+  // serving cluster model; a custom agent on AI Chat's model, which it runs on
+  // (VD-220), never the Assistant's NPU model. Only a read that says AI Chat
+  // has no model holds it back: unread is not none (LESSONS 8), and a run that
+  // cannot reach the model fails at once with the backend's sentence. Cluster
+  // agents are authored in Cluster > Agents & tools (ACC-137).
+  const aiChatBlocked = aiChatModelBlocks(aiChatModel);
+  const authoringReady = isInference ? clusterModelServing : !aiChatBlocked;
+  // Run, test runs and Add automation follow the same gate.
+  const customRunsOpen = !isInference && !aiChatBlocked;
+  const runBlockedReason = aiChatBlocked;
   const custom = profiles.filter((item) => item.custom);
   /*
    * App access is opened deliberately, never by default.
@@ -165,10 +154,12 @@ export function CustomAgentManager({
     setAppAccessAgentId((current) => custom.some((item) => item.id === current) ? current : "");
   }, [profiles]);
 
+  // VD-220: the same read names AI Chat's model, which custom agents run on.
+  // A failed read leaves it unread, never "none" (LESSONS 8).
   useEffect(() => {
-    void apiRequest<{ collections: KnowledgeCollection[] }>("/ai-chat/setup")
-      .then((result) => setCollections(result.collections))
-      .catch(() => setCollections([]));
+    void apiRequest<Partial<AiChatSetup> & { collections: KnowledgeCollection[] }>("/ai-chat/setup")
+      .then((result) => { setCollections(result.collections ?? []); setAiChatModel(aiChatModelFromSetup(result)); })
+      .catch(() => { setCollections([]); setAiChatModel({ state: "unread" }); });
   }, []);
 
   const openCreate = () => {
@@ -378,46 +369,6 @@ export function CustomAgentManager({
       refuse(error, "The custom-agent run could not be retried.");
     } finally { setBusy(false); }
   };
-  const escalateRun = async (task: AgentTask) => {
-    setBusy(true); setNotice(""); setDialogError("");
-    try {
-      // Escalation is a FRESH run of the SAME task on the more capable GPU model,
-      // not a retry: the common escalation case is a delivered-but-thin NPU run
-      // in state "completed", which retry() rejects ("Only failed, cancelled, or
-      // blocked tasks can be retried"). Creating a new approval-gated task with
-      // the original description and use_capable_model works for every state the
-      // action is offered on. Same read-only envelope and role as any create.
-      const created = await apiRequest<AgentTask>(
-        "/assistant/tasks",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            title: task.title,
-            description: task.description,
-            profile: task.profile,
-            ...(typeof task.profile_version === "number" && task.profile_version > 0
-              ? { profile_version: task.profile_version } : {}),
-            approval_required: true,
-            use_capable_model: true,
-            idempotency_key: crypto.randomUUID(),
-          }),
-        },
-        csrfToken,
-      );
-      // Follow the capable run in place; the operator just chose to run it, so
-      // start it - the approval gate still stands for every run they did not.
-      if (created?.id && activeRunId) {
-        setActiveRunId(created.id);
-        await transitionRun(created, "ready");
-      } else {
-        setNotice("A capable-model run of this task is ready for review in this agent's run history.");
-      }
-      setOpenRuns((current) => ({ ...current, [task.profile]: true }));
-      onChanged();
-    } catch (error) {
-      refuse(error, "The capable re-run could not be started.");
-    } finally { setBusy(false); }
-  };
   const createAutomation = async (event: FormEvent) => {
     event.preventDefault();
     const form = automationForm;
@@ -486,15 +437,13 @@ export function CustomAgentManager({
   // Outside the Assistant bar (Cluster) New agent sits on the page, so it says
   // why it is off right beside it; in the bar, the model banner below says so.
   const newAgentBlocked = authoringReady || inAssistantBar ? undefined
-    : isInference ? "A serving cluster model is needed first" : "An Assistant model is needed first";
-  const modelUnread = !isInference && !modelStatusResolved;
-  const draftBlocked = modelUnread ? (profilesReadError ? "The Assistant model was not read" : "Checking the Assistant model")
-    : !authoringReady ? "An Assistant model is needed first"
+    : isInference ? "A serving cluster model is needed first" : "AI Chat's model is needed first";
+  const draftBlocked = !authoringReady ? "AI Chat's model is needed first"
     : !builderPrompt.trim() ? "Describe the agent first" : undefined;
 
   const barItems = (
     <AssistantBarActions>
-      {inAssistantBar && barStatus}
+      {inAssistantBar && !isInference && <AiChatModelPill model={aiChatModel} />}
       <Button disabled={!authoringReady} disabledReason={newAgentBlocked} onClick={openCreate} variant="primary"><Icon className="ar-btn-icon" name="add" size={16} />New agent</Button>
     </AssistantBarActions>
   );
@@ -509,10 +458,11 @@ export function CustomAgentManager({
         {custom.map((item) => (
           <CustomAgentCard
             agent={item}
+            aiChatModel={aiChatModel}
             appAccessOpen={appAccessAgentId === item.id}
             busy={busy}
             key={item.id}
-            modelReady={modelAnswering}
+            modelReady={customRunsOpen}
             onApprove={(task) => void transitionRun(task, "ready")}
             onAutomate={() => {
               setAutomationAgent(item);
@@ -575,22 +525,11 @@ export function CustomAgentManager({
           {barItems}
         </div>
       )}
-      {/* Before the readiness read lands, or when it failed, nothing is claimed about the model (VD-200). */}
-      {modelUnread ? (
-        <Notice severity={profilesReadError ? "warning" : "info"}>
-          {profilesReadError
-            ? "The Assistant model could not be read, so New agent and runs stay off until it is."
-            : "Checking the Assistant model…"}
+      {isInference ? (
+        <Notice severity={authoringReady ? "success" : "warning"}>
+          {clusterModelNote || (clusterModelServing ? "A cluster model is serving. Author a cluster agent here and deploy it from Cluster > Deployments." : "Serve a cluster model before creating cluster agents; a cluster agent runs on it.")}
         </Notice>
-      ) : (
-      <Notice severity={authoringReady && (isInference || modelAnswering) ? "success" : "warning"}>
-        {isInference ? (clusterModelNote || (clusterModelServing ? "A cluster model is serving. Author a cluster agent here and deploy it from Cluster > Deployments." : "Serve a cluster model before creating cluster agents; a cluster agent runs on it."))
-          : modelAnswering ? `Selected model: ${modelLabel}. Custom agents use this active Assistant model.`
-            : modelReady ? `Selected model: ${modelLabel} is not answering. ${modelNotAnsweringReason} You can still edit agents, but runs stay off until it answers.`
-              : clusterModelServing ? "No Assistant model is connected. A cluster model is serving, but agents that run on it are built in Cluster > Agents & tools > Inference agents, not here."
-                : "Connect an Assistant model before creating or running custom agents."}
-      </Notice>
-      )}
+      ) : <AiChatModelBanner model={aiChatModel} />}
       {notice && <Notice severity={noticeRefused ? "danger" : "info"}>{notice}</Notice>}
       <div className={appAccessAgent ? "as-split ar-split" : "ar-single"}>
         <div className="ar-column">
@@ -613,7 +552,8 @@ export function CustomAgentManager({
           {latestTerminalRun && !topDialog && (
             <Notice severity={latestTerminalRun.state === "failed" || latestTerminalRun.result.outcome === "needs_input" ? "warning" : "info"}>
               <span className="ar-notice-row">
-                <span><strong>{latestTerminalRun.title}: {latestTerminalRun.result.outcome === "needs_input" ? "needs input" : latestTerminalRun.state}</strong> — {latestTerminalRun.result.summary || latestTerminalRun.error || "Run finished."}</span>
+                <span><strong>{latestTerminalRun.title}: {latestTerminalRun.result.outcome === "needs_input" ? "needs input" : latestTerminalRun.state}</strong> — {latestTerminalRun.result.summary || runErrorText(latestTerminalRun.error) || "Run finished."}</span>
+                {aiChatUnavailableSentence(latestTerminalRun.error) && <GoToAiChat />}
                 {onViewRun && <Button onClick={() => onViewRun(latestTerminalRun)}>View agent run history</Button>}
               </span>
             </Notice>
@@ -653,7 +593,7 @@ export function CustomAgentManager({
         <ActivationDialog
           agent={activationAgent}
           busy={busy}
-          canTest={isInference ? null : modelAnswering}
+          canTest={isInference ? null : customRunsOpen}
           error={dialogError}
           onActivate={() => void activateAgent()}
           onClose={() => setActivationAgent(null)}
@@ -669,7 +609,6 @@ export function CustomAgentManager({
           onApprove={() => { if (activeRun) void transitionRun(activeRun, "ready"); }}
           onCancelRun={() => { if (activeRun) void transitionRun(activeRun, "cancelled"); }}
           onClose={closeRun}
-          onEscalate={() => { if (activeRun) void escalateRun(activeRun); }}
           onRequestChange={(value) => { setTestRequest(value); if (testError) setTestError(""); }}
           onRetry={() => { if (activeRun) void retryRun(activeRun); }}
           onRunAgain={() => { setActiveRunId(""); setTestRequest(""); }}

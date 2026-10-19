@@ -15,7 +15,7 @@ none is not guessed - the answer asks which machine was meant.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Mapping, NamedTuple, Optional
+from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple
 
 from .cluster_placement import CONTROLLER_PLACEMENT_ID, CONTROLLER_PLACEMENT_NAME
 from .assistant_console_places import CONSOLE_PHRASES, PAGE_NAMES
@@ -250,6 +250,68 @@ def inventory_names(facts: Mapping[str, Any], brief_text: str = "") -> frozenset
         if line.startswith("Operating system:"):
             found.update(word.strip(".,()").lower() for word in line.split(":", 1)[1].split())
     return frozenset(found - {""})
+
+
+def names_here(appliance: Mapping[str, Any]) -> frozenset:
+    """The names that point at this appliance, lowercased: its machines and installed apps (VD-220 R210).
+
+    "how is the zbook doing" and "how do I restart jellyfin" were sent to AI
+    Chat before any model ran: the redirect gate reads the sentence alone, and
+    nothing in it names this machine except a name. Every machine in the
+    cluster (``appliance["machines"]``) and this turn's inventory
+    (:func:`inventory_names`) are this machine's by construction.
+
+    **R215: no floor and no ordinary-word filter here.** B-6's rule (a one-word
+    name written as the owner wrote it, never an ordinary word after "the") is
+    for :func:`resolve_machines`, which picks one machine's readings. This set
+    only keeps a question on the Assistant, so a worker named "Z2" or "Office"
+    counts in any case: dropping it sent "is the z2 up" to AI Chat (VD-042).
+    Matched by the same ``phrase_match.mentions`` the resolver uses.
+    """
+    names = set(inventory_names(appliance.get("facts") or {}))
+    for item in appliance.get("machines") or []:
+        names.add(str((item.get("name") if isinstance(item, Mapping) else getattr(item, "name", "")) or "").lower())
+    return frozenset(name.strip() for name in names if name.strip())
+
+
+def names_something_here(message: str, here: Iterable[str] = ()) -> bool:
+    """Whether ``message`` names this appliance: a machine or installed app in ``here``, a catalog
+    app or serving runtime asked about as software, or one of its own two-word terms (R210, R216)."""
+    from .app_catalog import APP_TEMPLATES
+
+    text = str(message or "")
+    if mentions(text.lower(), tuple(name for name in here if name)):
+        return True
+    if any(pattern.search(text) for pattern in _THIS_APPLIANCES_TERMS):
+        return True
+    software = _SERVING_RUNTIMES + tuple(
+        name.lower() for template_id, template in APP_TEMPLATES.items()
+        for name in (str(template_id), str(template.get("name") or "")) if name)
+    return bool(_ASKED_AS_SOFTWARE.search(text)) and mentions(text.lower(), software)
+
+
+#: VD-220 R216: what this appliance serves models with. A name only counts
+#: beside a software verb (`_ASKED_AS_SOFTWARE`), so "what does vllm stand
+#: for" is still general knowledge and "what is vllm serving" is this box's.
+_SERVING_RUNTIMES = ("vllm", "llama.cpp", "fastflowlm")
+
+#: A catalog app or runtime asked about as software on this box (R216): the
+#: catalog holds "Heimdall" and "Homepage", and "who is heimdall in norse
+#: mythology" is not a question about the app.
+_ASKED_AS_SOFTWARE = re.compile(
+    r"\b(?:install\w*|deploy\w*|run|runs|running|ran|restart\w*|updat\w*|upgrad\w*|open\w*|"
+    r"use|uses|used|using|serv(?:e|es|ed|ing)|stop\w*|start\w*|crash\w*|up|down|loaded)\b",
+    re.IGNORECASE)
+
+#: VD-220 R216: this appliance's own readings and settings by their two-word
+#: names. The single words ("load", "password", "watt", "thunderbolt") were
+#: tried and pulled "what is a load balancer" and "how do I make a strong
+#: password" onto the NPU with a false "about this appliance" notice.
+_THIS_APPLIANCES_TERMS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bload\s+average\b", re.IGNORECASE),
+    re.compile(r"\bthunderbolt\s+link\b", re.IGNORECASE),
+    re.compile(r"\b(?:the|admin|console|login|vaelor)\s+password\b", re.IGNORECASE),
+)
 
 
 def unknown_machine(message: str, machines: List[Machine], not_machines: frozenset = frozenset()) -> str:

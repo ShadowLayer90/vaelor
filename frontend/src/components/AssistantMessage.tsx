@@ -11,6 +11,31 @@ import { Icon } from "./Icon";
 import { Button } from "./ui";
 
 /**
+ * The answer while the on-device model is still writing it (VD-218).
+ *
+ * Provisional: the appliance has already held back anything its final cleanup
+ * would hide, and the finished answer replaces this whole turn. It is hidden
+ * from assistive technology (`aria-hidden`): the transcript's live region then
+ * announces the finished answer once, instead of every sentence as it lands,
+ * and "Writing the answer" in the status row says the work is under way.
+ * (`aria-busy` on a child of a live region is honoured unevenly, VD-218 review.)
+ */
+export function AssistantDraftMessage({ text }: { text: string }) {
+  return (
+    <article aria-hidden="true" className="as-msg as-msg--assistant as-msg--draft">
+      <div className="as-msg__byline">
+        <span aria-hidden="true" className="as-msg__mark">V</span>
+        <strong>Vaelor</strong>
+        <span className="as-small as-muted">Writing · the finished answer replaces this draft</span>
+      </div>
+      <div className="as-bubble as-bubble--ai">
+        {text.split("\n").filter(Boolean).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+      </div>
+    </article>
+  );
+}
+
+/**
  * One turn of the conversation, drawn to the AssistAnswer board: the reader's
  * question on the right; Vaelor's byline with who answered and how fast, the
  * answer, the evidence it used, suggested next steps, and whichever extra the

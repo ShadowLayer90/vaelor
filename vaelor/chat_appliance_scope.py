@@ -52,6 +52,7 @@ from typing import Any, Dict, Optional
 
 from .assistant_action_requests import detect_action_requests
 from .assistant_answer_presentation import (
+    MACHINE_NOUN_POINTER,
     is_appliance_question,
     is_general_knowledge_question,
 )
@@ -73,11 +74,7 @@ ASSISTANT_ROUTE = "#/assistant"
 #: question phrased as though the reader can see the box invites a reading, and
 #: a capable model supplies one.
 _THIS_MACHINE = re.compile(
-    r"\b(?:my|our)\b"
-    r"|\bthis\s+(?:appliance|machine|box|thing|unit|node|device|server|system|pi|host)\b"
-    # "the current appliance state", "the spare node" - up to two words
-    # between the article and the noun, because people qualify the noun.
-    r"|\bthe\s+(?:\w+\s+){0,2}(?:appliance|box|unit|node)\b"
+    r"\b(?:my|our)\b|" + MACHINE_NOUN_POINTER +
     r"|\bon\s+(?:this|here)\b"
     r"|\b(?:right\s+now|currently|at\s+the\s+moment|in\s+here)\b"
     r"|\bvaelor\b|\bpironman\b",

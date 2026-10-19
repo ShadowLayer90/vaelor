@@ -10,6 +10,13 @@ from .agent_tasks import AgentTaskError
 from .assistant_tools import AssistantToolError
 from .live_readings import one_reading_per_answer
 
+#: VD-220: a delegation is a specialist review on the Assistant's own model; a
+#: custom agent runs on AI Chat's model, so it is never delegated here.
+CUSTOM_AGENT_NOT_DELEGATED = (
+    "Custom agents run as their own task on AI Chat's model; run this one from "
+    "Agents rather than as a delegated review."
+)
+
 
 class SubagentCoordinator:
     def __init__(
@@ -39,6 +46,8 @@ class SubagentCoordinator:
         profile_definition = self.task_store.profile(profile, actor)
         if profile_definition is None or not profile_definition.get("enabled"):
             raise AgentTaskError("Unknown specialist profile.")
+        if profile_definition.get("custom"):
+            raise AgentTaskError(CUSTOM_AGENT_NOT_DELEGATED)
         child = self.task_store.create(
             actor,
             "{} review".format(profile_definition["name"]),

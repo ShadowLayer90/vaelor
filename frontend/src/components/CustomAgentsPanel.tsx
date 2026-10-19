@@ -5,7 +5,6 @@ import { useAssistantPlace } from "./assistantBar";
 import { ASSISTANT_TAB_PLACES } from "./AssistantNavigationTabs";
 import { CustomAgentManager } from "./CustomAgentManager";
 import { RoutinesCreateIn } from "./routinesCreateIn";
-import { StatusPill } from "./StatusPill";
 import { SegmentedControl } from "./ui";
 import type { AgentProfile, AgentTask, Automation, Trigger } from "./agentTypes";
 import { destinations } from "../lib/destinations";
@@ -29,11 +28,6 @@ const ROUTINES_VIEW_LABELS: Readonly<Record<RoutinesView, string>> = {
 export function CustomAgentsPanel({
   automations,
   automationsPanel,
-  clusterModelServing,
-  modelLabel,
-  modelNotAnsweringReason,
-  modelReady,
-  modelStatusResolved,
   onChanged,
   onViewRun,
   profiles,
@@ -46,16 +40,6 @@ export function CustomAgentsPanel({
   automations: Automation[];
   /** Schedules, alert rules and where alerts go: the Schedules and alerts view. */
   automationsPanel: ReactNode;
-  /** A cluster inference model is serving, so a cluster agent can be authored
-      and deployed even when the single-node Assistant model is not ready. */
-  clusterModelServing: boolean;
-  modelLabel: string;
-  /** Non-empty when a configured model is not answering (from the shared
-      `assistantModelReadiness` projection Ask also reads). */
-  modelNotAnsweringReason: string;
-  modelReady: boolean;
-  /** False until `/agent/status` has answered at least once. */
-  modelStatusResolved: boolean;
   onChanged: () => void;
   onViewRun: (task: AgentTask) => void;
   profiles: AgentProfile[];
@@ -102,23 +86,7 @@ export function CustomAgentsPanel({
       {agentsView ? (
         <CustomAgentManager
           automations={automations}
-          barStatus={(
-            /* Nothing is claimed about the model before `/agent/status` answers:
-               an amber MODEL REQUIRED that turns green two seconds later is a
-               false alarm about the reader's own machine. */
-            <StatusPill
-              /* A failed readiness read is "Not read", never "Checking…" for ever (VD-200). */
-              reading={!modelStatusResolved && profilesReadError ? "unread" : undefined}
-              status={!modelStatusResolved ? "neutral" : modelNotAnsweringReason ? "degraded" : modelReady || clusterModelServing ? "healthy" : "degraded"}
-              label={!modelStatusResolved ? (profilesReadError ? "Not read" : "Checking…") : modelNotAnsweringReason ? "Model unreachable" : modelReady ? modelLabel : clusterModelServing ? "Cluster model" : "Model required"}
-            />
-          )}
-          clusterModelServing={clusterModelServing}
           csrfToken={session.csrf_token}
-          modelLabel={modelLabel}
-          modelNotAnsweringReason={modelNotAnsweringReason}
-          modelReady={modelReady}
-          modelStatusResolved={modelStatusResolved}
           onChanged={onChanged}
           onViewRun={onViewRun}
           profiles={profiles}

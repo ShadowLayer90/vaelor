@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import http.client
+import io
 import json
 import logging
 import re
+import socket
+import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 from typing import Any, Dict, Optional
 
 from .credential_broker import CredentialError, validate_compatible_profile
+from .flm_service import FLM_PENALTIES
+from .model_credential_roles import is_the_assistants_npu_model
 from .hosted_providers import HOSTED_KINDS
 from .model_profiles import note_structured_rejection, profile_timeout_floor
 from .runtime_paths import env_value
@@ -35,6 +43,9 @@ HOSTED_NOT_ON_THIS_PATH = (
 #: body, so a caller that discards the raw body can still surface it. See
 #: :func:`normalize_performance`.
 PERFORMANCE_KEY = "performance"
+
+#: A model reply over :data:`MAX_PROVIDER_RESPONSE_BYTES`, streamed or not.
+TOO_MUCH_DATA = "The connected AI endpoint returned too much data."
 
 
 def _positive_float(*candidates: Any) -> Optional[float]:
@@ -117,6 +128,17 @@ def normalize_performance(
 def allowed_inference_endpoint(connection: Dict[str, str]) -> bool:
     if connection.get("provider") == "openai":
         return connection.get("base_url") == OPENAI_BASE_URL
+    if connection.get("provider") in HOSTED_KINDS:
+        # VD-220: only a custom agent's run on AI Chat's own hosted model, which
+        # `chat_completion` sends through `hosted_transport`; refused otherwise.
+        from .ai_chat_model_lease import CUSTOM_AGENT_ON_AI_CHAT
+        from .hosted_transport import parse_hosted_url
+
+        try:
+            parse_hosted_url(str(connection.get("base_url") or ""))
+        except CredentialError:
+            return False
+        return bool(connection.get(CUSTOM_AGENT_ON_AI_CHAT))
     try:
         validate_compatible_profile(json.dumps({
             "base_url": connection.get("base_url", ""),
@@ -331,6 +353,190 @@ def appliance_session_headers(connection: Dict[str, str], key: Any) -> Dict[str,
     return session_headers(key) if managed_local_connection(connection) else {}
 
 
+#: VD-218 / R136, measured on the Z2 2026-10-17: FastFlowLM 1.0.2 keeps one of
+#: its ten connection places for every request whose client closes the socket
+#: mid-generation; after ten it refuses every connection until it is restarted.
+#: A request read to its end costs nothing (36 Stops, R143). So a FastFlowLM
+#: generation is never ended by closing its connection: it is named with a
+#: ``request_id`` (FLM's handler reads that key from the request body, else
+#: invents ``req_<n>``), asked to end with ``POST /api/cancel`` - which 1.0.2
+#: accepts and ignores (R143), so nothing waits on it - and read to its end.
+#: Other loopback servers (llama-server, the vLLM balancer) end cleanly when
+#: their connection closes and have no cancel request; they keep that.
+CANCEL_PATH = "/api/cancel"
+
+#: Seconds the cancel request itself may take.
+CANCEL_SECONDS = 2.0
+
+#: The floor on how long a cancelled or over-budget generation may take to end
+#: before its connection is closed anyway (the last resort, logged).
+DRAIN_SECONDS = 60.0
+
+#: The slowest a FastFlowLM generation writes. Measured 13.0-14.5 tokens a
+#: second on the Z2 NPU (kb N108, R143); 10 leaves room for contention. A
+#: generation cannot outlive ``max_tokens`` at this rate unless it is wedged.
+SLOWEST_DECODE_TPS = 10.0
+
+#: Logged when even the drain ran out and the connection was closed anyway.
+LAST_RESORT = ("The model server did not end a generation within its drain time; "
+               "closing its connection, which may cost FastFlowLM a connection place (R136).")
+
+
+def drain_seconds(request_body: Dict[str, Any]) -> float:
+    """How long a cancelled generation may take to end: the most it can still write.
+
+    ``max_tokens`` at :data:`SLOWEST_DECODE_TPS`, and never less than
+    :data:`DRAIN_SECONDS` - e.g. 768 tokens is 77 s, 320 tokens is the 60 s floor.
+    """
+    tokens = request_body.get("max_tokens") or request_body.get("max_completion_tokens") or 0
+    try:
+        return max(DRAIN_SECONDS, float(tokens) / SLOWEST_DECODE_TPS)
+    except (TypeError, ValueError):
+        return DRAIN_SECONDS
+
+
+def flm_connection(connection: Dict[str, str]) -> bool:
+    """Whether this connection reaches FastFlowLM, the Assistant's NPU server.
+
+    The product's own rule for its NPU model (:func:`is_the_assistants_npu_model`):
+    a model Vaelor runs here, marked as the NPU's by its credential id or by
+    the FLM tag it is pinned to. Never just "a loopback address", which the GPU
+    servers share, and never just the tag: an owner-added Ollama endpoint
+    serves ``qwen3.5:4b`` too (R149).
+    """
+    return managed_local_connection(connection) and is_the_assistants_npu_model({
+        "id": connection.get("credential_id") or "", "provider": connection.get("provider") or "",
+        "owner": connection.get("owner") or "", "selected_model": connection.get("model") or ""})
+
+
+def hang_up(sock: Optional[socket.socket], why: str = "") -> None:
+    """Close ``sock`` now, from any thread, waking a read blocked on it.
+
+    shutdown() wakes a blocked recv on Linux; on Windows only closing the
+    handle does. Detaching first marks the socket object closed, so the
+    reader's next call fails instead of using a handle that may be reused.
+    """
+    if sock is None:
+        return
+    if why:
+        LOGGER.warning(why)
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        socket.close(sock.detach())
+    except OSError:
+        pass
+
+
+def new_request_id() -> str:
+    """A name for one generation, which the server's cancel request accepts."""
+    return "vaelor-{}".format(uuid.uuid4().hex)
+
+
+def cancel_request(connection: Dict[str, str], request_id: str) -> bool:
+    """Ask the managed local server to end the generation named ``request_id``.
+
+    ``True`` when the server accepted the request without an ``error`` body -
+    which is NOT proof the generation stopped. Measured on the Z2 2026-10-17
+    (FLM 1.0.2, 33 cancels naming the running request's id): every one was
+    accepted, none was logged as cancelled, and every generation ran to its
+    token limit. So nothing here relies on the cancel: the caller always
+    drains, and the drain is what keeps the server's connection places
+    (R136). Never raises.
+    """
+    parts = urllib.parse.urlsplit(str(connection.get("base_url") or ""))
+    if not request_id or parts.scheme not in ("http", "https") or not parts.netloc:
+        return False
+    url = urllib.parse.urlunsplit((parts.scheme, parts.netloc, CANCEL_PATH, "", ""))
+    request = urllib.request.Request(
+        url, data=json.dumps({"request_id": request_id}).encode("utf-8"), method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=CANCEL_SECONDS) as response:
+            body = json.loads(response.read(4096).decode("utf-8", "replace") or "{}")
+            return 200 <= response.status < 300 and not (isinstance(body, dict) and body.get("error"))
+    except (OSError, ValueError, urllib.error.URLError) as error:
+        LOGGER.warning("The model server did not accept a cancel request: %s", error)
+        return False
+
+
+class CancelAtDeadline:
+    """Cancel one named generation when its budget runs out.
+
+    The client then waits for the server to end it rather than closing the
+    connection on it (R136). ``fired`` says the budget ran out; ``on_fire``
+    is how the generation is cancelled.
+    """
+
+    def __init__(self, seconds: float, on_fire: Any) -> None:
+        self.fired = False
+        self._on_fire = on_fire
+        self._timer = threading.Timer(max(0.05, float(seconds)), self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _fire(self) -> None:
+        self.fired = True
+        self._on_fire()
+
+    def cancel(self) -> None:
+        self._timer.cancel()
+
+
+#: What a generation cancelled at its budget raises, once the server ended it.
+OVER_BUDGET = "The model did not finish within its time budget, so the appliance cancelled it."
+
+
+def flm_plain_post(connection: Dict[str, str], url: str, payload: Dict[str, Any],
+                   headers: Dict[str, str], timeout: float, max_bytes: int) -> bytes:
+    """One non-streamed FastFlowLM generation, never hung up on while it runs (R136).
+
+    FastFlowLM sends nothing until a non-streamed generation has ended, so a
+    per-read socket timeout is no bound at all - it either closes on a working
+    generation or never fires. The bound is wall-clock instead: at ``timeout``
+    the generation is cancelled by name; at ``timeout`` plus
+    :func:`drain_seconds` (the most it could still write) the connection is
+    closed as the logged last resort. Raises ``urllib.error.HTTPError`` for an
+    error status, as the urllib path does, and ``TimeoutError`` over budget.
+    """
+    request_id = new_request_id()
+    parts = urllib.parse.urlsplit(url)
+    client = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=None)
+    budget = CancelAtDeadline(timeout, lambda: cancel_request(connection, request_id))
+    held: Dict[str, Any] = {}  # the socket; http.client drops its own reference
+    give_up = threading.Timer(float(timeout) + drain_seconds(payload),
+                              lambda: hang_up(held.get("sock"), LAST_RESORT))
+    give_up.daemon = True
+    try:
+        client.connect()
+        held["sock"] = client.sock
+        give_up.start()
+        # VD-220 (owner): every FastFlowLM request states its penalties (FLM_PENALTIES).
+        sent = dict(payload, request_id=request_id, **FLM_PENALTIES)
+        client.request("POST", parts.path, body=json.dumps(sent).encode("utf-8"),
+                       headers=headers)
+        response = client.getresponse()
+        data = response.read(max_bytes + 1)
+        status, reason, response_headers = response.status, response.reason, response.headers
+    except (OSError, http.client.HTTPException) as error:
+        if budget.fired:
+            raise TimeoutError(OVER_BUDGET) from error
+        if isinstance(error, OSError):
+            raise
+        raise ConnectionError(str(error)) from error
+    finally:
+        budget.cancel()
+        give_up.cancel()
+        client.close()
+    if status >= 400:
+        raise urllib.error.HTTPError(url, status, reason, response_headers, io.BytesIO(data))
+    if budget.fired:
+        raise TimeoutError(OVER_BUDGET)
+    return data
+
+
 def chat_completion(
     connection: Dict[str, str],
     request_body: Dict[str, Any],
@@ -345,24 +551,42 @@ def chat_completion(
     on LM Studio it costs a just-in-time model load before the 400, and it
     leaves the real request to run in whatever time is left.
     """
+    from .ai_chat_model_lease import (
+        CUSTOM_AGENT_ON_AI_CHAT, ai_chat_turn, hosted_agent_completion,
+        off_machine_agent_body,
+    )
+
+    on_ai_chat = bool(connection.get(CUSTOM_AGENT_ON_AI_CHAT))
     if str(connection.get("provider") or "") in HOSTED_KINDS:
         # VD-206 / VD-207: a hosted AI Chat connection is reached only through
-        # `hosted_transport` (checked, pinned, no redirects). This shared path is
-        # plain urllib, so it refuses one before anything is sent.
-        raise ValueError(HOSTED_NOT_ON_THIS_PATH)
+        # `hosted_transport` (checked, pinned, no redirects), and only for a
+        # custom agent's run on AI Chat's model (VD-220). This shared path is
+        # plain urllib, so anything else is refused before anything is sent.
+        if not on_ai_chat:
+            raise ValueError(HOSTED_NOT_ON_THIS_PATH)
+        with ai_chat_turn(connection):
+            return hosted_agent_completion(connection, request_body, timeout)
+    if on_ai_chat and connection.get("provider") == "openai":
+        request_body = off_machine_agent_body(connection, dict(request_body))
     url = "{}/chat/completions".format(connection["base_url"])
+    flm = flm_connection(connection)
 
     def send(payload):
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            content = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+        if flm:
+            # VD-218 / R136: never hang up on a running FastFlowLM generation.
+            content = flm_plain_post(connection, url, payload, headers, timeout,
+                                     MAX_PROVIDER_RESPONSE_BYTES)
+        else:
+            request = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                content = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
         if len(content) > MAX_PROVIDER_RESPONSE_BYTES:
-            raise ValueError("The connected AI endpoint returned too much data.")
+            raise ValueError(TOO_MUCH_DATA)
         return json.loads(content.decode("utf-8"))
 
     # #223 / VD-085: hold one local-inference slot across the whole call -
@@ -376,7 +600,12 @@ def chat_completion(
     # fallback retry, which is the same logical call), so a caller that keeps
     # only the answer text can still report the most faithful time-to-complete.
     start = time.monotonic()
-    with local_inference_slot(connection):
+    # VD-220: a custom agent's call takes AI Chat's own gate (the cluster
+    # permits in Mode B, the endpoint's one slot in Mode A). The gates refuse
+    # rather than queue, so the agent's call waits its turn, bounded, and then
+    # fails as busy (`ai_chat_turn`); every other caller still refuses at once.
+    slot = ai_chat_turn(connection) if on_ai_chat else local_inference_slot(connection)
+    with slot:
         try:
             body = send(request_body)
         except urllib.error.HTTPError as error:

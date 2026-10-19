@@ -75,6 +75,8 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from .npu_runtime_pin import serving_pair as _npu_serving_pair
+
 #: Where the on-device NPU model is published: the GitHub release, the same
 #: source and split-part artifact ``deploy/fetch-npu-model.sh`` pulls (so the
 #: in-appliance "Install" action and the installer's first-boot fetch agree byte
@@ -83,8 +85,12 @@ from typing import Any, Callable, Dict, Optional, Tuple
 #: unpacks the model. Derived from the same ``VAELOR_REPO`` / ``VAELOR_RELEASE_TAG``
 #: the installer honours, so overriding the tag moves both; ``VAELOR_NPU_RELEASE_SOURCE``
 #: overrides the whole URL (e.g. for an offline mirror or a test source).
+#: The package and its release come from the NPU serving pair
+#: (`npu_runtime_pin`, VD-219), so the catalog's pin and the runtime the
+#: installer places can never name two different conversions.
+NPU_RELEASE_PACKAGE = _npu_serving_pair().package
 NPU_RELEASE_REPO = os.environ.get("VAELOR_REPO", "ShadowLayer90/vaelor")
-NPU_RELEASE_TAG = os.environ.get("VAELOR_RELEASE_TAG", "v1.5.3")
+NPU_RELEASE_TAG = os.environ.get("VAELOR_RELEASE_TAG", "v1.5.4")
 NPU_RELEASE_SOURCE = os.environ.get(
     "VAELOR_NPU_RELEASE_SOURCE",
     "https://api.github.com/repos/{}/releases/tags/{}".format(
@@ -115,7 +121,7 @@ SIZE_MEASURED = "measured"
 SIZE_UPPER_BOUND = "upper-bound"
 
 
-def _size_note(download_bytes: int, source: str) -> str:
+def size_note(download_bytes: int, source: str) -> str:
     """The size sentence, derived from the number the fit check uses.
 
     Derived rather than written, because a hand-written note is exactly what
@@ -223,7 +229,7 @@ def _entry(
         # of the same model share a filename and sit 1,056 bytes apart.
         "sha256": sha256,
         "size_source": size_source,
-        "size_note": _size_note(download_bytes, size_source),
+        "size_note": size_note(download_bytes, size_source),
         # Kept so the existing search-and-verify download path is unchanged;
         # it is built from the repository this entry names rather than written
         # separately, so the two cannot drift.
@@ -496,17 +502,21 @@ NPU_RELEASE_MODELS: Tuple[Dict[str, Any], ...] = (
         # `qwen35-4b-npu2.tar.part*` release assets concatenated - the same pin
         # `deploy/fetch-npu-model.sh` verifies, and the only trust anchor the
         # install honours (never the release JSON).
-        "vaelor/Qwen3.5-4B-NPU2", "qwen35-4b-npu2.tar",
-        3_597_588_480,
-        "80401bba2fc26896a7cac8ef23629ee495b20b1b853bfb9ce5202562772ca0e4",
+        "vaelor/" + NPU_RELEASE_PACKAGE.folder,
+        NPU_RELEASE_PACKAGE.part_prefix[: -len(".part")],
+        NPU_RELEASE_PACKAGE.size_bytes,
+        NPU_RELEASE_PACKAGE.sha256,
         SIZE_MEASURED,
+        # The size is the pinned package's, derived (LESSONS 5): a typed "3.4 GiB"
+        # outlived the 1.5.3 package and sat beside the measured size of the next.
         "Runs on this machine's neural processor - the fastest, most private "
-        "on-device Assistant; about 3.4 GiB.",
+        "on-device Assistant; {}.".format(
+            size_note(NPU_RELEASE_PACKAGE.size_bytes, SIZE_MEASURED)),
         quantization="Q4NX",
         engine="flm-npu",
         surface="assistant",
         source_url=NPU_RELEASE_SOURCE,
-        release_tag="qwen3.5:4b",
+        release_tag=NPU_RELEASE_PACKAGE.tag,
     ),
 )
 

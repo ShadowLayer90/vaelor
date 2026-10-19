@@ -34,6 +34,7 @@ EVIDENCE_SOURCES = (
     "ai-chat.connections",
     "apps.catalog",
     "assistant.capability",
+    "assistant.clock",
     "assistant.fallback",
     "assistant.machine-brief",
     "assistant.machine-events",
