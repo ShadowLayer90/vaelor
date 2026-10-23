@@ -752,12 +752,61 @@ details[open]:not(.custom-agent-step-group) > summary:not(.nav-item)::before {
     border-color: CanvasText;
   }
 
+  /* A Highlight-filled control opts out of forcing and names every colour
+     itself. Left forced, Chromium paints a Canvas backplate behind each line
+     of text, and HighlightText on that backplate vanished: every primary and
+     danger button and selected tab rendered as a filled pill with a blank bar
+     where its label was (sign-in "Open control plane", 2026-10-23). Opting out
+     also stops forcing page rules (`:hover`, `:disabled`, up to 0,3,0), so
+     these declarations are !important or those rules' theme colours return. */
   .ui-button--primary,
   .ui-button--danger,
   .ui-tab--selected {
-    color: HighlightText;
-    background: Highlight;
-    border-color: Highlight;
+    forced-color-adjust: none;
+    color: HighlightText !important;
+    background: Highlight !important;
+    border-color: Highlight !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    /* A press inverts the fill; a colour transition would blur it away. */
+    transition: none !important;
+  }
+
+  /* Forcing is off for the whole subtree, so a child with its own theme
+     colour (the Workloads "Manage" tab count, var(--text-muted)) would keep
+     it on the fill. Children take the label's colour; svg Icons already use
+     currentColor and are left alone. */
+  :is(.ui-button--primary, .ui-button--danger, .ui-tab--selected) :not(svg, svg *) {
+    color: inherit !important;
+    background-color: transparent !important;
+    border-color: currentColor !important;
+  }
+
+  /* Hover and press, in system colours only: a thin ring on hover (the 2px
+     focus ring stays the heavier mark), the fill inverted while pressed. */
+  :is(.ui-button--primary, .ui-button--danger, .ui-tab--selected):hover:not(:disabled, [aria-disabled="true"]) {
+    outline: 1px solid CanvasText;
+    outline-offset: 2px;
+  }
+
+  :is(.ui-button--primary, .ui-button--danger, .ui-tab--selected):active:not(:disabled, [aria-disabled="true"]) {
+    color: Highlight !important;
+    background: HighlightText !important;
+  }
+
+  /* Disabled or busy: the GrayText convention, at full opacity - the dimmed
+     theme style (opacity 0.7 for a button, 0.65 for a tab) would cut
+     GrayText's contrast. */
+  :is(.ui-button--primary, .ui-button--danger, .ui-tab--selected):is(:disabled, [aria-disabled="true"]) {
+    color: GrayText !important;
+    background: Canvas !important;
+    border-color: GrayText !important;
+    opacity: 1 !important;
+  }
+
+  :is(.ui-button--primary, .ui-button--danger, .ui-tab--selected):focus-visible {
+    outline: 2px solid CanvasText !important;
+    outline-offset: 2px !important;
   }
 
   .ui-control:focus-visible,

@@ -15,11 +15,37 @@
 .sgn-intro {
   flex: 1 1 520px;
   min-width: 0;
+  /* The illustration's shade reaches past the content box; it must never
+     widen the page (no horizontal scroll at phone width). */
+  overflow: clip;
   display: flex;
   flex-direction: column;
   gap: var(--space-7);
   padding: var(--space-8);
-  background: var(--bg-sidebar);
+  /*
+   * The owner's sign-in artwork (DECISIONS: owner, 2026-10-23, on VD-200;
+   * ASSET_PROVENANCE.md). A CSS background, so it is decorative by
+   * construction: no element, no alt text, nothing a screen reader reaches,
+   * and the browser fetches it at image priority without holding the form's
+   * first paint. Until it arrives the panel is the plain sidebar ground it
+   * always was. The slab and its lit seam sit in the lower right; the veil
+   * darkens from the text side. On its own it does not keep the headline off
+   * the slab's lit top edge in a short window (`cover` lifts the picture), so
+   * `.sgn-domains::after` below also blacks out everything above the
+   * illustration. Measured on the rendered page (worst pixel under each line,
+   * both states): widths 320-1440 at 900 px tall, and widths 941-1440 at
+   * 560, 600, 650 and 700 px; the lowest is in the report, not here.
+   */
+  background:
+    linear-gradient(
+      90deg,
+      var(--bg-sidebar) 0%,
+      color-mix(in srgb, var(--bg-sidebar) 86%, transparent) 30%,
+      color-mix(in srgb, var(--bg-sidebar) 40%, transparent) 70%,
+      color-mix(in srgb, var(--bg-sidebar) 12%, transparent) 100%
+    ),
+    url("../assets/login/vaelor-login.webp") right bottom / cover no-repeat,
+    var(--bg-sidebar);
   border-right: 1px solid var(--border-hairline);
 }
 
@@ -92,62 +118,133 @@
   line-height: 1.6;
 }
 
+/*
+ * The control domains as an illustration (owner, 2026-10-23): five machined
+ * modules joined to a core by light traces, drawn without text. The words
+ * stay real text, each label placed beside its object in units of the
+ * picture (percentages of a 1600 x 600 box), so a label stays on its object
+ * at every panel width. Measured on the 1600 x 600 source: Hardware
+ * x 132-420 y 79-242, Workloads x 525-760 y 71-240, Intelligence
+ * x 147-400 y 294-438, Fleet x 500-735 y 285-440, core x 1040-1440 y 109-410.
+ * The top row and the core are labelled above, the bottom row below, so no
+ * label lands on an object or the traces between the rows.
+ */
 .sgn-domains {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 16px;
+  position: relative;
+  isolation: isolate;
+  aspect-ratio: 1600 / 600;
   margin-top: 24px;
 }
 
+/* The picture is decorative: a pseudo-element, never read aloud. Its edges
+   fade so it sits on the background picture rather than as a black box. */
+.sgn-domains::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: url("../assets/login/vaelor-domains.webp") center / 100% 100% no-repeat;
+  mask-image:
+    linear-gradient(to right, transparent, black 10%, black 90%, transparent),
+    linear-gradient(to bottom, transparent, black 14%, black 86%, transparent);
+  mask-composite: intersect;
+}
+
+/*
+ * Both pictures glow orange low in the panel, so the slab fades out across
+ * the band the illustration occupies (owner, 2026-10-23: "fade the slab out",
+ * chosen over moving it lower). The band is the panel's own dark, measured
+ * from the illustration's box: from just left of it to the panel's right
+ * edge, and from the panel's top (the panel clips the overflow) down to the
+ * illustration's foot, so the brand, overline, headline and copy also sit on
+ * clean dark at any window height. It feathers 72 px to the left and 0.45 of
+ * the box's height below, so the lower slab, its floor seam and the floor
+ * glow stay visible and nothing looks cut out.
+ */
+.sgn-domains::after {
+  content: "";
+  position: absolute;
+  /* Five box heights above it reaches past the panel's top at every width;
+     solid to the box's foot, feathered over a further 0.45 below
+     (stop: 6 / 6.45 = 93%). */
+  top: -500%;
+  right: -100vw;
+  bottom: -45%;
+  left: -48px;
+  z-index: -1;
+  background: var(--bg-sidebar);
+  mask-image:
+    linear-gradient(to right, transparent, black 72px),
+    linear-gradient(to bottom, black 93%, transparent);
+  mask-composite: intersect;
+  pointer-events: none;
+}
+
+/* The shade reaches past the illustration, behind the brand, the copy and
+   (stacked) the footer; every line of text stays painted above it. The
+   content column itself must not become a stacking context, or the shade
+   inside it would paint over the brand above it. */
+.sgn-intro > :not(.sgn-intro__content),
+.sgn-intro__content > :not(.sgn-domains) {
+  position: relative;
+  z-index: 1;
+}
+
 .sgn-domains ul {
-  flex: 1 1 260px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.sgn-domains li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px;
-  font-size: var(--font-size-ui);
-  background: var(--surface-card);
-  border: 1px solid var(--border-card);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card-edge);
-}
-
-.sgn-domain__icon {
-  width: 34px;
-  height: 34px;
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-secondary);
-  background: var(--bg-icon);
-  border: 1px solid var(--border-icon);
-  border-radius: var(--radius-md);
-}
-
-.sgn-domains__link {
-  width: 28px;
-  height: 1px;
-  background: var(--accent);
-}
-
+.sgn-domain,
 .sgn-core {
+  position: absolute;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.sgn-domain {
+  font-size: var(--font-size-ui);
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+/* Top row: the label's foot sits just above the object (y 66 of 600). */
+.sgn-domain--hardware,
+.sgn-domain--workloads {
+  bottom: 89%;
+}
+
+.sgn-domain--hardware {
+  left: 8.25%;
+}
+
+.sgn-domain--workloads {
+  left: 32.8%;
+}
+
+/* Bottom row: the label's head sits just under the object (y 452 of 600). */
+.sgn-domain--intelligence,
+.sgn-domain--fleet {
+  top: 75.3%;
+}
+
+.sgn-domain--intelligence {
+  left: 9.4%;
+}
+
+.sgn-domain--fleet {
+  left: 31.25%;
+}
+
+/* The core: right-aligned to its right edge (x 1440), foot just above it. */
+.sgn-core {
+  right: 10%;
+  bottom: 84%;
   display: flex;
   flex-direction: column;
-  padding: 18px 20px;
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-deep);
-  border-radius: var(--radius-lg);
+  align-items: flex-end;
+  text-align: right;
+  line-height: 1.2;
 }
 
 .sgn-core strong {
@@ -157,7 +254,7 @@
 
 .sgn-core small {
   color: var(--accent-text);
-  font-size: var(--font-size-ui-xs);
+  font-size: var(--font-size-ui-sm);
 }
 
 .sgn-foot {
@@ -355,12 +452,71 @@
   .sgn-intro {
     gap: var(--space-5);
     padding: var(--space-6) var(--space-4);
+    /* Stacked, the copy spans the whole width: the veil runs top to bottom
+       instead. It stays heavy through the headline and copy, where the slab's
+       lit top edge crosses, and is lightest where the domain cards cover the
+       slab. */
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--bg-sidebar) 88%, transparent) 0%,
+        color-mix(in srgb, var(--bg-sidebar) 88%, transparent) 48%,
+        color-mix(in srgb, var(--bg-sidebar) 45%, transparent) 75%,
+        color-mix(in srgb, var(--bg-sidebar) 85%, transparent) 100%
+      ),
+      url("../assets/login/vaelor-login.webp") right bottom / cover no-repeat,
+      var(--bg-sidebar);
     border-right: 0;
     border-bottom: 1px solid var(--border-hairline);
   }
 
+  /* A phone cannot hold 13 px labels on a picture this small: the picture
+     leads and the labels follow as a two-column list in the picture's own
+     order (top row, bottom row), then the core. */
   .sgn-domains {
+    aspect-ratio: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2) var(--space-4);
     margin-top: 0;
+  }
+
+  .sgn-domains::before {
+    position: static;
+    grid-column: 1 / -1;
+    aspect-ratio: 1600 / 600;
+  }
+
+  /* Stacked, the copy and labels span the panel: a soft oval under the
+     picture and its label list is enough. */
+  .sgn-domains::after {
+    inset: -30% -16%;
+    background: radial-gradient(
+      closest-side,
+      var(--bg-sidebar) 70%,
+      color-mix(in srgb, var(--bg-sidebar) 55%, transparent) 86%,
+      transparent
+    );
+    mask-image: none;
+  }
+
+  .sgn-domains ul {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .sgn-domain,
+  .sgn-core {
+    position: static;
+    white-space: normal;
+  }
+
+  .sgn-core {
+    grid-column: 1 / -1;
+    align-items: flex-start;
+    text-align: left;
   }
 
   .sgn-access {
@@ -369,5 +525,18 @@
 
   .sgn-card {
     padding: 22px var(--space-4);
+  }
+}
+
+/* Forced colours keep the text and drop the picture behind it, at every width
+   (last, so the phone rule above cannot bring the picture back). */
+@media (forced-colors: active) {
+  .sgn-intro {
+    background: Canvas;
+  }
+
+  .sgn-domains::before,
+  .sgn-domains::after {
+    display: none;
   }
 }

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Icon, type IconName } from "./Icon";
+import { Icon } from "./Icon";
 import { ProductMark } from "./ProductMark";
 import { brand } from "../lib/brand";
 import { Button, Input, Notice } from "./ui";
@@ -8,12 +8,16 @@ import "../styles/auth.css";
 /** The shortest administrator passphrase first-run setup accepts (the server holds the same rule). */
 const MIN_PASSPHRASE = 12;
 
-/** The four things Vaelor reaches, as the sign-in page draws them. */
-const DOMAINS: ReadonlyArray<{ label: string; icon: IconName }> = [
-  { label: "Hardware", icon: "system" },
-  { label: "Workloads", icon: "apps" },
-  { label: "Intelligence", icon: "settings" },
-  { label: "Fleet", icon: "cluster" },
+/**
+ * The four things Vaelor reaches, in reading order. The sign-in illustration
+ * draws each as an object; `slot` places its label beside that object
+ * (auth.css, `.sgn-domain--<slot>`).
+ */
+const DOMAINS: ReadonlyArray<{ label: string; slot: string }> = [
+  { label: "Hardware", slot: "hardware" },
+  { label: "Workloads", slot: "workloads" },
+  { label: "Intelligence", slot: "intelligence" },
+  { label: "Fleet", slot: "fleet" },
 ];
 
 /**
@@ -110,10 +114,9 @@ export function AuthScreen({
           <div className="sgn-domains" aria-label="Vaelor control domains" role="group">
             <ul>
               {DOMAINS.map((domain) => (
-                <li key={domain.label}><span aria-hidden="true" className="sgn-domain__icon"><Icon name={domain.icon} size={18} /></span>{domain.label}</li>
+                <li className={`sgn-domain sgn-domain--${domain.slot}`} key={domain.label}>{domain.label}</li>
               ))}
             </ul>
-            <span aria-hidden="true" className="sgn-domains__link" />
             <div className="sgn-core"><strong>Vaelor core</strong><small>Observe · act · recover</small></div>
           </div>
         </div>

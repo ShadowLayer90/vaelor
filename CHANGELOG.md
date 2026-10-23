@@ -1,5 +1,41 @@
 # Change log
 
+## 1.5.6
+
+A small release: a new sign-in page, and labels that stay readable in Windows
+high-contrast mode.
+
+### Upgrading from 1.5.5
+
+- **Update Vaelor from the console** (**System › Hardware and services ›
+  Update Vaelor**), or re-run the installer; both end in the same state.
+
+### Sign-in page
+
+- **New artwork.** The left side of the sign-in page has an original
+  background picture, and the Hardware / Workloads / Intelligence / Fleet
+  diagram is now an illustration. Its labels are still real text, so screen
+  readers and translation tools read them; on a phone they show as a list.
+- Both pictures are decorative and are hidden in high-contrast mode.
+
+### High-contrast mode
+
+- **Button and tab labels are readable again.** In Windows high-contrast mode
+  every main action button, red action button and selected tab showed a
+  filled shape with a blank bar where its label should be, starting with the
+  sign-in page's **Open control plane**. They now show their labels in the
+  colours your contrast theme chooses. Greyed-out buttons read clearly, and
+  hovering, pressing and keyboard focus each show a distinct mark.
+- In high-contrast mode the outlined **Remove** (Manage) and **Disconnect**
+  (Remote console) buttons are now filled like the other red buttons.
+
+### Not verified on the hardware in this release
+
+- 1.5.6 was not installed on a test appliance before release; its changes are
+  to the sign-in page's look and to high-contrast styling only. They were
+  checked in a browser imitating high-contrast mode, not on a real Windows
+  high-contrast desktop.
+
 ## 1.5.5
 
 A fix release. It fixes everything the 1.5.4 cold install found, stops AI Chat

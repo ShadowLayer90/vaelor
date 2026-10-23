@@ -273,7 +273,7 @@ if [[ -z "${wheel}" ]]; then
     }
   fi
   wheel_repo="${VAELOR_REPO:-ShadowLayer90/vaelor}"
-  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5.5}"
+  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5.6}"
   wheel_dl_dir="$(mktemp -d)"
   echo "No --wheel given; downloading it from ${wheel_repo} release ${wheel_tag} ..."
   wheel="$(VAELOR_REPO="${wheel_repo}" VAELOR_TAG="${wheel_tag}" \
