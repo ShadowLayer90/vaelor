@@ -30,6 +30,7 @@ import subprocess
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from .flm_service import _validate_port
+from .vaelor_containers import owner_label_args
 from .phoenix_state import (
     PHOENIX_LOOPBACK_HOST, PHOENIX_PORT, PhoenixSettings, trace_endpoint,
 )
@@ -103,6 +104,8 @@ def phoenix_container_command(
     listen_port = _validate_port(port)
     return [
         docker, "run", "-d", "--name", container_name,
+        # VD-133 1.5.5 #12: part of Vaelor, so Apps does not list it as the owner's.
+        *owner_label_args("phoenix"),
         "-p", "{}:{}:{}".format(listen, listen_port, listen_port),
         image,
     ]

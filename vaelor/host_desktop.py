@@ -92,6 +92,11 @@ DOCKER_SERVICE_DROP_INS = {
         "vaelor-workload-broker.service.d/docker.conf"
     ): "[Service]\nSupplementaryGroups=vaelor docker\n",
 }
+#: The record that Vaelor turned GNOME Remote Login on, so an uninstall turns
+#: off only the Remote Login Vaelor set up (VD-133 1.5.5 #7). Written before
+#: the first setting changes, removed once ``disable_rdp`` has finished;
+#: `deploy/maintain-vaelor.sh` retypes it and a test compares the two.
+RDP_ENABLED_MARKER = "/etc/vaelor/rdp-enabled-by-vaelor"
 RDP_USERNAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
 
 
@@ -414,6 +419,8 @@ def configure_rdp(username: str, password: str) -> Dict[str, Any]:
         raise ValueError("Use a dedicated RDP password between 12 and 128 characters.")
 
     with _stopped_for_reconfiguration("gnome-remote-desktop.service"):
+        _run(["/usr/bin/install", "-D", "-m", "0644", "/dev/null", RDP_ENABLED_MARKER],
+             timeout=30)
         install_rdp_tls(_run)
         commands = [
             ["rdp", "set-port", str(RDP_PORT)],
@@ -454,6 +461,7 @@ def disable_rdp() -> Dict[str, Any]:
     _run(["/usr/bin/grdctl", "--system", "rdp", "clear-credentials"], timeout=30)
     _run(["/usr/bin/grdctl", "--system", "rdp", "disable"], timeout=30)
     tls = remove_rdp_tls_pair()  # by descriptor, never by path (R2-9, VD-185)
+    _run(["/usr/bin/rm", "-f", RDP_ENABLED_MARKER], timeout=30)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         try:

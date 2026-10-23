@@ -69,6 +69,11 @@ LEFT_RUNNING_ON_DEAD_MACHINE = (
     "images and downloaded models. Stop and delete them on the machine itself."
 )
 
+#: A purged worker (VD-133 1.5.5 #16, round 1 M3): Docker is gone from it, so
+#: there was nothing on the machine to leave; its entry here was still removed.
+DOCKER_GONE = ("Docker is no longer installed on it, so it had no cluster membership of its own to "
+               "give up; it was taken off this controller's list.")
+
 #: Fixed words for a leave that failed (review round 3): the machine's own
 #: answer is logged, never shown (LESSONS 24).
 UNREACHABLE_FIXED = "Vaelor could not reach the machine over SSH"
@@ -470,6 +475,8 @@ def removal_message(result: Dict[str, Any]) -> str:
             "It did not leave the cluster cleanly, so it may still believe it "
             "is a member; run 'docker swarm leave --force' on it."
         )
+    if result.get("docker_absent"):
+        parts.append(DOCKER_GONE)
     if result.get("swarm_entry_unread"):
         parts.append(UNREAD_ENTRY_LEFT)
     if result.get("profile_left"):
@@ -551,7 +558,8 @@ def remove_worker_node(operations: Any, payload: Dict[str, Any]) -> Dict[str, An
             # fixed words; the machine's own text goes to the log only.
             from .cluster_driver import DockerSwarmDriver
 
-            if not DockerSwarmDriver._already_left_swarm(str(error)):  # noqa: SLF001 - its one rule
+            if not (DockerSwarmDriver._already_left_swarm(str(error))  # noqa: SLF001 - its one rule
+                    or DockerSwarmDriver._docker_absent(str(error))):  # noqa: SLF001 - round 1 M3
                 LOGGER.warning("node %s could not leave the cluster: %s", node["id"], error)
                 if isinstance(error, channel_drops()):
                     raise WorkerNotReached("{} to ask it to leave the cluster. Nothing was removed.".format(

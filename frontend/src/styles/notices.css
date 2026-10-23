@@ -15,6 +15,13 @@
   gap: 12px;
 }
 
+/* The content takes the notice's width and may shrink, so a long sentence
+   wraps beside the button instead of pushing it out (VD-133 1.5.5 #1). */
+.gn-reload .ui-notice__content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .gn-reload__icon {
   flex: 0 0 auto;
 }
@@ -24,7 +31,14 @@
   font-size: var(--font-size-ui-sm);
 }
 
+/* The button (its wrapper is the flex item) is never squeezed by a long
+   sentence beside it (VD-133 1.5.5 #1 render, 1440 px). */
+.gn-reload .ui-button-wrap {
+  flex: 0 0 auto;
+}
+
 .gn-reload .ui-button {
+  white-space: nowrap;
   min-height: 36px;
   padding: 0 14px;
   font-size: var(--font-size-ui-sm);

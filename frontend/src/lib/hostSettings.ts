@@ -1,4 +1,4 @@
-import { formatQuantity } from "./format";
+import { bytesIn, formatQuantity } from "./format";
 import type { StatusTone } from "../components/ui";
 
 /**
@@ -23,6 +23,15 @@ export interface PoolStatus {
   /** `null` is "cannot be told", which is not the same as "no restart needed". */
   restart_pending?: boolean | null;
   restart_reason?: string;
+  /**
+   * What the next restart does to the running pool, and whether the owner
+   * chose it (VD-133 1.5.5 #3). A restart is offered only when `chosen`:
+   * a pool whose saved size an uninstall removed shrinks at the next
+   * restart, and that restart is not the fix.
+   */
+  next_restart?: { change: "none" | "grow" | "shrink" | "unknown"; chosen: boolean; bytes: number | null };
+  /** The whole-GiB size that saves the pool running now, when it is not saved; else `null`. */
+  keep_gib?: number | null;
 }
 
 export interface PoolMachine {
@@ -129,6 +138,32 @@ export function poolBytes(value: number | null | undefined): string {
 }
 
 /**
+ * A pool SIZE in the two units the card uses together: "30.4 GiB (32.7 GB)".
+ * VD-133 1.5.5 #3 review L7: one card read "About 32.7 GB", "about 30.4 GiB"
+ * and "From 31 GiB (33.3 GB)" for sizes of the same pool. GiB is the unit a
+ * size is typed and saved in; the GB beside it is the Fleet card's figure
+ * (W7-D5). The backend's sentences use the same form (gpu_memory_pool._gib_text).
+ */
+export function poolSize(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return poolBytes(value);
+  return `${gibFigure(value)} GiB (${poolBytes(value)})`;
+}
+
+/**
+ * Bytes in GiB, whole only when whole: never "44.0" for a size just off 44
+ * (review r3), the rule `gpu_memory_pool.gib_figure` follows.
+ */
+export function gibFigure(value: number): string {
+  const gib = bytesIn(1, "GiB");
+  if (value % gib === 0) return String(value / gib);
+  for (const places of [1, 2, 3]) {
+    const text = (value / gib).toFixed(places);
+    if (!text.endsWith("0")) return text;
+  }
+  return `${value % gib < gib / 2 ? "just over" : "just under"} ${Math.round(value / gib)}`;
+}
+
+/**
  * A machine's name inside a sentence. The controller is listed as "This
  * controller", a name only at the start of a sentence; mid-sentence it is
  * "this controller" (W7-D5).
@@ -137,10 +172,31 @@ export function machineInSentence(name: string): string {
   return /^This controller\b/.test(name) ? "t" + name.slice(1) : name;
 }
 
+/**
+ * Whether the card's restart line is information, not a warning: a size is
+ * saved and the machine runs another one. VD-161 amended (owner, 2026-10-20):
+ * an install or a join saves the recommended size on a fresh machine, so this
+ * is the first thing its card says, and it is no error ("Saved 45 GiB; it
+ * counts from the next restart"). Only an unsaved pool warns.
+ */
+export function poolSavedForRestart(pool: PoolStatus): boolean {
+  return pool.supported && pool.restart_pending === true && pool.override?.state === "vaelor";
+}
+
 /** The pill for one machine's pool: what is true now, in one or two words. */
 export function poolPill(pool: PoolStatus): { tone: StatusTone; label: string } {
   if (!pool.supported) return { tone: "neutral", label: "Not available" };
-  if (pool.restart_pending === true) return { tone: "warning", label: "Restart needed" };
+  if (poolSavedForRestart(pool)) {
+    // Still the owner's size, so information - but a smaller one says so.
+    return { tone: "info", label: pool.next_restart?.change === "shrink" ? "Smaller at restart" : "Counts at restart" };
+  }
+  if (pool.restart_pending === true) {
+    // VD-133 1.5.5 #3: "Restart needed" only when the restart moves the pool
+    // to a size the owner chose; an unsaved pool says what a restart does.
+    if (pool.next_restart?.chosen === true) return { tone: "warning", label: "Restart needed" };
+    if (pool.next_restart?.change === "shrink") return { tone: "warning", label: "Shrinks at restart" };
+    return { tone: "warning", label: "Not saved" };
+  }
   if (pool.restart_pending === null || pool.restart_pending === undefined) {
     return { tone: "warning", label: "Check needed" };
   }

@@ -1,3 +1,5 @@
+import type { OperationResolution } from "./operationOutcome";
+
 export const OPERATION_SCHEMA = "vaelor.operation.v1" as const;
 export const OPERATION_RESUME_STORAGE_KEY = "vaelor.operation-owner.resume";
 
@@ -207,6 +209,10 @@ export interface OperationProjection {
   needs_attention?: boolean;
   /** Who dismissed this attention item and when (epoch seconds), or null. */
   dismissal?: OperationDismissal | null;
+  /** What resolved this failure and when (epoch ms), or null (VD-133 1.5.5 #4). */
+  resolution?: OperationResolution | null;
+  /** A service restart cut this operation short; its state stays `failed`. */
+  interrupted_by_restart?: boolean;
 }
 
 export interface OperationDismissal {

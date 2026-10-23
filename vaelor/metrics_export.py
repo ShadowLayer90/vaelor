@@ -528,9 +528,14 @@ def _apps_from(callbacks: Mapping[str, Any]
     try:
         listed = inventory.list_all()
         apps = listed.get("apps") if isinstance(listed, Mapping) else None
+        # VD-133 1.5.5 #12: Vaelor's own containers are listed apart from the
+        # owner's apps; a scrape still watches them (review F6).
+        own = listed.get("vaelor_containers") if isinstance(listed, Mapping) else None
     except Exception:
         return None
-    return apps if isinstance(apps, list) else None
+    if not isinstance(apps, list):
+        return None
+    return apps + (own if isinstance(own, list) else [])
 
 
 def _job_counts_from(callbacks: Mapping[str, Any]

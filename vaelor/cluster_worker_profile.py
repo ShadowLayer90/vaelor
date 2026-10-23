@@ -41,12 +41,14 @@ from .worker_profile_probe import read_profile
 from .worker_profile_apply import needs_apply, plan
 from .worker_profile_compare import sentence as as_sentence
 from .worker_profile_job import (
-    RECHECK_REASON, SWEEP_REASON, card_job, latest_profile_job, queue_profile_job, update_note,
+    RECHECK_REASON, SWEEP_REASON, AuditTrail, audit_drain_once, card_job, drain_note, drain_when_new,
+    latest_profile_job, queue_profile_job, readd_since, update_note,
 )
 from .worker_profile_state import (
     NODE_RECORD_EXIT, NODE_RECORD_UNREADABLE, NOT_CHECKED_INTERNAL, NOT_CHECKED_STORE, NOT_ENROLLED,
     NOT_ENROLLED_EXIT, NOT_SAVED, NOT_SHOWN_INTERNAL, NOT_SHOWN_LABEL, STORED_UNREADABLE, age_words,
-    appliance_present, appliance_reading, worker_software_view,
+    DRAINED_WHILE_UNINSTALLED, STILL_DRAINED, appliance_present, appliance_reading, hold_uninstalled,
+    uninstalled, worker_software_view,
 )
 from .worker_telemetry_runtime import _local_sha256, default_telegraf_resolver
 
@@ -186,6 +188,11 @@ def fleet_trust_record(store: Any, worker_ids: List[str], now: Optional[float] =
         except Exception:  # noqa: BLE001 - one unreadable record is one unknown worker
             LOGGER.exception("could not read the software record of node %s for the fleet trust record", node_id)
             record = {}
+        if uninstalled(record) is not None:
+            # Owner 2026-10-21: a machine Vaelor was uninstalled on reaches this
+            # console no more, and is read every 15 minutes, so it would hold
+            # the certificate back for good (LESSONS 22).
+            continue
         reading = record.get("reading") if isinstance(record.get("reading"), dict) else {}
         item = (reading.get("items") or {}).get("controller-ca") if reading.get("ok") else None
         held = ""
@@ -438,6 +445,30 @@ class WorkerProfileMixin:
     #: Where the sweep writes the fleet-trust record (VD-212); set by
     #: :func:`start_profile_sweep`, so a test or preview writes nothing.
     fleet_trust_path: Optional[str] = None
+    #: The control plane's audit trail (a `SecurityStore`), set by
+    #: :func:`start_profile_sweep`: the automatic changes this mixin queues
+    #: are audited there (owner 2026-10-21 follow-up list, ACC-121). A test
+    #: or preview has none and writes no row.
+    audit_security: Any = None
+    #: Which (action, node) is failing, kept by this process across passes so a
+    #: failure is one audit row, not one every 15 minutes (`AuditTrail`).
+    _audit_failing: Any = None
+
+    def audit_trail(self, requested_by: Any = None) -> Optional[AuditTrail]:
+        """Where this controller's changes to a worker are audited, and as whom.
+
+        ``requested_by`` is the administrator's ``(username, remote address)``
+        when their Recheck asked (Adopted 2026-10-21, as ACC-121's Recheck rows);
+        otherwise the automatic actor. ``None`` without an audit trail (a test).
+        """
+        if self.audit_security is None:
+            return None
+        if self._audit_failing is None:
+            self._audit_failing = set()
+        if not requested_by:
+            return AuditTrail(self.audit_security, failing=self._audit_failing)
+        return AuditTrail(self.audit_security, actor=str(requested_by[0]), remote_addr=str(requested_by[1] or ""),
+                          failing=self._audit_failing)
 
     def worker_profile_inputs(self, node: Mapping[str, Any]) -> Dict[str, str]:
         """What the controller itself contributes to a worker's expected profile.
@@ -467,6 +498,9 @@ class WorkerProfileMixin:
                                    "was recorded",
             }}
         record.pop("unreadable", None)
+        if uninstalled(record) is not None:
+            # A drain the executor queued, on a worker that stopped answering since.
+            record["uninstalled"] = audit_drain_once(self.audit_trail(), node_id, record["uninstalled"])
         record["attempt"] = {
             "at": _now(), "ok": False,
             # A machine that did not answer, as opposed to one that answered
@@ -498,17 +532,20 @@ class WorkerProfileMixin:
             LOGGER.warning("could not record the failed check of node %s: %s", node_id, failure)
 
     def recheck_worker_profile(self, node_id: str, reason: str = RECHECK_REASON,
-                               bounded: bool = False) -> Dict[str, Any]:
+                               bounded: bool = False, requested_by: Any = None) -> Dict[str, Any]:
         """Read one worker's software now, store it, queue an update if one is
         needed (P2), and return the card's view.
 
         Raises only ``ValueError(NODE_NOT_FOUND)`` for a node that is not
         enrolled; every other failure is in the view it returns. ``bounded`` is
         the 15-minute check's limit on retrying one change (`worker_profile_job`).
+        ``requested_by`` is who pressed Recheck, for the audit rows (`audit_trail`).
         """
+        trail = self.audit_trail(requested_by)
         node = self.store.get_node(node_id, include_credential=True)
         if node is None:
             raise ValueError(NODE_NOT_FOUND)
+        probed_at = _now()
         try:
             transport = self._worker_transport(node)  # type: ignore[attr-defined]
             reading = read_profile(transport, node_id)
@@ -530,21 +567,44 @@ class WorkerProfileMixin:
             now = _now()
             record = {"checked_at": now, "reading": reading, "attempt": {"at": now, "ok": True}}
             try:
-                kept = self.store.node_profile(node_id).get("amd_smi")
+                previous = self.store.node_profile(node_id)
+                kept = previous.get("amd_smi")
                 if isinstance(kept, dict):
                     # What the last apply installed stays recorded (design §2.5).
                     record["amd_smi"] = kept
+                # Owner 2026-10-21 (VD-133 1.5.5 #16): found on this reading,
+                # or kept from the last, until the owner's Re-add clears it.
+                hold_uninstalled(previous, record, now)
+                if (uninstalled(previous) is None and "uninstalled" in record
+                        and self._readd_since(node_id, probed_at)):
+                    # Round 2 M1: this reading may predate the owner's Re-add
+                    # removing the record; it sets no new verdict and no drain.
+                    record.pop("uninstalled")
+                drained_now = False
+                if "uninstalled" in record and (node.get("labels") or {}).get("swarm_node_id"):
+                    # Adopted 2026-10-21: drained in the cluster when first
+                    # found, so Swarm places nothing new there (controller side).
+                    had_drain = "drain_job" in record["uninstalled"]
+                    record["uninstalled"] = drain_when_new(previous, record["uninstalled"],
+                                                           self.job_store, node_id)
+                    drained_now = not had_drain and "drain_job" in record["uninstalled"]
+                if "uninstalled" in record:
+                    # Owner 2026-10-21 follow-up list (ACC-121): the drain is
+                    # audited here, whichever process queued it; one this
+                    # Recheck queued is its administrator's.
+                    record["uninstalled"] = audit_drain_once(trail, node_id, record["uninstalled"],
+                                                             queued_now=drained_now)
                 self.store.set_node_profile(node_id, record)
             except Exception:  # noqa: BLE001 - an unsaved reading is not shown as current
                 LOGGER.exception("could not save the software reading of node %s", node_id)
                 return unknown_view(node_id, NOT_SAVED, label="Not saved", read_now=True)
-            self._queue_if_needed(node, record, reason, bounded)
+            self._queue_if_needed(node, record, reason, bounded, trail)
         # Never raises (review P1-3): Recheck has already re-read the hardware
         # and repaired telemetry by now, and a 500 here would lose both reports.
         return self.worker_software_safe(node, record)
 
     def _queue_if_needed(self, node: Mapping[str, Any], record: Mapping[str, Any], reason: str,
-                         bounded: bool) -> None:
+                         bounded: bool, trail: Optional[AuditTrail] = None) -> None:
         """Queue the apply job when a part the profile owns differs (P2).
 
         The same plan the job itself makes (`worker_profile_apply.plan`), so
@@ -553,6 +613,10 @@ class WorkerProfileMixin:
         """
         if self.job_store is None or not (node.get("labels") or {}).get("swarm_node_id"):
             # Only a joined worker: the join itself queues the first apply.
+            return
+        if uninstalled(record) is not None:
+            # Owner 2026-10-21: Vaelor was uninstalled there. Recheck and the
+            # 15-minute check read it and say so; neither puts anything back.
             return
         try:
             reading = record["reading"]
@@ -568,8 +632,8 @@ class WorkerProfileMixin:
             LOGGER.exception("could not decide whether node %s needs a profile update", node["id"])
             return
         if needs_apply(planned):
-            queue_profile_job(self.job_store, node["id"], reason,
-                              expected_digest=expected["digest"], bounded=bounded)
+            queue_profile_job(self.job_store, node["id"], reason, expected_digest=expected["digest"],
+                              bounded=bounded, audit=trail)
 
     def sweep_worker_profile(self, node_id: str) -> Dict[str, Any]:
         """The 15-minute check (design §3a.5): read, and queue a bounded update if one is needed.
@@ -627,6 +691,17 @@ class WorkerProfileMixin:
         return [node["id"] for node in nodes if not node.get("record_unreadable")
                 and (node.get("labels") or {}).get("swarm_node_id")]
 
+    def _readd_since(self, node_id: str, since: float) -> bool:
+        """`worker_profile_job.readd_since`; a job store that cannot be read keeps the verdict (logged)."""
+        if self.job_store is None:
+            return False
+        try:
+            return readd_since(self.job_store, node_id, since)
+        except Exception:  # noqa: BLE001 - the positive evidence stands; logged
+            LOGGER.exception("could not tell whether a Re-add of node %s is under way; the verdict stands",
+                             node_id)
+            return False
+
     def _card_job(self, node_id: str) -> Optional[Dict[str, Any]]:
         if self.job_store is None:
             return None
@@ -636,7 +711,7 @@ class WorkerProfileMixin:
             LOGGER.exception("could not read the profile jobs of node %s", node_id)
             return None
 
-    def recheck_worker_profile_contained(self, node_id: str) -> Dict[str, Any]:
+    def recheck_worker_profile_contained(self, node_id: str, requested_by: Any = None) -> Dict[str, Any]:
         """:meth:`recheck_worker_profile` for the hardware Recheck: never raises (round 2 B1).
 
         That Recheck has already re-read the machine and repaired its telemetry
@@ -645,7 +720,7 @@ class WorkerProfileMixin:
         view that says why.
         """
         try:
-            return self.recheck_worker_profile(node_id)
+            return self.recheck_worker_profile(node_id, requested_by=requested_by)
         except ValueError as error:
             if str(error) != NODE_NOT_FOUND:
                 LOGGER.exception("could not check the worker software of node %s", node_id)
@@ -682,9 +757,18 @@ class WorkerProfileMixin:
             release_digest = ""
         job = self._card_job(node["id"])
         now = _now()
+        note = update_note(job, lambda at: age_words(at, now))
+        if uninstalled(record) is not None:
+            # The line under an uninstalled worker is about its drain: no
+            # update runs there, and the drain is never claimed unread.
+            note = drain_note(uninstalled(record), self.job_store)
+        elif record.get(DRAINED_WHILE_UNINSTALLED) and node.get("state") == "drain":
+            # Round 2 M2: the full appliance was installed there since, and
+            # the drain queued while it was uninstalled still holds.
+            note = STILL_DRAINED
         view = worker_software_view(node_id=node["id"], record=record, expected=expected,
                                     release_digest=release_digest, now=now, job=job,
-                                    update_note=update_note(job, lambda at: age_words(at, now)))
+                                    update_note=note)
         applying = {entry["id"] for entry in expected["components"] if entry["applies"]}
         view = _note_rows(view, [ident for ident in filled if ident in applying], NOT_IN_OLDER_READING)
         return with_trust_note(view, controller_trust())
@@ -743,9 +827,13 @@ def start_profile_sweep(manager: Any, job_store: Any):
     """
     from .worker_telemetry_reconcile_scheduler import WorkerTelemetryReconcileScheduler
 
+    from .security import SecurityStore
     from .tls_paths import FLEET_TRUST_STATE
 
     manager.job_store = job_store
+    # Owner 2026-10-21 follow-up list (ACC-121): the automatic drain and
+    # updates are audited in this process's trail, which opens on first write.
+    manager.audit_security = SecurityStore()
     # VD-212: the household authority promotes its new console certificate
     # only once the workers reached recently hold the bundle; this is how it knows.
     manager.fleet_trust_path = FLEET_TRUST_STATE

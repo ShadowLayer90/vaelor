@@ -1,0 +1,52 @@
+/* The restart confirmation's list of running work (RestartDialog, VD-133 1.5.5 #5). */
+.restart-impact {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.restart-impact__lead {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.restart-impact__none {
+  margin-top: 12px;
+}
+
+.restart-impact__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  list-style: none;
+  border: 1px solid var(--border-kv);
+  border-radius: 10px;
+}
+
+.restart-impact__list > li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  background: var(--bg-kv);
+  border-top: 1px solid var(--border-kv);
+  font-size: var(--font-size-ui-xs);
+}
+
+.restart-impact__list > li:first-child {
+  border-top: 0;
+}
+
+.restart-impact__list > li > strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.restart-impact__list > li > span {
+  color: var(--text-secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

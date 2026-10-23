@@ -10,6 +10,8 @@ import { statusTone } from "./ui";
 export interface ManagedInventory {
   apps: ManagedApp[];
   models: ManagedModel[];
+  /** Vaelor's own containers, listed apart from the owner's apps (VD-133 1.5.5 #12). */
+  vaelor_containers?: ManagedApp[];
 }
 
 export interface ManagedApp {
@@ -21,6 +23,8 @@ export interface ManagedApp {
   health?: string | null;
   running: boolean;
   managed: boolean;
+  /** The part of Vaelor this container belongs to; empty for the owner's own (#12). */
+  vaelor_component?: string;
   project?: string | null;
   /**
    * Catalog blueprint this managed app was installed from, read from the

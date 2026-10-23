@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from .job_vocabulary import NEVER_RETRIED_JOB_TYPES
+from .job_vocabulary import INTERRUPTED_BY_RESTART_CODE, NEVER_RETRIED_JOB_TYPES
 from .operation_projection import ACTIVE_OPERATION_STATES, needs_attention
 
 
@@ -162,7 +162,12 @@ def job_projection(job: Dict[str, Any]) -> Dict[str, Any]:
         and str(job.get("type", "")) not in NEVER_RETRIED_JOB_TYPES
     )
     retry_of = job.get("retry_of")
+    # VD-133 1.5.5 #4: a job a service restart cut short is recorded `failed`
+    # with this code; the console says "interrupted by a restart", not "failed".
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    interrupted = operation == "failed" and result.get("code") == INTERRUPTED_BY_RESTART_CODE
     return {
+        "interrupted_by_restart": interrupted,
         "operation_state": operation,
         "resource_liveness": liveness,
         "liveness": liveness,

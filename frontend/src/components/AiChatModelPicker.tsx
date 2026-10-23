@@ -8,7 +8,7 @@ import {
 } from "react";
 import { ApiError } from "../lib/api";
 import { modelDisplayName, modelIdentity } from "../lib/modelIdentity";
-import { LOCAL_BY_MANAGED_PREFIX } from "../lib/gpuServingMode";
+import { LOCAL_BY_CLUSTER, LOCAL_BY_MANAGED_PREFIX } from "../lib/gpuServingMode";
 import type { AiChatClustering, AiChatConnection } from "./aiChatTypes";
 import { Icon, ICON_SIZE } from "./Icon";
 import { StatusPill } from "./StatusPill";
@@ -300,13 +300,14 @@ export function connectionGroup(connection: AiChatConnection, clusterId = ""): s
 /**
  * The line under a connection's name: the service's own name (`provider_label`,
  * "Anthropic" rather than a wire id), and - for `remote`, the one locality known
- * to leave this machine - that prompts and files do (VD-206).
+ * to leave this machine - that prompts and files do (VD-206). The GPU cluster
+ * Vaelor deployed says where its prompts go instead (VD-133 1.5.5 #11).
  */
 export function connectionLine(connection: AiChatConnection): string {
   const name = connection.provider_label || connection.provider;
-  return connection.local_source === "remote"
-    ? `${name} · prompts and files leave this machine`
-    : name;
+  if (connection.local_source === "remote") return `${name} · prompts and files leave this machine`;
+  if (connection.local_source === LOCAL_BY_CLUSTER) return `${name} · prompts stay on your cluster's machines`;
+  return name;
 }
 
 type PickerRow = {

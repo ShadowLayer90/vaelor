@@ -34,7 +34,9 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from .answer_evidence import FIELD_NAMES
 from .byte_units import describe_gb
-from .cluster_placement import CONTROLLER_PLACEMENT_ID, CONTROLLER_PLACEMENT_NAME
+from .cluster_placement import (  # noqa: F401 - name_in_sentence is re-exported
+    CONTROLLER_PLACEMENT_ID, CONTROLLER_PLACEMENT_NAME, name_in_sentence,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -357,16 +359,6 @@ def cluster_digest(callbacks: Mapping[str, Any]) -> Dict[str, Any]:
         "why": str(why.get("headline") or ""),
         "alerts": alerts,
     }
-
-
-def name_in_sentence(name: str) -> str:
-    """A machine's name inside a sentence.
-
-    The controller's name is a phrase, not a proper name: "on This Vaelor
-    controller" reads "on this Vaelor controller". A worker's name is the
-    owner's and is never changed.
-    """
-    return name[:1].lower() + name[1:] if name == CONTROLLER_PLACEMENT_NAME else name
 
 
 def speed_sentences(speed: Mapping[str, Any]) -> List[str]:

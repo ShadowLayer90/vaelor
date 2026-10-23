@@ -41,6 +41,20 @@ export interface InferenceEngine {
 }
 
 /**
+ * One spelling for a power and a clock across the Graphics and Neural
+ * processor cards: the NPU read "0.00 W" and "0 MHz" beside the GPU's "0 W"
+ * and "0.62 GHz" (VD-133 1.5.5 cosmetic). Under 10 W two decimals, so an idle
+ * part's draw is not rounded away; clocks in GHz with two.
+ */
+export function wattsText(watts: number): string {
+  return watts < 10 ? watts.toFixed(2) : `${Math.round(watts)}`;
+}
+
+export function gigahertzText(megahertz: number): string {
+  return (megahertz / 1000).toFixed(2);
+}
+
+/**
  * The GPU engine's acceleration reading, if this machine has one to report.
  * An engine list with no GPU tier, and a GPU tier that reported nothing, are
  * both "no reading" and neither is a fault.
@@ -248,7 +262,7 @@ function gpuAccelerator(
   // size of zero is no size: "29.3 GB of 0 B" is not a reading.
   const pool = gttTotal !== null && gttTotal > 0
     ? { noun: "Shared memory", used: gttUsed, total: gttTotal,
-      missing: "This adapter publishes the size of its shared aperture but not how much of it is in use",
+      missing: "This adapter publishes the size of its GPU memory pool but not how much of it is in use",
       note: ["Unified memory the GPU borrows from the system",
         adapter?.unifiedMemory && vramTotal !== null ? `reserved video memory ${formatQuantity(vramTotal, "capacity")}, a firmware setting` : null]
         .filter(Boolean).join(" · ") }
@@ -285,9 +299,9 @@ function gpuAccelerator(
       { label: "Temperature", value: temperature.value === null ? null : `${Math.round(temperature.value)}`, unit: "°C",
         reason: "No temperature sensor was read for this adapter", note: temperature.sensor ? `${temperature.sensor} sensor` : null,
         series: metricSeries(history, temperature.field), scale: 100 },
-      { label: "Power", value: watts === null ? null : `${Math.round(watts)}`, unit: "W", reason: "This adapter does not report its power draw",
+      { label: "Power", value: watts === null ? null : wattsText(watts), unit: "W", reason: "This adapter does not report its power draw",
         note: powerSensor, series: metricSeries(history, "gpu_power_watts"), scale: null },
-      { label: "Clock", value: clock === null ? null : (clock / 1000).toFixed(2), unit: "GHz", reason: "This adapter does not report its clock",
+      { label: "Clock", value: clock === null ? null : gigahertzText(clock), unit: "GHz", reason: "This adapter does not report its clock",
         note: "graphics clock", series: metricSeries(history, "gpu_clock_mhz"), scale: null },
     ],
     memory: pool === null ? {
@@ -368,9 +382,9 @@ function npuAccelerator(
         note: "from amd-smi", series: metricSeries(history, "npu_activity_percent"), scale: 100 },
       // Nothing publishes one: amdxdna has no hwmon sensor and Vaelor reads no NPU field for it.
       { label: "Temperature", value: null, unit: "", reason: "Vaelor reads no temperature for this device", note: null, series: [], scale: null },
-      { label: "Power", value: power === null ? null : power.toFixed(2), unit: "W", reason: gap,
+      { label: "Power", value: power === null ? null : wattsText(power), unit: "W", reason: gap,
         note: "from amd-smi", series: metricSeries(history, "npu_power_watts"), scale: null },
-      { label: "Clock", value: clock === null ? null : `${Math.round(clock)}`, unit: "MHz", reason: gap,
+      { label: "Clock", value: clock === null ? null : gigahertzText(clock), unit: "GHz", reason: gap,
         note: "from amd-smi", series: metricSeries(history, "npu_clock_mhz"), scale: null },
     ],
     running: model && (serving || down) ? [{

@@ -8,7 +8,7 @@ import { MachineMetrics, freshnessLabel, notInstalledSentence } from "./MachineM
 import { WorkerSoftwareRow } from "./WorkerSoftwareRow";
 import { residentInUseBytes, unmeasuredPhrase } from "./fleetMemory";
 import { exactTime, formatBytes, formatTemperature } from "../lib/format";
-import { nodeStateWord, pillToneForRow } from "../lib/fleetNodeState";
+import { nodeStateWord, pillToneForRow, vaelorUninstalled } from "../lib/fleetNodeState";
 import type { ClusterMode } from "../lib/clusterMode";
 import type { StatusTone } from "./ui/status";
 import type { RowStatus } from "./clusterAppStatus";
@@ -245,7 +245,7 @@ function MachineReadings({ node, reading }: {
         {gpu.present && (
           <Reading
             id="unified"
-            foot={`of ${formatBytes(unifiedTotal)} shared aperture`}
+            foot={`of ${formatBytes(unifiedTotal)} GPU memory pool`}
             fraction={unifiedUsed === null || unifiedTotal <= 0 ? null : unifiedUsed / unifiedTotal}
             label="Unified memory"
             value={unifiedUsed === null ? null : formatBytes(unifiedUsed)}
@@ -425,6 +425,12 @@ export function MachineCard({
       </Button>
     </>
   );
+  // Owner 2026-10-21 (VD-133 1.5.5 #16): Vaelor was uninstalled on this
+  // worker. Re-add is the reviewed join plan, the same one Setup offers a
+  // machine awaiting its join; Remove is the card's own removal.
+  const readd = fleetNode && vaelorUninstalled(fleetNode.worker_software) && (
+    <Button onClick={() => onNodeAction("join-node", fleetNode.id)}>Re-add to the cluster</Button>
+  );
   const installTelemetry = fleetNode && !joined && administrator && !fleetNode.telemetry_provisioned && (
     <Button variant="quiet" onClick={() => onWorkerTelemetry("install", fleetNode.id)}>
       Install telemetry
@@ -483,6 +489,13 @@ export function MachineCard({
         ) : fleetNode?.worker_software && !notJoined && (
           <div className="cf-section">
             <WorkerSoftwareRow administrator={administrator} mode={mode} software={fleetNode.worker_software} variant="summary" />
+            {readd && (
+              <div className="cf-actions">
+                {readd}
+                <span className="cf-actions__spacer" />
+                {removeControls}
+              </div>
+            )}
           </div>
         )}
         {notJoined && fleetNode && (
@@ -585,10 +598,13 @@ export function MachineCard({
         {fleetNode && (
           <div className="cf-actions-block">
             <div className="cf-actions">
+              {readd}
               {joined && !drained && (
                 <Button onClick={() => onNodeAction("drain-node", fleetNode.id)}>Drain</Button>
               )}
-              {joined && drained && (
+              {/* Round 2 L2: not while Vaelor is uninstalled there - Re-add is the
+                  way back, and returning it to service would reopen placement. */}
+              {joined && drained && !readd && (
                 <Button onClick={() => onNodeAction("resume-node", fleetNode.id)}>Return to service</Button>
               )}
               {/* VD-189 / LESSONS 19: the Recheck route is administrator-only, so
@@ -598,7 +614,9 @@ export function MachineCard({
                   worker software. It comes off when the machine leaves the
                   cluster, so no card offers to remove it on its own; a machine
                   still awaiting its join can have it installed ahead of time. */}
-              {joined ? (
+              {/* Not said once Vaelor was uninstalled there: the uninstall took
+                  the telemetry with it, and the row above says so. */}
+              {joined && !readd ? (
                 <p className="cf-actions__note">
                   Telemetry is part of this worker&apos;s software; it comes off when the machine is removed from the cluster.
                 </p>

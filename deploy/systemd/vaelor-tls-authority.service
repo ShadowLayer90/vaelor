@@ -26,6 +26,17 @@ Group=root
 # refuse it with EROFS), as root, before the namespace exists; it never writes
 # the record. The pass repeats the check, so `ensure` covers the installer too.
 ExecStartPre=+/usr/bin/install -d -m 0750 -o vaelor -g vaelor /var/lib/vaelor/tls
+# The box's text login screen shows the console address and the authority's
+# fingerprint (VD-133 1.5.5 #2, owner 2026-10-20) from /etc/issue.d, which
+# Ubuntu does not ship. Made here for the same reason as the line above: the
+# sandbox makes /etc read-only, and ReadWritePaths needs the folder to exist.
+ExecStartPre=+/usr/bin/install -d -m 0755 /etc/issue.d
+# `agetty --reload` (run by the pass after the snippet changes) touches
+# /run/agetty.reload, which running login prompts watch. The sandbox can only
+# be given a path that exists, so it is made here, outside it. Touching it at
+# start makes an idle prompt redraw once; a prompt being typed into is left.
+# Best effort: without it the new text shows at the next login prompt.
+ExecStartPre=+/usr/bin/touch /run/agetty.reload
 ExecStart=/opt/vaelor/venv/bin/python -m vaelor.tls_authority run
 Restart=on-failure
 RestartSec=30
@@ -54,6 +65,10 @@ ReadWritePaths=/opt/vaelor/tls
 # Optional so a host without ca-certificates still starts and reports the
 # missing folder, rather than failing to build the namespace.
 ReadWritePaths=-/usr/local/share/ca-certificates -/etc/ssl/certs
+# The login screen snippet (/etc/issue.d/vaelor.issue), and the file
+# `agetty --reload` touches so a login prompt already on screen is redrawn with
+# it (made by the ExecStartPre above).
+ReadWritePaths=-/etc/issue.d -/run/agetty.reload
 # AF_NETLINK: `ip addr` reads every global address for the certificate's names.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 RestrictRealtime=true

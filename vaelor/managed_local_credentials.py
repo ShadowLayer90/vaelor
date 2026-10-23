@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import urllib.parse
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from .credential_broker import CredentialError
 from .model_credential_roles import (  # noqa: F401 - the id markers, re-exported
@@ -12,6 +12,7 @@ from .model_credential_roles import (  # noqa: F401 - the id markers, re-exporte
     ASSISTANT_NPU_PREFIX,
     MANAGED_LOCAL_PREFIX,
     carries_the_npu_marker,
+    is_managed_local_credential_id,
 )
 from .gpu_model_choice import names_a_gfx1151
 from .inference_model_choice import INSTALLED_FLM_MODELS
@@ -373,3 +374,139 @@ def activate_managed_chat(broker, credential_id: str) -> bool:
     broker.activate(credential_id, "ai-chat")
     _sweep_stale(broker, stale)
     return True
+
+
+def served_window(lease: Mapping[str, Any]) -> int:
+    """The window a running llama.cpp server says it built, or 0 when it does not say.
+
+    Its own ``/props`` readback (`accelerator_runtime.verify_context_from_server`,
+    the read every llama.cpp deploy already makes), so a window recorded after
+    an update is the server's statement, not an inference. A server that does
+    not publish one - FastFlowLM on the NPU - reads 0 and stays undeclared.
+    """
+    from .accelerator_runtime import verify_context_from_server
+
+    base = str(lease.get("base_url") or "").rstrip("/")
+    root = base[: -len("/v1")] if base.endswith("/v1") else base
+    if not root:
+        return 0
+    try:
+        return int(verify_context_from_server(root, 0).get("built") or 0)
+    except Exception:  # noqa: BLE001 - an unread window is an undeclared one
+        return 0
+
+
+def compose_served_window(base_url: str, runtime: Mapping[str, Any]) -> int:
+    """The per-slot window a llama.cpp compose server built, or 0 when unknown.
+
+    Its own ``/props`` readback first. Failing that, the ``LLAMA_ARG_CTX_SIZE``
+    it was started with only when it runs one slot: a build without a unified
+    KV cache splits that window across slots, so with more than one the
+    argument over-declares and the window is left undeclared (owner 2026-10-21).
+    """
+    built = served_window({"base_url": base_url})
+    if built:
+        return built
+    return int(runtime.get("context") or 0) if int(runtime.get("parallel_slots") or 1) == 1 else 0
+
+
+def write_served_window(broker: Any, credential_id: str, window: Any, lock: Any = None) -> bool:
+    """Record ``window`` on one of Vaelor's model credentials, if it differs.
+
+    Under ``lock`` (the GPU serving mutex every cluster re-key holds) the
+    credential is read again and the vault's ``record_window`` writes only on
+    the version just read - so a rotate, a re-key or a delete in between wins,
+    and the version, fingerprint and last test are kept (owner 2026-10-21).
+    True when the window was written.
+    """
+    from contextlib import nullcontext
+
+    from .token_estimate import CONTEXT_WINDOW_KEY, context_window_tokens
+
+    tokens = context_window_tokens(window)
+    if not tokens or not credential_id:
+        return False
+    with lock if lock is not None else nullcontext():
+        lease = broker.resolve(credential_id, "deployment-agent")
+        if context_window_tokens(lease.get(CONTEXT_WINDOW_KEY)) == tokens:
+            return False
+        answer = broker.record_window(credential_id, lease.get("credential_version"), tokens)
+    return bool((answer or {}).get("recorded"))
+
+
+def note_served_window(broker: Any, lease: Mapping[str, Any], window: Any, *, launched: bool) -> None:
+    """After a reconcile: record the window it launched with, or fill a missing one.
+
+    A relaunch records the window it just started the server with when that
+    differs from the recorded one; a server it found already running only has
+    a missing window filled, from the same plan value (owner 2026-10-21). The
+    GPU serving mutex is the lock. Never raises into a reconcile.
+    """
+    from .gpu_cluster_mode import GPU_SERVING_LOCK
+    from .token_estimate import CONTEXT_WINDOW_KEY
+
+    if not launched and lease.get(CONTEXT_WINDOW_KEY):
+        return
+    try:
+        write_served_window(broker, str(lease.get("credential_id") or ""), window, GPU_SERVING_LOCK)
+    except Exception:  # noqa: BLE001 - a window not written is a window left as it was
+        return
+
+
+def record_served_windows(
+    broker: Any,
+    recorded: Optional[Mapping[str, Any]] = None,
+    read_window: Callable[[Mapping[str, Any]], int] = served_window,
+    lock: Any = None,
+) -> Dict[str, Any]:
+    """Give Vaelor's own model credentials that predate the window the one they serve.
+
+    Owner 2026-10-21: every Vaelor deploy records the window it served, so the
+    budgets that clamp to a stated window apply. A credential written before
+    that has none, and an update must reach the state a fresh install reaches
+    (VD-217) without waiting for a redeploy. Run once the executor starts.
+
+    The candidates are Vaelor's own: managed-local ids, and the ids in
+    ``recorded`` - ``{credential_id: window}`` from a deployment record that
+    states what its engines were started with (the cluster's
+    ``max_model_len``, a pooled root's ``--max-seq-len``). A managed-local
+    llama.cpp server's window is its own readback (``read_window``). The NPU
+    credential is left to the NPU reconcile, which knows the ``--ctx-len`` it
+    launched with; a swarm LLM's credential is recorded nowhere this can find
+    and stays undeclared until its next deploy. Nothing is guessed.
+
+    Returns ``{"written": {id: window}, "pending": [ids]}``: pending is what a
+    later pass could still fill - an active credential whose server did not
+    answer yet, or one changed under this pass. An inactive credential whose
+    server does not answer is not retried.
+    """
+    from .token_estimate import CONTEXT_WINDOW_KEY, context_window_tokens
+
+    recorded = dict(recorded or {})
+    written: Dict[str, int] = {}
+    pending: list = []
+    try:
+        listed = broker.list()
+    except Exception:  # noqa: BLE001 - a broker that cannot list writes nothing
+        return {"written": written, "pending": ["(the credential list)"]}
+    for item in listed or []:
+        credential_id = str(item.get("id") or "")
+        if item.get("provider") != "openai-compatible" or not (
+            is_managed_local_credential_id(credential_id) or credential_id in recorded
+        ):
+            continue
+        try:
+            lease = broker.resolve(credential_id, "deployment-agent")
+            if context_window_tokens(lease.get(CONTEXT_WINDOW_KEY)) or (
+                    credential_id not in recorded and pins_an_flm_tag(lease.get("model"))):
+                continue
+            window = context_window_tokens(
+                recorded[credential_id] if credential_id in recorded else read_window(lease))
+            if window and write_served_window(broker, credential_id, window, lock):
+                written[credential_id] = window
+                continue
+        except Exception:  # noqa: BLE001 - one unreadable credential never stops the rest
+            pass
+        if item.get("active_for") or credential_id in recorded:
+            pending.append(credential_id)
+    return {"written": written, "pending": pending}

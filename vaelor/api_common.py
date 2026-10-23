@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from flask import Blueprint, g, jsonify, request
 
 from .model_reachability import probe_selected_model
+from .network_interfaces import is_host_plumbing
 from .security import LoginLimiter, SecurityStore
 from .runtime_paths import env_value
 
@@ -25,13 +26,11 @@ LEGACY_SESSION_COOKIE = "pm_session"
 #: cross-module duplicate the governance walk has to record.
 CREDENTIAL_BROKER_UNAVAILABLE = "Secure credential storage is unavailable."
 
-#: Interface name prefixes whose addresses are private and routable only on
-#: this host. Matched as a prefix rather than exactly, because Docker names
-#: user-defined bridges `br-<network id>` and there are seven of them on the
-#: appliance this was found on. See `ApiContext.appliance_address`.
-_VIRTUAL_INTERFACE_PREFIXES = (
-    "docker", "br-", "veth", "virbr", "vmnet", "tun", "tap", "cni", "flannel",
-)
+#: VPN tunnel interfaces. Not plumbing - an owner may well reach the machine
+#: through one - but an address the remote console offers only when no LAN
+#: address exists (`ApiContext.appliance_address`). Container and VM plumbing
+#: is `network_interfaces.is_host_plumbing`, the one list (VD-133 1.5.5 #1).
+_TUNNEL_INTERFACE_PREFIXES = ("tun", "tap")
 
 
 def payload(
@@ -164,7 +163,7 @@ class ApiContext:
             if interface.get("state") != "up":
                 continue
             name = str(interface.get("name", ""))
-            virtual = name.startswith(_VIRTUAL_INTERFACE_PREFIXES)
+            virtual = is_host_plumbing(name) or name.startswith(_TUNNEL_INTERFACE_PREFIXES)
             for address in interface.get("addresses", []):
                 value = str(address.get("address", ""))
                 try:

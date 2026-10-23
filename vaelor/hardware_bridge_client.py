@@ -590,11 +590,15 @@ class HardwareBridgeClient:
         )
         return value if isinstance(value, dict) else {}
 
-    def guesser_build(self, image: str, start: bool) -> dict[str, Any]:
-        """N94 (VD-217): this controller's 4-bit guesser for ``image``, checked or started."""
+    def guesser_build(self, image: str, start: bool,
+                      timeout: float | None = None) -> dict[str, Any]:
+        """N94 (VD-217): this controller's 4-bit guesser for ``image``, checked or started.
+
+        ``timeout`` shortens the wait for a reader that must not hang on it
+        (the fleet summary's live note, VD-133 1.5.5 #10)."""
         value = self._request(
             "guesser_build", {"image": str(image), "start": bool(start)},
-            socket_timeout=PROGRESS_READ_SOCKET_TIMEOUT,
+            socket_timeout=timeout or PROGRESS_READ_SOCKET_TIMEOUT,
         )
         return value if isinstance(value, dict) else {}
 

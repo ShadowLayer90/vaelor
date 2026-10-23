@@ -65,6 +65,18 @@ function sentenceCase(text: string) {
 }
 
 /**
+ * What Remove Vaelor lists as removed. The server's `removes` already carries
+ * the OS-stack sentence as a bullet, so `scope_summary` is added only when the
+ * list lacks it (an older server); appending it unconditionally printed the
+ * same line twice, once lower-case and once capitalised (VD-133 1.5.5 cosmetic).
+ */
+export function removalLines(status: Pick<RemoveVaelorStatus, "removes" | "scope_summary">): string[] {
+  const summary = status.scope_summary?.trim() ?? "";
+  const listed = status.removes.some((line) => line.trim().toLowerCase() === summary.toLowerCase());
+  return summary && !listed ? [...status.removes, sentenceCase(summary)] : status.removes;
+}
+
+/**
  * The import half of Move this Vaelor, as a dialog: choose the archive and its
  * passphrase and verify it, then type the phrase to replace this machine's
  * state. Nothing changes until the second step is approved.
@@ -320,9 +332,7 @@ export function SettingsRecovery({ onReport, portable, recovery, refresh, remove
       onReport(error instanceof Error && error.message ? error.message : kind === "reset" ? "Factory reset was not accepted." : "Removal was not accepted.", true);
     } finally { setBusy(""); }
   };
-  const removes = removeVaelor
-    ? [...removeVaelor.removes, ...(removeVaelor.scope_summary ? [sentenceCase(removeVaelor.scope_summary)] : [])]
-    : null;
+  const removes = removeVaelor ? removalLines(removeVaelor) : null;
   return (
     <div className="stg-stack">
       <MoveThisVaelor busy={busy} onReport={onReport} portable={portable} refresh={refresh} session={session} setBusy={setBusy} setPortable={setPortable} />

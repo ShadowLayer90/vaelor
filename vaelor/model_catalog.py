@@ -90,7 +90,7 @@ from .npu_runtime_pin import serving_pair as _npu_serving_pair
 #: installer places can never name two different conversions.
 NPU_RELEASE_PACKAGE = _npu_serving_pair().package
 NPU_RELEASE_REPO = os.environ.get("VAELOR_REPO", "ShadowLayer90/vaelor")
-NPU_RELEASE_TAG = os.environ.get("VAELOR_RELEASE_TAG", "v1.5.4")
+NPU_RELEASE_TAG = os.environ.get("VAELOR_RELEASE_TAG", "v1.5.5")
 NPU_RELEASE_SOURCE = os.environ.get(
     "VAELOR_NPU_RELEASE_SOURCE",
     "https://api.github.com/repos/{}/releases/tags/{}".format(

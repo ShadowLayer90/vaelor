@@ -27,7 +27,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Iterable, Mapping, Optional
 
-from .credential_broker import ALERT_PURPOSE_PREFIX, ASSISTANT_PURPOSE, PROVIDERS, CredentialError
+from .credential_broker import (
+    ALERT_PURPOSE_PREFIX, ASSISTANT_PURPOSE, PROVIDERS, WEB_SEARCH_PROVIDER, WEB_SEARCH_PURPOSE,
+    CredentialError,
+)
 from .gpu_serving_target import CLUSTER_INFERENCE_PURPOSE, MODE_CLUSTER
 from .hosted_providers import HOSTED_KINDS, OFF_MACHINE_KINDS
 from .managed_local_credentials import PREFIX as MANAGED_LOCAL_PREFIX
@@ -67,6 +70,10 @@ MANAGED_NOTES = {
         "An app, alert channel, backup or custom agent uses this. Change or "
         "remove it where it is used."
     ),
+    WEB_SEARCH_PURPOSE: (
+        "Web search uses this key. Change or remove it under Web search key, "
+        "which also updates the search service."
+    ),
     UNVERIFIED: (
         "Vaelor could not check what uses this right now, so it is not "
         "offered for removal. Try again in a moment."
@@ -103,6 +110,7 @@ PURPOSE_NAMES = {
     "custom-agent-connector": "a custom agent connector",
     "backup-passphrase": "scheduled backups",
     "backup-offsite": "off-site backups",
+    WEB_SEARCH_PURPOSE: "web search",
 }
 
 
@@ -502,6 +510,10 @@ class References:
     nodes: Optional[FrozenSet[str]] = frozenset()
     deployments: Optional[FrozenSet[str]] = frozenset()
     app_secrets: Optional[FrozenSet[str]] = frozenset()
+    #: ``app_secrets`` split by who holds the reference - app drafts and the
+    #: custom agents' connectors - so a row can say which of them uses it.
+    drafts: Optional[FrozenSet[str]] = frozenset()
+    connectors: Optional[FrozenSet[str]] = frozenset()
 
 
 def managed_by(item: Mapping[str, Any], refs: References = References()) -> Optional[str]:
@@ -525,6 +537,10 @@ def managed_by(item: Mapping[str, Any], refs: References = References()) -> Opti
         if refs.app_secrets is None:
             return UNVERIFIED
         return "application" if credential_id in refs.app_secrets else None
+    if provider == WEB_SEARCH_PROVIDER:
+        # VD-222 item 2: the web search key in use is removed only where its
+        # removal also rewrites the search settings; an unassigned one is not.
+        return WEB_SEARCH_PURPOSE if WEB_SEARCH_PURPOSE in (item.get("active_for") or []) else None
     if credential_id.startswith(MANAGED_LOCAL_PREFIX):
         return "local-model"
     if provider == "openai-compatible":
@@ -544,9 +560,35 @@ def managed_by(item: Mapping[str, Any], refs: References = References()) -> Opti
     return None
 
 
+#: Who uses a credential that a Vaelor store references rather than a purpose
+#: assignment. A cluster node's sign-in carries no purpose, so its row read "Not
+#: in use" beside "Used by Vaelor 1 min ago" and a note saying the node signs in
+#: with it (VD-133 1.5.5 cosmetic, the 1.5.4 sweep's Connections page).
+MANAGER_USERS = {
+    "cluster-node": PURPOSE_NAMES["cluster-node"],
+    "cluster-model": PURPOSE_NAMES["cluster-inference"],
+}
+
+
+def _referenced_by(item: Mapping[str, Any], manager: Optional[str], refs: References) -> list:
+    """Who uses a credential a store references rather than a purpose names.
+
+    An app secret is referenced by an app draft, a custom agent's connector, or
+    both; each is named for what it is (a connector is not "an app deployment").
+    """
+    if manager in MANAGER_USERS:
+        return [MANAGER_USERS[manager]]
+    if manager != "application":
+        return []
+    credential_id = str(item.get("id", ""))
+    return ([PURPOSE_NAMES["application-deploy"]] if credential_id in (refs.drafts or ()) else []) + (
+        [PURPOSE_NAMES["custom-agent-connector"]] if credential_id in (refs.connectors or ()) else [])
+
+
 def describe(item: Mapping[str, Any], refs: References = References()) -> Dict[str, Any]:
     """The owner-facing fields for one stored credential, beside its metadata."""
     manager = managed_by(item, refs)
+    users = used_by(item) or _referenced_by(item, manager, refs)
     provider = str(item.get("provider", ""))
     return {
         "kind_label": KIND_LABELS.get(provider, "Stored secret"),
@@ -557,7 +599,7 @@ def describe(item: Mapping[str, Any], refs: References = References()) -> Dict[s
         "testable": provider in TESTABLE_KINDS,
         "managed_by": manager,
         "manage_note": manage_note(item, manager),
-        "used_by": used_by(item),
+        "used_by": users,
         "can_disconnect": manager is None,
     }
 
@@ -631,4 +673,5 @@ def read_references(callbacks: Mapping[str, Any], actor: str) -> References:
         },
     )
     app_secrets = None if drafts is None or connectors is None else drafts | connectors
-    return References(nodes=nodes, deployments=deployments, app_secrets=app_secrets)
+    return References(nodes=nodes, deployments=deployments, app_secrets=app_secrets,
+                      drafts=drafts, connectors=connectors)

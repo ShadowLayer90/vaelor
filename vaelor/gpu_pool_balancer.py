@@ -336,6 +336,9 @@ class BalancerProcess(LlmServerProxyProcess):
     tell a stale rendering or a stale key from a right balancer.
     """
 
+    #: Labelled as the cluster's serving, not the LLM Server (#12).
+    OWNER_COMPONENT = "gpu-serving"
+
     label = "replica balancer"
 
     def __init__(self, name: str, *, run: Optional[Callable[..., Any]] = None,

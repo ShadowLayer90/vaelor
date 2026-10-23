@@ -23,7 +23,9 @@ def register_web_research_routes(context: ApiContext) -> None:
     @blueprint.get("/applications/research-service")
     @require_auth("viewer")
     def web_research_status():
-        return payload(manager().status())
+        # ``?search=0``: read readiness without a search query (AI Chat's Web
+        # search explanation opens this, and must not reach the engines, VD-221).
+        return payload(manager().status(search=request.args.get("search") != "0"))
 
     @blueprint.post("/applications/research-service/plan")
     @require_auth("administrator", csrf=True)

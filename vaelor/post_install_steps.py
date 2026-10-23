@@ -71,6 +71,9 @@ class Step(NamedTuple):
     label: str
     #: Whether the step takes :data:`WITHIN_FLAG` (it builds in a container).
     bounded: bool = False
+    #: What the step's own out-of-time line says instead of the builds'
+    #: OUT_OF_TIME (``{seconds}`` is its share), when that one would be untrue.
+    late: str = ""
 
 
 #: THE list (module docstring). The installer has no copy of it: it runs
@@ -78,6 +81,33 @@ class Step(NamedTuple):
 #: Each bound is the step's own worst case: a fetch's deadline; reading the
 #: image's file; a lock wait plus a build for the two compilers; the prune's.
 STEPS = (
+    # First, because it takes seconds and the builds below can use the whole
+    # budget: an update that ran out of time must still turn InfluxDB's
+    # request log off (`influxdb_config`, VD-133 1.5.5 #13).
+    # 150 s: at least `influxdb_config.WORST_CASE_SECONDS` (a test holds it).
+    Step("influxdb_config", "apply", 150,
+         "keep InfluxDB on loopback with its request and query logs off (VD-133)",
+         late=("not finished within {seconds} s, so it was stopped; InfluxDB may keep "
+               "its old settings, request log included, until the next update or "
+               "install applies them")),
+    # The release scripts Remove Vaelor and repair run. Here as well as in the
+    # update broker because the broker that applies the first update to this
+    # release is the previous release's, which never refreshes them
+    # (`release_snapshot`, VD-217).
+    Step("release_snapshot", "refresh", 30,
+         "refresh the release scripts Remove Vaelor runs (VD-217)"),
+    # VD-161 amended (owner, 2026-10-20): a machine with no saved GPU memory
+    # pool size gets the recommended one, on install AND update, so both paths
+    # end in the same state (VD-217). Seconds when a size is already saved;
+    # the first time, one boot-image rebuild (6.5 s measured on the Z2,
+    # 2026-10-20). Of its 300 s, 45 s is kept for clean-up (--within 255) and
+    # 10 s for itself, so its rebuilds share 245 s: the change gets all that
+    # is left, a roll-back the rest. Before the builds, which the first model
+    # start builds anyway if time runs out.
+    Step("gpu_memory_pool_apply", "recommend", 300,
+         "save the recommended GPU memory pool size when none is saved (VD-161)", True,
+         late=("not finished within {seconds} s, so it was stopped; whether the size was "
+               "saved is not known - see Cluster > Setup > Machine settings")),
     Step("vllm_overlay_build", "fetch", 150, "fetch the vLLM attention change (VD-215)"),
     Step("vllm_overlay_build", "build", 90, "build the patched attention file (VD-215)", True),
     Step("vllm_moe_hip_build", "build", 390, "build Vaelor's HIP expert kernels (VD-216)", True),
@@ -303,6 +333,8 @@ def run_steps(
             try:
                 share = min(float(step.seconds), left)
                 outcome = run(step_argv(step, python, share), share)
+                if step.late and outcome.startswith(OUT_OF_TIME.split("{")[0]):
+                    outcome = step.late.format(seconds=int(share))
             except Exception as error:  # noqa: BLE001 - a step never fails the update
                 outcome = str(error)[:300] or type(error).__name__
         line = "Vaelor post-install step, {}: {}".format(step.label, outcome)

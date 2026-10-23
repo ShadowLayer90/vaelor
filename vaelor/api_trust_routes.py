@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -170,6 +171,13 @@ def register_trust_routes(context: ApiContext) -> None:
             # the authority did not report it - never an invented "none".
             "migration": status.get("migration"),
             "names_left_out": status.get("names_left_out"),
+            # The console certificate's announced re-issue (VD-133 1.5.5 #1):
+            # every open tab polls this and warns before its browser refuses
+            # the new certificate. None when the authority did not report it.
+            "reissue": status.get("reissue"),
+            # The controller's clock, so an open page judges the notice's times
+            # against it rather than its own (review round 2, F10).
+            "now": time.time(),
         })
 
     @blueprint.get("/security/trust/commands")

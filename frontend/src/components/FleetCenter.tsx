@@ -46,6 +46,7 @@ import { ActionNotice, ClusterFirstLoad, ClusterStatus, ClusterTitleRow } from "
 import { ChangePlanBody, OperationDialog, confirmDescription, planAckReason, type ConfirmRequest } from "./ClusterPlanDialogs";
 import { ClusterConfirm, serviceConfirmRequest } from "./ClusterConfirm";
 import { ClusterDialog } from "./ClusterDialog";
+import { takesModelWork } from "../lib/fleetNodeState";
 
 type ProjectedFleetJob = FleetJob & {
   /** The job's own payload (the `/jobs/<id>` record carries it). */
@@ -193,12 +194,7 @@ export function FleetCenter({ session }: { session: Session; onBack?: () => void
   // button labels so unload/load never read as "Confirm removal"/"Remove".
   const [confirmRemoval, setConfirmRemoval] = useState<(ConfirmRequest & { request: ClusterPlanRequest }) | null>(null);
 
-  const eligibleLlmWorkers = summary?.enrolled_nodes.filter(
-    (node) =>
-      node.labels?.swarm_node_id
-      && node.runtime?.status?.toLowerCase() === "ready"
-      && node.runtime?.availability?.toLowerCase() === "active",
-  ) ?? [];
+  const eligibleLlmWorkers = summary?.enrolled_nodes.filter(takesModelWork) ?? [];
   const controllerPlacement = summary?.controller.placement?.eligible
     ? summary.controller.placement
     : null;

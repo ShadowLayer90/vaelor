@@ -32,6 +32,24 @@ PUBLIC_ROOT = app_path("tls/household-root.crt")
 WORKER_TRUST_BUNDLE = app_path("tls/worker-trust.pem")
 #: A new console certificate issued but not served yet (migration phase 0).
 PENDING_DIR = app_path("tls/pending")
+#: The console certificate's planned re-issue, announced before it happens so
+#: open console tabs can say so (VD-133 1.5.5 #1). Beside PUBLIC_ROOT, in the
+#: folder the console can read; written by the authority only.
+REISSUE_NOTICE_NAME = "reissue-notice.json"
+#: The trust steps saved where the console is not needed to read them
+#: (VD-133 1.5.5 #2): beside PUBLIC_ROOT, written by the installer and kept
+#: current by the authority's pass, so a console-updated box has them too.
+TRUST_STEPS_NAME = "trust-this-vaelor.txt"
+TRUST_STEPS = app_path("tls/" + TRUST_STEPS_NAME)
+#: The box's own text login screen (VD-133 1.5.5 #2, owner 2026-10-20): the
+#: console address and the authority's fingerprint, so an owner can check the
+#: fingerprint on the machine itself, away from the network. agetty prints
+#: every ``*.issue`` in /etc/issue.d after /etc/issue (util-linux 2.35+, so
+#: Ubuntu 24.04/26.04 and Debian 12), which leaves the owner's /etc/issue
+#: untouched. Written by the authority's pass; removed by every uninstall
+#: (deploy/maintain-vaelor.sh retypes it).
+CONSOLE_ISSUE_DIR = "/etc/issue.d"
+CONSOLE_ISSUE = CONSOLE_ISSUE_DIR + "/vaelor.issue"
 
 
 def leaf_cert() -> str:

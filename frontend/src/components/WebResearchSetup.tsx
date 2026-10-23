@@ -55,9 +55,18 @@ interface ResearchJob {
 export function WebResearchSetup({
   session,
   onResearch,
+  readyActionLabel = "Research a public application",
+  quickStatus = false,
 }: {
   session: Session;
   onResearch: () => void;
+  /** The ready row's action, named for the surface it sits on (AI Chat's Web search, VD-221). */
+  readyActionLabel?: string;
+  /**
+   * Read readiness without a search query (`?search=0`): AI Chat's Web search
+   * explanation must not reach the public engines just by opening (VD-221).
+   */
+  quickStatus?: boolean;
 }) {
   const resumeKey = `vaelor.web-research.operation.${session.user.username}`;
   const [status, setStatus] = useState<ResearchStatus | null>(null);
@@ -70,12 +79,13 @@ export function WebResearchSetup({
 
   const refreshStatus = useCallback(async () => {
     try {
-      setStatus(await apiRequest<ResearchStatus>("/applications/research-service"));
+      setStatus(await apiRequest<ResearchStatus>(
+        quickStatus ? "/applications/research-service?search=0" : "/applications/research-service"));
       setError("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Research readiness could not be checked.");
     }
-  }, []);
+  }, [quickStatus]);
 
   useEffect(() => {
     void refreshStatus();
@@ -191,7 +201,7 @@ export function WebResearchSetup({
         <div className="apps-research-row__actions">
           {status?.ready ? (
             <>
-              <Button onClick={onResearch} variant="primary">Research a public application</Button>
+              <Button onClick={onResearch} variant="primary">{readyActionLabel}</Button>
               {canManage && <Button onClick={() => setOpen(true)} variant="quiet">Manage research</Button>}
             </>
           ) : operationInProgress ? (

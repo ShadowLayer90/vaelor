@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional
 from flask import g, request
 
 from . import cluster_link, cluster_link_shared_card, gpu_memory_pool, gpu_node_facts
+from .gpu_memory_pool_nodes import removed_by_owner
 from .api_common import ApiContext, payload as _payload
 from .api_machine import platform_driver
 from .cluster_capacity import gpu_facts_from_accelerators
@@ -178,6 +179,22 @@ def register_host_settings_routes(context: ApiContext) -> None:
         manager = callbacks.get("cluster_manager")
         return getattr(manager, "store", None)
 
+    def _card(status: Dict[str, Any], node_id: str) -> Dict[str, Any]:
+        """One machine's card, saying whether its next restart is the owner's choice.
+
+        VD-133 1.5.5 #3: a pool with no saved size shrinks at the next restart,
+        and that restart is offered as the way forward only when the owner
+        removed the size (`removed_by_owner`); otherwise the card offers to
+        keep the size running now.
+        """
+        return gpu_memory_pool.card_view(gpu_memory_pool.restart_outlook(
+            status,
+            removed_by_owner=removed_by_owner(
+                callbacks.get("job_store"), node_id, (status or {}).get("boot_time"),
+            ),
+            administrator=g.auth_session.role == "administrator",
+        ))
+
     def _worker_machine(node: Dict[str, Any], now: float) -> Dict[str, Any]:
         inventory = node.get("inventory") or {}
         stored = inventory.get("gpu_memory_pool")
@@ -198,7 +215,7 @@ def register_host_settings_routes(context: ApiContext) -> None:
             "stale_reason": (
                 _stale_reason(node, name, read_at, now) if status.get("supported") else ""
             ),
-            "pool": gpu_memory_pool.card_view(status),
+            "pool": _card(status, node["id"]),
         }
 
     def _surface() -> Dict[str, Any]:
@@ -213,8 +230,11 @@ def register_host_settings_routes(context: ApiContext) -> None:
             # Read live, on this request: never stale.
             "checked_at": None,
             "stale_reason": "",
-            "pool": gpu_memory_pool.card_view(
-                gpu_memory_pool.pool_status(probe["pool_facts"](), _controller_gpu())
+            "pool": _card(
+                gpu_memory_pool.pool_status(
+                    probe["pool_facts"](), _controller_gpu(), now=probe["now"],
+                ),
+                CONTROLLER_PLACEMENT_ID,
             ),
         }]
         machines.extend(_worker_machine(node, now) for node in nodes)

@@ -465,8 +465,8 @@ class ControlPlaneRuntime:
                 # on demand (or surfaces a deliberate disable) before searching,
                 # so an internet-parsing custom agent no longer dead-ends when
                 # web research was never manually enabled.
-                "public_search": lambda query: (
-                    self.application_research_intelligence.guarded_search([query])
+                "public_search": lambda query, categories="general": (
+                    self.application_research_intelligence.guarded_search([query], categories)
                 ),
                 "public_fetch": self.application_research.fetch_evidence,
             }

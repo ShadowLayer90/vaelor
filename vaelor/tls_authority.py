@@ -10,7 +10,9 @@ vaelor.tls_authority run``) and once from the installer (``ensure``). One pass
 2. Publishes the root's public certificate, and installs it in this
    controller's own OS trust store.
 3. Keeps the served certificate right: issues one when there is none,
-   re-issues before expiry or when the machine's names change, migrates an
+   re-issues before expiry or when the machine gains a name or address the
+   certificate does not cover - announced first (:data:`REISSUE_NOTICE_SECONDS`)
+   so every open console tab can say what is about to happen - migrates an
    install that serves the pre-VD-212 self-signed certificate (phases 0-2,
    gated by :mod:`vaelor.tls_fleet_gate`), and never touches a ``custom``
    certificate the owner installed.
@@ -30,6 +32,7 @@ import contextlib
 import datetime
 import glob
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -41,7 +44,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from cryptography.hazmat.primitives import serialization
 
 from . import tls_authority_pki as pki
-from . import tls_fleet_gate, tls_identity, tls_paths
+from . import tls_fleet_gate, tls_identity, tls_paths, tls_trust_commands
 from .tls_authority_host import (  # re-exported: callers import them from here
     CREDENTIAL_NAME, SERVICE_GROUP, AuthorityError, Runner, SystemdCreds,
     _COMMAND_TIMEOUT_SECONDS, _scrubbed, default_chown)
@@ -55,6 +58,17 @@ IDENTITY_CONFIRMATIONS = 2
 #: ...and re-issues for a name change are capped per day (anti-flap).
 IDENTITY_REISSUES_PER_DAY = 4
 LEGACY_SUFFIX = ".legacy"
+#: How long a planned re-issue is announced before it happens (VD-133 1.5.5 #1).
+#: A browser that accepted the certificate's warning, rather than trusting the
+#: household root, refuses the new certificate on every request; announced
+#: first, each open tab polls the notice and can say so instead of failing
+#: silently. Several authority passes long, so every tab polling once a minute
+#: has read it before the switch.
+REISSUE_NOTICE_SECONDS = 15 * 60
+#: A planned notice this far past its time is stale: a running authority acts
+#: on it within one pass (TICK_SECONDS), so it outlived whatever was to act on
+#: it. Three passes, so one slow or missed pass does not restart the notice.
+NOTICE_STALE_AFTER_SECONDS = 3 * TICK_SECONDS
 _TRUST_FILE = re.compile(r"vaelor-household-[0-9a-f]{16}\.crt")
 
 
@@ -70,6 +84,9 @@ class Layout:
     leaf_key: str
     fleet_state: str
     controller_trust_template: str
+    #: The box's text login screen snippet (tls_paths.CONSOLE_ISSUE); a field,
+    #: not a default, so a test's layout can never write the real /etc/issue.d.
+    console_issue: str
 
     @classmethod
     def default(cls) -> "Layout":
@@ -84,6 +101,7 @@ class Layout:
             leaf_key=tls_paths.leaf_key(),
             fleet_state=tls_paths.FLEET_TRUST_STATE,
             controller_trust_template=tls_paths.CONTROLLER_OS_TRUST_TEMPLATE,
+            console_issue=tls_paths.CONSOLE_ISSUE,
         )
 
     @property
@@ -93,6 +111,72 @@ class Layout:
     @property
     def pending_key(self) -> str:
         return os.path.join(self.pending_dir, os.path.basename(self.leaf_key))
+
+    @property
+    def trust_steps(self) -> str:
+        """The saved trust steps, beside the public root (tls_paths.TRUST_STEPS)."""
+        return os.path.join(os.path.dirname(self.public_root),
+                            tls_paths.TRUST_STEPS_NAME)
+
+    @property
+    def reissue_notice(self) -> str:
+        """The planned re-issue, beside the public root the console already reads."""
+        return os.path.join(os.path.dirname(self.public_root),
+                            tls_paths.REISSUE_NOTICE_NAME)
+
+
+def covers(leaf, wanted) -> bool:
+    """True when ``leaf`` names every wanted name and address.
+
+    A leaf that names MORE than is wanted is kept (VD-133 1.5.5 #1): an address
+    the machine no longer holds is harmless in a certificate whose key only this
+    machine has, while re-issuing for it breaks every browser that accepted the
+    old certificate's warning. Re-issuing only when something is missing is
+    what lets an upgrade from a release whose certificate carried Docker's
+    bridge addresses keep its certificate.
+    """
+    names, addresses = pki.leaf_identities(leaf)
+    return set(wanted[0]) <= set(names) and set(wanted[1]) <= set(addresses)
+
+
+def read_reissue_notice(path: str) -> Dict[str, Any]:
+    """``{"state": "none"}``, ``{"state": "planned", "reason", "announced_at",
+    "reissue_after"}`` (epoch seconds), or ``{"state": "unreadable", "reason"}``
+    - absent and unreadable are told apart (LESSONS 1)."""
+    try:
+        data = _read(path)
+    except OSError as error:
+        return {"state": "unreadable", "reason": _unreadable(path, error)}
+    if data is None:
+        return {"state": "none"}
+    try:
+        record = json.loads(data.decode("utf-8"))
+        return {"state": "planned", "reason": str(record["reason"]),
+                "announced_at": float(record["announced_at"]),
+                "reissue_after": float(record["reissue_after"])}
+    except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+        return {"state": "unreadable",
+                "reason": "{} is not a notice Vaelor can read".format(
+                    os.path.basename(path))}
+
+
+def notice_is_stale(notice: Dict[str, Any], now: float) -> str:
+    """Why a planned notice no longer means what it says, or "".
+
+    Stale when its time passed long ago with no re-issue (an authority that
+    was stopped), or when it lies in the future further than any announcement
+    could (the clock moved back: adversarial review F2/F6). A stale notice is
+    never shown as planned, and the authority announces afresh if a re-issue
+    is still needed.
+    """
+    if notice.get("state") != "planned":
+        return ""
+    if (notice["announced_at"] > now
+            or notice["reissue_after"] > now + REISSUE_NOTICE_SECONDS):
+        return "the clock moved back after it was announced"
+    if now > notice["reissue_after"] + NOTICE_STALE_AFTER_SECONDS:
+        return "its time passed without a re-issue"
+    return ""
 
 
 def _read(path: str) -> Optional[bytes]:
@@ -126,6 +210,12 @@ def _first_cert(path: str):
     return cert
 
 
+def _unreadable(path: str, error: OSError) -> str:
+    """Why ``path`` could not be read: its name and the failure, never content."""
+    return "{} could not be read ({})".format(
+        os.path.basename(path), error.strerror or type(error).__name__)
+
+
 def _load_cert(path: str):
     """(certificate, None), (None, None) when absent, or (None, reason) when the
     file exists but cannot be read or parsed (LESSONS 1: never shown as absent).
@@ -133,8 +223,7 @@ def _load_cert(path: str):
     try:
         data = _read(path)
     except OSError as error:
-        return None, "{} could not be read ({})".format(
-            os.path.basename(path), error.strerror or type(error).__name__)
+        return None, _unreadable(path, error)
     if data is None:
         return None, None
     try:
@@ -194,6 +283,7 @@ class Authority:
         hostname: Callable[[], str] = socket.gethostname,
         root_key_factory: Callable[[], Any] = pki.new_root_key,
         leaf_key_factory: Callable[[], Any] = pki.new_leaf_key,
+        console_address: Optional[Callable[[Any], str]] = None,
     ):
         self.layout = layout or Layout.default()
         self.sealer = sealer or SystemdCreds(run)
@@ -204,9 +294,17 @@ class Authority:
         self._hostname = hostname
         self._root_key_factory = root_key_factory
         self._leaf_key_factory = leaf_key_factory
+        self._console_address = (console_address
+                                 or tls_trust_commands.console_address_from_leaf)
         self._streak: Tuple[Any, int] = (None, 0)
         self._identity_reissues: collections.deque = collections.deque()
         self._os_trust_done = False
+        #: ((root, served certificate), text) the login screen was last written
+        #: with in this process, set only after a write succeeded. A pass whose
+        #: key matches and whose file still holds that text derives nothing;
+        #: anything else - a new root or certificate, a deleted or edited file,
+        #: an earlier failed write - is written again.
+        self._issue_written: Optional[Tuple[Tuple[str, str], bytes]] = None
         #: What the last created root left out of its constraints, and why.
         self.root_dropped: Tuple[str, ...] = ()
 
@@ -353,8 +451,10 @@ class Authority:
         names, addresses = identity
         cert, key = pki.issue_leaf(root, root_key, names, addresses, self._now(),
                                    self._leaf_key_factory)
-        # Key first: the console reloads on the certificate's mtime, so by the
-        # time the certificate changes its key is already in place.
+        # Key first, then the certificate. The console reloads when either file
+        # changes; a look between the two writes sees a pair that does not
+        # match, which tls_reload tries again at its next look before calling
+        # it broken, so the certificate landing completes the pair.
         self._write(key_path, pki.key_pem(key), 0o640, service_group=True)
         self._write(cert_path, pki.cert_pem(cert), 0o644, service_group=True)
 
@@ -362,7 +462,7 @@ class Authority:
         now = self._now()
         if pki.expires_within(leaf, now):
             return "it expires within {} days".format(pki.RENEW_BEFORE_DAYS)
-        if pki.leaf_identities(leaf) == wanted or not complete:
+        if covers(leaf, wanted) or not complete:
             self._streak = (None, 0)
             return ""
         seen, count = self._streak
@@ -378,6 +478,131 @@ class Authority:
         self._identity_reissues.append(stamp)
         self._streak = (None, 0)
         return "this machine's names or addresses changed"
+
+    def _still_needed(self, leaf, wanted, complete: bool) -> Optional[bool]:
+        """Whether an announced re-issue is still needed: True, False, or None
+        when an incomplete reading cannot say (LESSONS 8: keep waiting)."""
+        if pki.expires_within(leaf, self._now()):
+            return True
+        if covers(leaf, wanted):
+            return False
+        return True if complete else None
+
+    def _announced_reissue(self, served, wanted, complete: bool,
+                           report: TickReport) -> str:
+        """The reason to re-issue NOW, or "" while the switch is announced.
+
+        A re-issue the served certificate does not urgently need is announced
+        first: the notice is written, and the certificate changes only once
+        :data:`REISSUE_NOTICE_SECONDS` have passed, so the console can tell
+        every open tab before its browser starts refusing (VD-133 1.5.5 #1).
+        A need that goes away before then withdraws the notice. An unreadable
+        notice is replaced by a fresh one, so it can only delay a re-issue.
+        """
+        notice = read_reissue_notice(self.layout.reissue_notice)
+        now = self._now().timestamp()
+        stale = notice_is_stale(notice, now)
+        if stale:
+            self._clear_notice()
+            report.actions.append("dropped a stale re-issue notice: " + stale)
+        if notice["state"] != "planned" or stale:
+            reason = self._renewal_reason(served, wanted, complete)
+            if reason:
+                record = {"reason": reason, "announced_at": now,
+                          "reissue_after": now + REISSUE_NOTICE_SECONDS}
+                self._write(self.layout.reissue_notice,
+                            json.dumps(record, sort_keys=True).encode("utf-8"),
+                            0o644, service_group=True)
+                report.actions.append(
+                    "announced that the console certificate is re-issued in {} "
+                    "minutes: {}".format(REISSUE_NOTICE_SECONDS // 60, reason))
+            return ""
+        needed = self._still_needed(served, wanted, complete)
+        if needed is False:
+            self._clear_notice()
+            report.actions.append("withdrew the announced re-issue: no longer needed")
+            return ""
+        if needed is None or now < notice["reissue_after"]:
+            return ""
+        return notice["reason"]
+
+    def _refresh_trust_steps(self, report: TickReport) -> None:
+        """Keep the saved trust steps and the login screen current (VD-133 1.5.5 #2).
+
+        The steps (review F3) are rewritten when missing, or when the root or
+        the served certificate is not the one the file was written for - so a
+        box updated from the console, where the installer never ran, has them
+        too. The login screen (owner, 2026-10-20) is written by the same pass
+        with the same address, once per start and whenever the root or the
+        served certificate changes.
+        """
+        try:
+            root = tls_trust_commands.read_root((self.layout.public_root,))
+        except tls_trust_commands.TrustUnavailable:
+            return
+        leaf = _first_cert(self.layout.leaf_cert)
+        path = self.layout.trust_steps
+        existing = _read(path)
+        if existing is None:
+            why = "the file was missing"
+        else:
+            why = tls_trust_commands.saved_steps_current(
+                existing.decode("utf-8", "replace"), root, leaf)
+        issue_for = (root.short_id, tls_trust_commands.leaf_short_id(leaf))
+        issue_due = (self._issue_written is None or self._issue_written[0] != issue_for
+                     or _read(self.layout.console_issue) != self._issue_written[1])
+        if not why and not issue_due:
+            return
+        # The certificate's own address, else the host name (it names no usable one).
+        address = self._console_address(leaf) or "{}:{}".format(
+            self._hostname(), tls_trust_commands._port())
+        if not tls_trust_commands.valid_address(address):
+            report.notes.append("the trust steps were not saved: no console address "
+                                "could be derived")
+            return
+        if why:
+            text = tls_trust_commands.saved_steps_text(
+                root, address, leaf, "Vaelor's certificate authority, because " + why,
+                path=path, now=self._now())
+            self._write(path, text.encode("utf-8"), 0o644, service_group=True)
+            report.actions.append("saved the trust steps in {} ({})".format(path, why))
+        if issue_due:
+            text = tls_trust_commands.console_issue_text(root, address, leaf).encode("utf-8")
+            if self._write_console_issue(text, report):
+                self._issue_written = (issue_for, text)
+
+    def _write_console_issue(self, data: bytes, report: TickReport) -> bool:
+        """The login screen snippet; True when the file now holds ``data``.
+
+        A failure is a note, never the pass's error, and the next pass tries
+        again. The folder is made only when missing - an existing one keeps its
+        owner's mode (the unit's ExecStartPre makes it inside the sandbox; the
+        installer's ``ensure`` runs outside it). agetty is asked to redraw a
+        prompt already on screen; where it cannot, the new text shows at the
+        next login prompt.
+        """
+        path = self.layout.console_issue
+        folder = os.path.dirname(path)
+        try:
+            if not os.path.isdir(folder):
+                os.makedirs(folder, 0o755)
+            changed = self._write(path, data, 0o644)
+        except OSError as error:
+            report.notes.append("the console login screen was not updated: {} on {}".format(
+                error.strerror or type(error).__name__, error.filename or path))
+            return False
+        if not changed:
+            return True
+        report.actions.append("showed the console address and fingerprint on the "
+                              "login screen ({})".format(path))
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            self._run(["agetty", "--reload"], capture_output=True,
+                      timeout=_COMMAND_TIMEOUT_SECONDS, check=False)
+        return True
+
+    def _clear_notice(self) -> None:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(self.layout.reissue_notice)
 
     def _bundle(self, root, served_bytes: Optional[bytes]) -> bytes:
         data = pki.cert_pem(root)
@@ -450,6 +675,7 @@ class Authority:
         with self.locked():
             try:
                 self._tick(report, force_promote)
+                self._refresh_trust_steps(report)
             except (AuthorityError, ValueError) as error:
                 report.errors.append(str(error))
             except OSError as error:
@@ -480,6 +706,13 @@ class Authority:
             return
         report.kind = pki.classify(served, root, (self._hostname(),))
         wanted, complete = self._wanted_identity(root, report)
+        if report.kind != pki.KIND_HOUSEHOLD and os.path.exists(layout.reissue_notice):
+            # Only a household certificate is ever announced; a notice left
+            # from before a custom certificate or an import is about nothing
+            # (adversarial review F2).
+            self._clear_notice()
+            report.actions.append("dropped the re-issue notice: the console no longer "
+                                  "serves a certificate this authority issued")
 
         if report.kind == pki.KIND_CUSTOM:
             report.notes.append("a certificate this authority did not issue is "
@@ -495,11 +728,14 @@ class Authority:
         if report.kind == pki.KIND_HOUSEHOLD:
             self._clear_pending()
             if pair_matches(served, layout.leaf_key):
-                reason = self._renewal_reason(served, wanted, complete)
+                reason = self._announced_reissue(served, wanted, complete, report)
             else:
+                # Not announced: a pair that does not match cannot be served,
+                # so no browser is holding it (VD-212 review F2).
                 reason = "its key did not match it"
             if reason:
                 self._issue(root, root_key, wanted, layout.leaf_cert, layout.leaf_key)
+                self._clear_notice()
                 report.actions.append("re-issued the console certificate: " + reason)
             self._write_bundle(self._bundle(root, None), report)
             self._retire_legacy(report)

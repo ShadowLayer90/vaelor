@@ -1,5 +1,7 @@
 import type { StatusTone } from "../components/ui/status";
 import type { RowStatus } from "../components/clusterAppStatus";
+import type { FleetNode } from "../components/fleetTypes";
+import type { WorkerSoftware } from "../components/WorkerSoftwareRow";
 
 /**
  * The words the Fleet screen uses for a machine's usable state (ACC-091).
@@ -56,4 +58,28 @@ export function pillToneForRow(status: RowStatus): StatusTone {
   if (status.tone === "warn") return "warning";
   if (status.tone === "danger") return "danger";
   return "neutral";
+}
+
+/**
+ * Vaelor was uninstalled on the worker while it is still in the cluster (owner
+ * 2026-10-21, VD-133 1.5.5 #16). Its card says so even when closed and offers
+ * Re-add and Remove (`MachineCard`); nothing is put back until then.
+ */
+export function vaelorUninstalled(software: WorkerSoftware | undefined): boolean {
+  return software?.state === "uninstalled";
+}
+
+/**
+ * Whether a worker is offered as a place to serve a model: joined, Ready and
+ * active in Swarm, and not a machine Vaelor was uninstalled on - that one is
+ * never offered, even when its drain did not take (round 1 M1), and the
+ * deploy refuses it in the same words as a Load.
+ */
+export function takesModelWork(node: FleetNode): boolean {
+  return Boolean(
+    node.labels?.swarm_node_id
+    && node.runtime?.status?.toLowerCase() === "ready"
+    && node.runtime?.availability?.toLowerCase() === "active"
+    && !vaelorUninstalled(node.worker_software),
+  );
 }

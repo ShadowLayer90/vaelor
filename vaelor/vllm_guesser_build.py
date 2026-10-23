@@ -656,6 +656,11 @@ def root_guesser_dir(
         return installed_dir(row, root)
     reason = reason_of(verdict)
     if start_build is not None and worth_starting(verdict):
+        # VD-133 1.5.5 #10: a record worth a new build names what an EARLIER
+        # moment lacked (the drafter, the image) - the serve asking now has
+        # just fetched both, so repeating it told the owner the drafter was
+        # missing while it sat in the store. What is true now is "not built".
+        reason = NOT_BUILT
         try:
             start_build(background_build_argv())
             reason += BUILD_STARTED

@@ -57,10 +57,11 @@ import logging
 import socket
 import ssl
 import threading
+import time
 
 import waitress
 
-from .tls_reload import ReloadingContext, StaticContext
+from .tls_reload import IDLE_CLOSE_SECONDS, ReloadingContext, StaticContext
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -123,6 +124,20 @@ def _close(sock):
         pass
 
 
+def _shutdown_both(sock):
+    """End a relayed TLS connection from another thread.
+
+    The OS socket is shut down directly (``socket.socket.shutdown``), not
+    through ``SSLSocket.shutdown``, which would drop the TLS object under the
+    pump threads still reading it; their blocked reads then return and the
+    normal teardown runs.
+    """
+    try:
+        socket.socket.shutdown(sock, socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 def _shutdown_write(sock):
     try:
         sock.shutdown(socket.SHUT_WR)
@@ -145,6 +160,27 @@ class _PeerTable:
     def __init__(self):
         self._lock = threading.Lock()
         self._peers = {}
+        #: Requests the app is still answering, per backend port (F4: a
+        #: connection with one in progress is not idle, however quiet).
+        self._busy = {}
+
+    def begin(self, backend_port):
+        with self._lock:
+            port = int(backend_port)
+            self._busy[port] = self._busy.get(port, 0) + 1
+
+    def end(self, backend_port):
+        with self._lock:
+            port = int(backend_port)
+            left = self._busy.get(port, 0) - 1
+            if left > 0:
+                self._busy[port] = left
+            else:
+                self._busy.pop(port, None)
+
+    def busy(self, backend_port):
+        with self._lock:
+            return self._busy.get(int(backend_port), 0) > 0
 
     def register(self, backend_port, client_address):
         with self._lock:
@@ -180,7 +216,43 @@ class _RealPeerMiddleware:
             if client:
                 environ["vaelor.tls_terminator_addr"] = environ["REMOTE_ADDR"]
                 environ["REMOTE_ADDR"] = client
+                # In progress until the server closes the answer (a stream
+                # included), so a certificate swap waits for it (F4).
+                port = environ.get("REMOTE_PORT", "")
+                self._peers.begin(port)
+                try:
+                    answer = self._app(environ, start_response)
+                except BaseException:
+                    self._peers.end(port)
+                    raise
+                if isinstance(answer, (list, tuple)):
+                    # Already whole: nothing is left in progress, and wrapping
+                    # it would hide its length from waitress (no keep-alive).
+                    self._peers.end(port)
+                    return answer
+                return _EndOnClose(answer, lambda: self._peers.end(port))
         return self._app(environ, start_response)
+
+
+class _EndOnClose:
+    """A WSGI answer that calls ``done`` once when the server closes it."""
+
+    def __init__(self, answer, done):
+        self._answer = answer
+        self._done = done
+
+    def __iter__(self):
+        return iter(self._answer)
+
+    def close(self):
+        try:
+            close = getattr(self._answer, "close", None)
+            if close is not None:
+                close()
+        finally:
+            done, self._done = self._done, None
+            if done is not None:
+                done()
 
 
 class _TlsTerminator:
@@ -214,6 +286,10 @@ class _TlsTerminator:
         listener.bind((self._host, self._port))
         listener.listen(64)
         self._listener = listener
+        # A renewed certificate closes the connections set up under the old one
+        # (VD-133 1.5.5 #1), so the files are watched, not only read at accept.
+        if hasattr(self._contexts, "watch"):
+            self._contexts.watch(self._stopping)
         try:
             while not self._stopping.is_set():
                 try:
@@ -246,9 +322,13 @@ class _TlsTerminator:
         try:
             client.settimeout(TLS_HANDSHAKE_TIMEOUT)
             try:
-                tls = self._contexts.current().wrap_socket(
-                    client, server_side=True
-                )
+                # Context and generation read together, so a handshake that
+                # straddles a reload is tracked under the certificate it used.
+                if hasattr(self._contexts, "current_with_generation"):
+                    context, generation = self._contexts.current_with_generation()
+                else:
+                    context, generation = self._contexts.current(), None
+                tls = context.wrap_socket(client, server_side=True)
             except (ssl.SSLError, OSError):
                 _close(client)
                 return
@@ -289,9 +369,19 @@ class _TlsTerminator:
             backend_port = backend.getsockname()[1]
             if address:
                 self._peers.register(backend_port, address[0])
+            # Last bytes either way, stamped by the pumps: with no request in
+            # progress, the measure of "idle" a certificate swap waits for (F4).
+            activity = [time.monotonic()]
+
+            def quiet():
+                return (not self._peers.busy(backend_port)
+                        and time.monotonic() - activity[0] >= IDLE_CLOSE_SECONDS)
+            untrack = (self._contexts.track(lambda: _shutdown_both(tls), generation, quiet)
+                       if hasattr(self._contexts, "track") else (lambda: None))
             try:
-                self._pipe(tls, backend)
+                self._pipe(tls, backend, activity)
             finally:
+                untrack()
                 self._peers.forget(backend_port)
                 _close(tls)
                 _close(backend)
@@ -299,14 +389,18 @@ class _TlsTerminator:
             self._slots.release()
 
     @staticmethod
-    def _pipe(tls, backend):
+    def _pipe(tls, backend, activity=None):
+        stamp = activity if activity is not None else [0.0]
+
         def forward(src, dst):
             try:
                 while True:
                     data = src.recv(PIPE_BUFFER)
                     if not data:
                         break
+                    stamp[0] = time.monotonic()
                     dst.sendall(data)
+                    stamp[0] = time.monotonic()
             except OSError:
                 pass
             finally:

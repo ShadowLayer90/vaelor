@@ -16,6 +16,17 @@ CONTROLLER_PLACEMENT_ID = "controller"
 CONTROLLER_PLACEMENT_NAME = "This Vaelor controller"
 
 
+def name_in_sentence(name: str) -> str:
+    """A machine's name inside a sentence.
+
+    The controller's name is a phrase, not a proper name: "on This Vaelor
+    controller" reads "on this Vaelor controller". A worker's name is the
+    owner's and is never changed. The one home of the rule (VD-133 1.5.5): the
+    Assistant's answers and the serving notes both take it from here.
+    """
+    return name[:1].lower() + name[1:] if name == CONTROLLER_PLACEMENT_NAME else name
+
+
 def add_controller_placement(
     summary: Dict[str, Any], hardware: Dict[str, Any]
 ) -> Dict[str, Any]:

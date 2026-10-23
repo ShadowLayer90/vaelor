@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Session } from "../types";
 import { apiRequest } from "../lib/api";
+import type { acknowledgement } from "../lib/restartImpact";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Icon, ICON_SIZE } from "./Icon";
+import { RestartDialog } from "./RestartDialog";
 import { Button } from "./ui";
 
 export type PowerAction = "restart_service" | "reboot" | "shutdown";
@@ -36,7 +38,7 @@ const actionCopy: Record<
   reboot: {
     title: "Reboot this device?",
     description:
-      "All active sessions and services will stop while the device restarts.",
+      "Every model, app and session on this device stops, and AI Chat and the Assistant stop answering, until it has restarted. Any model another machine serves through this controller stops answering too.",
     label: "Reboot device",
     confirmation: "reboot-device",
     consequence: "Stops every session and running app until it restarts",
@@ -44,7 +46,7 @@ const actionCopy: Record<
   shutdown: {
     title: "Shut down this device?",
     description:
-      "Remote access will be lost and physical power may be required to start it again.",
+      "Every model, app and session on this device stops, and AI Chat and the Assistant stop answering. They stay stopped until the device is started again, which may need physical power, and remote access is lost until then. Any model another machine serves through this controller stops answering too.",
     label: "Shut down",
     confirmation: "shutdown-device",
     consequence: "Ends remote access; restarting may need physical power",
@@ -130,6 +132,26 @@ export function PowerMenu({
     }
   };
 
+  // VD-133 1.5.5 #5: Reboot and Shut down stop this controller, and with it
+  // every job running here. Their confirmation lists that work and sends what
+  // the owner saw; a refusal stays in the dialog, with the new list.
+  const stopMachine = async (seen: ReturnType<typeof acknowledgement>) => {
+    if (!selectedAction) return;
+    const action = selectedAction;
+    await apiRequest(
+      "/power/actions",
+      {
+        method: "POST",
+        body: JSON.stringify({ action, confirmation: actionCopy[action].confirmation, ...seen }),
+      },
+      session.csrf_token,
+    );
+    onNotice(`${actionCopy[action].label} request accepted.`);
+    returnFocus.current = true;
+    setSelectedAction(null);
+    window.setTimeout(() => onNotice(""), 5000);
+  };
+
   const viewer = session.user.role === "viewer";
   return (
     <div className="power-menu">
@@ -195,7 +217,28 @@ export function PowerMenu({
       )}
       {/* On the body, not in the header: the top bar's backdrop-filter traps a fixed
           backdrop inside its 64 px, and the confirmation's title rose off the screen. */}
-      {selectedAction && createPortal(
+      {selectedAction && selectedAction !== "restart_service" && createPortal(
+        <RestartDialog
+          confirmLabel={actionCopy[selectedAction].label}
+          description={actionCopy[selectedAction].description}
+          eyebrow={selectedAction === "shutdown" ? "Ends remote access" : undefined}
+          machine="controller"
+          onCancel={() => {
+            returnFocus.current = true;
+            setSelectedAction(null);
+          }}
+          onConfirm={stopMachine}
+          onFailed={(message) => {
+            // W4d-D30: a refused request ends its confirmation; the reason goes on the page.
+            returnFocus.current = true;
+            setSelectedAction(null);
+            onNotice(message);
+          }}
+          title={actionCopy[selectedAction].title}
+        />,
+        document.body,
+      )}
+      {selectedAction === "restart_service" && createPortal(
         <ConfirmDialog
           busy={actionBusy}
           confirmLabel={actionCopy[selectedAction].label}

@@ -185,6 +185,18 @@ def unit_role(unit: Any) -> str:
     return match.group("role")
 
 
+def unit_deployment(unit: Any) -> str:
+    """The deployment name a managed serving unit carries, or a refusal for any other name.
+
+    Read back off :func:`unit_name`'s own shape, for a unit found on a machine
+    with no record to derive it from - a join's sweep of serving an earlier
+    controller left (owner 2026-10-22), whose Ray worker's plane is cleared by
+    this name (`gpu_ray_plane.RayPlane`).
+    """
+    role = unit_role(unit)
+    return str(unit)[len(_SERVING_PREFIX):-len("-{}.service".format(role))]
+
+
 def require_serving_unit(unit: Any) -> str:
     """``unit``, or a refusal: only the managed serving shape may be stopped."""
     unit_role(unit)

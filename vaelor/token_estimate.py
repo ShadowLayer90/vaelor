@@ -57,3 +57,27 @@ def context_chars(tokens: int) -> int:
     budgets use. Negative room is zero room, not a negative budget.
     """
     return max(0, int(tokens)) * CHARS_PER_TOKEN
+
+
+#: The connection field that states the window a model is served with, in
+#: tokens. Vaelor's own deployments record it in the profile they store (owner
+#: 2026-10-21), so the budgets that clamp to a stated window
+#: (`provider_runtime`) reach the models Vaelor runs itself, not only the
+#: endpoints an owner describes.
+CONTEXT_WINDOW_KEY = "context_window"
+
+#: The smallest and largest window believed when one is stated. Anything
+#: outside reads as no window at all, which is the cautious side.
+MIN_CONTEXT_WINDOW_TOKENS = 512
+MAX_CONTEXT_WINDOW_TOKENS = 2_000_000
+
+
+def context_window_tokens(value: object) -> int:
+    """A stated window in tokens, or 0 when absent or not a believable window."""
+    if isinstance(value, bool):
+        return 0
+    try:
+        tokens = int(value or 0)  # type: ignore[call-overload]
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return tokens if MIN_CONTEXT_WINDOW_TOKENS <= tokens <= MAX_CONTEXT_WINDOW_TOKENS else 0

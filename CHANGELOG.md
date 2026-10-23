@@ -1,5 +1,207 @@
 # Change log
 
+## 1.5.5
+
+A fix release. It fixes everything the 1.5.4 cold install found, stops AI Chat
+inventing live facts, gives AI Chat an optional Web search, makes web research
+less dependent on one free search engine, and fixes what seven rounds of fresh
+installs on the hardware turned up.
+
+### Upgrading from 1.5.4
+
+- **Update Vaelor from the console** (**System › Hardware and services ›
+  Update Vaelor**), or re-run the installer; both end in the same state.
+- The web search service's settings are rewritten on every update and install
+  (its secret and any search key you added are kept), so hand edits to them are
+  not kept.
+- InfluxDB stops writing a log line for every request and query, on install and
+  on update.
+
+### AI Chat never invents live facts
+
+- **A tightly worded live question** (the weather in a named place, the price of
+  something today) that AI Chat has no live source for gets a plain reply that
+  it cannot see live data, and how to get it, instead of a confident figure
+  from the model's memory. Looser questions reach the model with an instruction
+  to say plainly when it cannot see live data.
+- **Weather in a named place is answered from Open-Meteo**, with the source, the
+  time it was read and the local time of the conditions; metric, with °F beside
+  it. Only the place name is sent, never your question. When the place is
+  unclear, AI Chat asks which one. Questions about the machine's own
+  temperatures still go to the Assistant.
+
+### Web search in AI Chat
+
+- **A Web search switch beside Knowledge, off by default.** When it is on and
+  web research is installed, AI Chat searches through the machine's own guarded
+  search service, cites the pages it used, says plainly when they do not answer
+  the question, and asks rather than guesses. Nothing leaves the machine for a
+  search while it is off.
+- **Only an administrator can turn it on.** Operators see the switch disabled,
+  with the reason; the server refuses it for anyone else.
+- **News questions search news sources from the past week only.** A question
+  about older news gets only the past week.
+
+### Web research no longer depends on one free search engine
+
+- **The search engines were measured from the machine and the mix changed:**
+  Yep, Zapmeta, Seznam, DuckDuckGo and Bing for general questions; Bing News and
+  DuckDuckGo News for news. Engines that refused or blocked the machine (Mojeek
+  among them) are off. Yandex is not used.
+- **An optional search key you add** (Brave Search API) under
+  **Settings › Connections**, administrator only. It is off until you add a key,
+  and removing it always works.
+- **The query planner no longer adds words like "current" or "latest"** that
+  your question did not contain; they sent the engines off topic.
+- **Custom-app research looks for the app on GitHub and Docker Hub first,** by
+  its name, and uses the search service only as a fallback. It takes only an
+  image the project itself proves: one its README names, or one under the
+  project owner's own name, from a repository with real standing. Anything less
+  certain is put to you; it never picks a stranger's image by download count.
+  The review screen shows where the image came from and any warning. Research
+  for a proven image runs even with no AI model connected.
+- **Apps on Vaelor's reviewed list (Uptime Kuma, Plex, Palworld) research only
+  from their pinned sources** and need no AI model. A request is matched to one
+  only by the app's name as its first whole words, so "Perplexica" or "Tautulli
+  for Plex" is not taken for Plex.
+- New outside destinations: `api.github.com` (finding apps),
+  `geocoding-api.open-meteo.com` and `api.open-meteo.com` (weather, the place
+  name only; AI Chat's Web search note names Open-Meteo), and
+  `api.search.brave.com` (only when you add a key).
+
+### Fixes from the 1.5.4 cold install
+
+- **The console certificate is no longer re-issued by controller setup.**
+  Container and virtual-machine bridge addresses are no longer part of its
+  identity; it is re-issued only when it lacks a name or address the machine
+  has, or is near expiry, and open console pages are told 15 minutes ahead.
+  After a renewal, connections opened under the old certificate close once
+  idle (about 2 seconds, at most about 15 minutes); uploads, restores and AI
+  Chat answers in progress finish first.
+- **The trust steps can be read without the console:** the installer saves them
+  in a text file on the machine and says where, and Vaelor keeps it current.
+- **The GPU memory pool card tells the truth** when a restart would shrink the
+  pool (for example after an uninstall removed the saved size), and offers to
+  keep the current size.
+- **The restart dialog lists the work that is still running,** and the restart
+  must be confirmed against that list.
+- **A later success of the same operation on the same target resolves an
+  earlier failure**, in Activity and Apps alike; the failure stays in the
+  history, marked resolved. A dismissed notice stays dismissed.
+- **Vaelor's own containers are listed in their own section,** not among the
+  apps it discovered.
+- **The model library lists the controller and the cluster weights it holds.**
+- **The first cluster deploy waits** (up to about 4 minutes) for the 4-bit
+  guesser to finish building before starting the model, and the note about it
+  updates as it goes.
+- **AI Chat's cluster connection says it stays on the cluster's machines**
+  instead of "locality unknown".
+- **Uninstall:** Remote Desktop that Vaelor turned on is switched off by every
+  uninstall, its login and certificate removed (Remote Desktop you set up
+  yourself is left alone); a purge also removes the telemetry database, the
+  Phoenix container and serving containers; a worker's purge returns it to the
+  bare operating system, Docker included.
+- **The installer uses a local wheel only when `--wheel` names it,** so a stray
+  wheel in your home folder is never installed in place of the release.
+- **The console update also refreshes the release scripts** the machine runs.
+- **Home › Machines shows the controller's update status** ("Up to date",
+  "Update available") in the same words as Update Vaelor.
+- **Model file sizes read as GiB with GB beside them,** for example "13.6 GiB
+  (14.6 GB)", and about a dozen smaller fixes to mixed units, contradictory
+  states, a repeated dialog line and wording.
+
+### First-run setup and trust
+
+- **Trusting this Vaelor is part of first-run setup.** Right after the first
+  administrator account is created, Vaelor shows how to trust its household
+  authority on the computer in use (with a QR code for phones) and the
+  fingerprint to compare. It can be skipped, and stays under Settings ›
+  Connections › Trust this Vaelor.
+- **The box's own text login screen shows the console address and the
+  authority's fingerprint**, so it can be checked away from the network.
+  Uninstalling removes it.
+- **A fresh machine no longer falls back to the kernel's smaller GPU memory
+  pool.** The installer and a worker's join save the largest safe size Vaelor
+  calculates when none is saved; a size you saved is never changed, and an
+  update never undoes your own Remove setting. The card says the saved size
+  counts from the next restart; Vaelor still never restarts a machine itself.
+
+### AI Chat answers
+
+- **AI Chat shows when an answer was cut off.** An answer that stopped at the
+  model's answer-length limit, or ran past the 12,000 characters AI Chat keeps,
+  shows a note under it saying the end is missing, also after a reload, in a
+  branch and in an export.
+- **Longer answers from large local models.** A model over 8B that Vaelor runs
+  itself (the cluster's 30B, the GPU's 27B) may answer with up to 2,048 tokens
+  instead of 1,024, is given 240 seconds instead of 120, and is no longer told
+  to keep plain answers under 120 words. Smaller models keep their own limits.
+- **The Assistant and agents read a mixture-of-experts model by its full
+  size.** A name like Qwen3-30B-A3B is a 30B model; it was read as 3B. AI Chat,
+  the Assistant, agents and the model tiers now read every model's size the
+  same way.
+- **Custom agents get context in line with their model.** On a model over 8B
+  that Vaelor runs, a custom agent receives far more of its sources and memory;
+  small models keep what they had.
+- **Vaelor records the context window it serves each model with,** so a large
+  request is trimmed to fit instead of being refused for length. A machine that
+  updates fills these in for Vaelor's own models within minutes of starting;
+  connections you added are never changed.
+
+### Workers and the cluster
+
+- **A worker uninstalled on the machine stays uninstalled.** When Vaelor is
+  uninstalled on a worker that is still in a cluster, the controller no longer
+  puts its software back. The machine's card says so, with Re-add and Remove,
+  and the controller stops the cluster placing new work there. The uninstall
+  names the model serving it stopped.
+- **Adding a worker clears model serving an earlier controller left on it.** A
+  worker re-added to a rebuilt controller kept running the old controller's
+  model and holding its GPU memory, so the new controller said a model "won't
+  fit". The join plan now says it stops and removes model serving the
+  controller has no deployment for on that machine, services and containers
+  alike, and the join does it. Your apps and the downloaded model files stay.
+- **Re-add takes effect with one press,** and reads Docker on the machine
+  without needing Python (a Docker installed as a snap is recognised).
+- **Automatic changes to workers are in the security audit log,** under
+  "Vaelor (automatic repair)", or under you when your Recheck caused them.
+- **A model service whose file is gone but which is still running is stopped,**
+  not reported as already removed.
+
+### Console
+
+- **The restart and shut-down confirmations tell the truth.** They said nothing
+  was running whenever no Vaelor job was, even while models served AI Chat; they
+  now say no job is running, and what a reboot or shut down stops.
+- **Activity says one thing about how an operation ended.** An operation Vaelor
+  declined on purpose reads as finished, with its reason, not as both finished
+  and needing attention.
+- **The page behind a confirmation is usable the moment it closes;** for a
+  moment afterwards, clicks were lost.
+- **A full removal deletes Vaelor's release scripts directly,** and says so if
+  it cannot, however the removal was started.
+
+### Known limits
+
+- The free search engines are not dependable on their own: two of the best
+  rate-limited the machine during measurement. A search key helps most.
+- GitHub allows about 60 anonymous reads an hour per machine; app research says
+  so plainly when the limit is reached. For the same reason Home reads the
+  update status once, when the page opens.
+- A cluster started from a worker reads as "unknown" in AI Chat's model picker.
+- A browser that only clicked past the certificate warning and keeps a stream
+  open for more than 15 minutes after a renewal is cut off at 15 minutes.
+- An imported compose file can still carry the catalog label that decides which
+  apps get the file manager.
+
+### Not verified on the hardware in this release
+
+- Web search refused for an operator account.
+- Adding and removing a real Brave Search key end to end.
+- The text login screen redrawing an open prompt, and the first-run trust step
+  on an iPad.
+- An upload in progress while the console certificate is renewed.
+
 ## 1.5.4
 
 An Assistant release. The on-device Assistant on the neural processor (NPU) gets

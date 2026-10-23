@@ -4,6 +4,7 @@ import { auditMatches } from "../lib/auditSearch";
 import { auditFromText, auditTargetHasRawId, auditTargetText } from "../lib/auditTargets";
 import { auditActionLabel, auditResultView } from "../lib/auditLabels";
 import { exactTime } from "../lib/format";
+import { failureWord, resolutionNote, settledFailure } from "../lib/operationOutcome";
 import { jobLabel } from "../lib/jobPresentation";
 import { routeHref } from "../lib/navigation";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../lib/operationOwner";
 import type { AuditEvent, Session } from "../types";
 import { activityHashForSection, readOperationSummary } from "./ActivityCenter";
+import { messageShownByOwner } from "./ActivityOperations";
 import { ClusterAlerts } from "./ClusterAlerts";
 import { ClusterCard, FilterChips, IconTile } from "./ClusterPrimitives";
 import { Icon, type IconName } from "./Icon";
@@ -59,7 +61,7 @@ const FILTER_LIST_NAMES: Record<OperationFilter, string> = {
   all: "All operations",
   in_progress: "Operations in progress",
   attention: "Operations that need attention",
-  finished: "Finished operations",
+  finished: "Ended operations",
 };
 
 function operationsPath(filter: OperationFilter): string {
@@ -155,10 +157,15 @@ function operationPill(operation: OperationProjection): { label: string; tone: S
   // #180: an operation the server says has stopped reporting is not shown as
   // running; its last word is old, so the pill is grey and says so.
   if (!operationIsTerminal(state) && operation.staleness?.stale) return { label: "Stopped reporting", tone: "neutral" };
-  if (state === "completed" || state === "healthy") return { label: "Done", tone: "success" };
+  // One word for a success on every screen: Activity says "Finished" (sweep).
+  if (state === "completed" || state === "healthy") return { label: "Finished", tone: "success" };
   if (state === "failed") {
+    // VD-133 1.5.5 #4: resolved or dismissed is said as such, from the server.
+    const settled = settledFailure(operation);
+    if (settled) return { label: settled.label, tone: settled.tone };
     const why = operation.recoverable_error?.message || operation.message;
-    return { label: why ? `Failed: ${why}` : "Failed", tone: "danger" };
+    const word = failureWord(operation);
+    return { label: why ? `${word}: ${why}` : word, tone: "danger" };
   }
   if (state === "running") {
     const value = operation.progress.determinate ? operation.progress.value : null;
@@ -266,7 +273,14 @@ function OperationRow({ onDismissed, operation, session }: {
           <dl className="cl-facts">
             <dt>Status</dt><dd data-field="state">{pill.label}</dd>
             <dt>Progress</dt><dd data-field="progress">{progress}</dd>
-            <dt>Message</dt><dd data-field="message">{message || "—"}</dd>
+            {/* The owner card below says the message; a repeat row is omitted. */}
+            {!messageShownByOwner(operation) && <><dt>Message</dt><dd data-field="message">{message || "—"}</dd></>}
+            {operation.state === "failed" && operation.resolution && (
+              <>
+                <dt>Resolved</dt>
+                <dd data-field="resolution">{resolutionNote(operation.resolution)}</dd>
+              </>
+            )}
             {operation.dismissal && (
               <>
                 <dt>Dismissed</dt>
@@ -397,7 +411,7 @@ function OperationsCard({ onDismissed, session }: { onDismissed: () => void; ses
             { value: "all", label: "All operations", count: count(summary?.total) },
             { value: "in_progress", label: "In progress", count: count(summary?.in_progress) },
             { value: "attention", label: "Need attention", count: count(summary?.attention) },
-            { value: "finished", label: "Finished", count: count(summary?.finished) },
+            { value: "finished", label: "Ended", count: count(summary?.finished) },
           ]}
           value={filter}
         />

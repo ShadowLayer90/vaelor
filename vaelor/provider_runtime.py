@@ -12,6 +12,7 @@ from .assistant_model_readings import bounded_turns, fit_readings, topics_of
 from .assistant_vocabulary import BASE_TOOLS, UPTIME_PHRASES, literal_phrases
 from .phrase_match import mentions
 from .telemetry_trend import SUBJECT_NOT_RETAINED
+from .token_estimate import CONTEXT_WINDOW_KEY, context_window_tokens
 from .token_estimate import context_chars as _context_chars
 
 
@@ -48,9 +49,51 @@ def generation_parameters(
     return {"max_tokens": max_tokens, "temperature": temperature}
 
 
-def _model_billions(connection: Dict[str, str]) -> float:
-    matches = re.findall(r"(?<!\d)(\d+(?:\.\d+)?)\s*[bB](?![A-Za-z])", connection.get("model", ""))
+#: A size in a model's name: the "4B" in "qwen3.5:4b", the "1.7B" in "Qwen3-1.7B".
+_SIZE = re.compile(r"(?<!\d)(\d+(?:\.\d+)?)\s*[bB](?![A-Za-z])")
+
+#: A mixture-of-experts name's active-parameter part: the "-A3B" in "30B-A3B".
+_ACTIVE_PARAMETERS = re.compile(r"(?<=[bB])[-_ ]?A\d+(?:\.\d+)?[bB](?![A-Za-z])", re.IGNORECASE)
+
+#: A name that writes its experts as a count times a size: the "8x7B" in
+#: "Mixtral-8x7B".
+_EXPERTS_TIMES_SIZE = re.compile(r"(?<!\d)(\d+)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[bB](?![A-Za-z])")
+
+
+def model_total_billions(model: str) -> float:
+    """A model's total size in billions, read from its name; 0.0 when unread.
+
+    The one reading of a model's size, for every caller (owner 2026-10-21
+    follow-up list, LESSONS 6): AI Chat's answer limit, the Assistant's and the
+    agents' budgets, and the capability tiers all ask it. There used to be two:
+    a second reader took the *last* size in a name, which for a mixture of
+    experts is the active part, so the cluster's `Qwen3-30B-A3B` read 30B in AI
+    Chat and 3B everywhere else.
+
+    - The active part ("-A3B", "-A22B") is dropped first.
+    - "8x7B" reads as the count times the size, 56. That is an upper bound
+      (Mixtral-8x7B is about 47B, its experts share attention), and it only has
+      to land on the right side of the 2B, 4B and 8B tier lines.
+    - Otherwise the last size in the name counts.
+    - A name with no size (`phi-4`, or the empty name a GPU fork lease carries)
+      reads 0.0, which every caller treats as a small model.
+    """
+    name = _ACTIVE_PARAMETERS.sub("", str(model or ""))
+    name = _EXPERTS_TIMES_SIZE.sub(
+        lambda found: "{:g}B".format(int(found.group(1)) * float(found.group(2))), name
+    )
+    matches = _SIZE.findall(name)
     return float(matches[-1]) if matches else 0.0
+
+
+def large_local_model(connection: Dict[str, str], model: str) -> bool:
+    """A model over 8B in total that Vaelor runs itself (owner 2026-10-21).
+
+    The one test behind AI Chat's three rulings for such a model: a 2,048-token
+    answer, 240 s to give it, and no "under 120 words" steer. One predicate so
+    the three cannot disagree about which models they cover.
+    """
+    return managed_local_connection(connection) and model_total_billions(model) > 8
 
 
 #: The one limitation a capable local tier carries: the model gets more room to
@@ -75,7 +118,7 @@ def model_capability(connection: Dict[str, str] | None) -> Dict[str, Any]:
         # powers AI Chat. `model_connection.resolve_model_connection` stamped
         # this marker server-side from the broker lease, because that lease
         # deliberately carries an EMPTY model name (its identity is the label),
-        # which `_model_billions` would read as size 0 and mis-tier as
+        # which `model_total_billions` would read as size 0 and mis-tier as
         # `basic-local` - running the DEGRADED compact research flow on the
         # LARGER model. Honouring the marker here centralizes the correction so
         # every tier consumer (the compact-flow gate, the candidate limit,
@@ -103,7 +146,7 @@ def model_capability(connection: Dict[str, str] | None) -> Dict[str, Any]:
             "description": "Capability depends on the model exposed by this endpoint.",
             "limitations": ["Vaelor cannot infer quality from an endpoint name alone."],
         }
-    size = _model_billions(connection)
+    size = model_total_billions(connection.get("model", ""))
     if not size or size <= 2:
         return {
             "tier": "basic-local",
@@ -141,12 +184,9 @@ def request_complexity(request: str) -> str:
 
 
 def _declared_context_tokens(connection: Dict[str, str]) -> int:
-    for key in ("context_window", "context_length", "max_context_tokens"):
-        try:
-            value = int(connection.get(key, "") or 0)
-        except (TypeError, ValueError):
-            continue
-        if 512 <= value <= 2_000_000:
+    for key in (CONTEXT_WINDOW_KEY, "context_length", "max_context_tokens"):
+        value = context_window_tokens(connection.get(key))
+        if value:
             return value
     return 0
 
@@ -178,12 +218,13 @@ PROMPT_OVERHEAD_TOKENS = 1200
 # task text.
 MIN_AGENT_CONTEXT_CHARS = 2000
 
-# Managed-local is the appliance's own model on the appliance's own Pi, and the
-# limit there is throughput, not the window: the 1.7B measured on this hardware
+# A small model Vaelor runs itself (8B and under: the Pi's 1.7B, the NPU 4B),
+# where the limit is throughput, not the window: the 1.7B measured on the Pi
 # generates at roughly 2.4 tokens a second, so every extra thousand characters
 # of prompt is paid for twice - once evaluating it, once reasoning about it.
-# That model keeps the budget it was tuned for; the room found below is for
-# connected endpoints, which is where agent research actually runs.
+# Those models keep the budget they were tuned for. A larger one Vaelor runs
+# (the cluster 30B, a GPU GGUF) is sized like any endpoint, within its tier's
+# context (owner 2026-10-21).
 MANAGED_LOCAL_CONTEXT_CHARS = 700
 
 
@@ -205,14 +246,31 @@ def agent_context_chars(
     The generation has to fit beside the prompt, but a model that reasons
     verbosely must not be allowed to squeeze the evidence out of its own
     context: the reserve honours what the request asks for, capped at a third of
-    the window.
+    the window. A model Vaelor runs itself is held to `MANAGED_LOCAL_CONTEXT_CHARS`
+    when it is 8B or under, and otherwise also to the Assistant's context for a
+    complex request on its size tier - one table, `_local_tier_budget`.
     """
-    if managed_local_connection(connection or {}):
+    connection = connection or {}
+    model = connection.get("model", "")
+    if managed_local_connection(connection) and not large_local_model(connection, model):
         return MANAGED_LOCAL_CONTEXT_CHARS
     window = declared_context_tokens(connection) or DEFAULT_CONTEXT_TOKENS
     reserve = min(max(0, int(generation_tokens)), window // 3)
-    room = window - reserve - PROMPT_OVERHEAD_TOKENS
-    return max(MIN_AGENT_CONTEXT_CHARS, _context_chars(room))
+    room = max(MIN_AGENT_CONTEXT_CHARS, _context_chars(window - reserve - PROMPT_OVERHEAD_TOKENS))
+    if managed_local_connection(connection):
+        return min(room, _local_tier_budget(model_total_billions(model), True)["context_chars"])
+    return room
+
+
+def _local_tier_budget(size: float, complex_request: bool) -> Dict[str, int]:
+    """Context and output for a model Vaelor runs itself, by its total size."""
+    if not size or size <= 2:
+        return {"context_chars": 12000 if complex_request else 6000, "max_tokens": 320 if complex_request else 192}
+    if size <= 4:
+        return {"context_chars": 24000 if complex_request else 12000, "max_tokens": 512 if complex_request else 320}
+    if size <= 8:
+        return {"context_chars": 48000 if complex_request else 24000, "max_tokens": 768 if complex_request else 512}
+    return {"context_chars": 64000 if complex_request else 32000, "max_tokens": 1024 if complex_request else 640}
 
 
 def assistant_budget(connection: Dict[str, str], request: str = "") -> Dict[str, int]:
@@ -223,15 +281,7 @@ def assistant_budget(connection: Dict[str, str], request: str = "") -> Dict[str,
     elif not managed_local_connection(connection):
         budget = {"context_chars": 32000 if complex_request else 16000, "max_tokens": 1024 if complex_request else 512}
     else:
-        size = _model_billions(connection)
-        if not size or size <= 2:
-            budget = {"context_chars": 12000 if complex_request else 6000, "max_tokens": 320 if complex_request else 192}
-        elif size <= 4:
-            budget = {"context_chars": 24000 if complex_request else 12000, "max_tokens": 512 if complex_request else 320}
-        elif size <= 8:
-            budget = {"context_chars": 48000 if complex_request else 24000, "max_tokens": 768 if complex_request else 512}
-        else:
-            budget = {"context_chars": 64000 if complex_request else 32000, "max_tokens": 1024 if complex_request else 640}
+        budget = _local_tier_budget(model_total_billions(connection.get("model", "")), complex_request)
     declared = _declared_context_tokens(connection)
     if declared:
         # Three things share a declared window: this request's generation, the

@@ -546,6 +546,67 @@ def launch_agent_reconcile(
     return thread
 
 
+#: The window backfill's passes after the executor starts, and how far apart:
+#: a model server can still be loading when the executor comes up, so the read
+#: is retried, and bounded - about ten minutes, then the next start tries again.
+SERVED_WINDOW_PASSES = 10
+SERVED_WINDOW_INTERVAL_SECONDS = 60.0
+
+
+def run_served_window_backfill(
+    executor: JobExecutor, broker: Any = None
+) -> Optional[Dict[str, Any]]:
+    """One pass recording the served window on Vaelor's older model credentials.
+
+    Owner 2026-10-21 and VD-217: a box updated from before the window was
+    recorded reaches the state a fresh deploy does. The cluster's window comes
+    from its deployment record (``max_model_len``, what its engines were
+    started with), a pooled root's from its catalog entry's ``max_sequence_length``
+    (what its ``--max-seq-len`` was); a managed-local model's from its own server
+    (`managed_local_credentials.record_served_windows`). Non-fatal.
+    """
+    try:
+        from .credential_broker import CredentialBrokerClient
+        from .gpu_cluster_mode import GPU_SERVING_LOCK
+        from .managed_local_credentials import record_served_windows
+
+        from .pooled_inference import POOLED_MODEL_CATALOG
+
+        recorded: Dict[str, Any] = {}
+        cluster = getattr(executor, "cluster", None)
+        for row in (cluster.store.list_pooled_deployments() if cluster is not None else []):
+            # vLLM's --max-model-len, or a pooled root's --max-seq-len (its catalog entry).
+            window = (row.get("units") or {}).get("max_model_len") or (
+                POOLED_MODEL_CATALOG.get(str(row.get("model_id") or ""), {}).get("max_sequence_length"))
+            if row.get("credential_id") and window:
+                recorded[str(row["credential_id"])] = window
+        # Under the serving mutex every cluster re-key holds (rotate, a Load's re-key).
+        return record_served_windows(broker or CredentialBrokerClient(), recorded, lock=GPU_SERVING_LOCK)
+    except Exception:
+        return None
+
+
+def launch_served_window_backfill(
+    executor: JobExecutor,
+    *,
+    passes: int = SERVED_WINDOW_PASSES,
+    interval_seconds: float = SERVED_WINDOW_INTERVAL_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> threading.Thread:
+    """Run :func:`run_served_window_backfill` until nothing fillable is left, bounded."""
+    def _run() -> None:
+        for index in range(passes):
+            result = run_served_window_backfill(executor)
+            if result is not None and not result.get("pending"):
+                return
+            if index + 1 < passes:
+                sleep(interval_seconds)
+
+    thread = threading.Thread(target=_run, name="vaelor-served-window", daemon=True)
+    thread.start()
+    return thread
+
+
 def main() -> None:
     store = JobStore()
     store.recover_interrupted()
@@ -557,6 +618,7 @@ def main() -> None:
     launch_assistant_autoenable(executor)
     launch_phoenix_autostart(executor)
     launch_agent_reconcile(executor)
+    launch_served_window_backfill(executor)
     while True:
         completed = executor.run_once()
         time.sleep(2 if completed is None else 0.2)

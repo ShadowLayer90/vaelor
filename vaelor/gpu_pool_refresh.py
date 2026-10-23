@@ -45,6 +45,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import gpu_render_ledger as render_ledger
 from .bridge_transport import root_renders_units
+from .cluster_placement import name_in_sentence
 from .vllm_guesser_build import GUESSERS, NOT_BUILT, GuesserUnavailable, UNAVAILABLE_MARK
 from .vllm_guesser_build import ensure_on_worker as ensure_guesser_on_worker
 from .gpu_cluster_mode import HEALTHY_STATE
@@ -96,6 +97,8 @@ GUESSER_PREBUILD_SECONDS = 240
 GUESSER_POLL_SECONDS = 3
 #: The progress line while it builds; and when it was not ready before the stop.
 GUESSER_BUILDING = "Building the 4-bit guesser on {} while the model still serves"
+#: VD-133 1.5.5 #10: the same wait at a deploy, where nothing serves yet.
+GUESSER_BUILDING_FIRST = "Building the 4-bit guesser on {} so the model starts with it"
 GUESSER_NOT_READY = (
     "The 4-bit guesser was not ready before the reload ({}), so the model serves "
     "the full-size guesser until its next Load"
@@ -250,7 +253,8 @@ def prebuild_guesser(wanted: Any, participants: List[Dict[str, Any]], transports
                      report: Callable[[int, str], None], *,
                      seconds: float = GUESSER_PREBUILD_SECONDS,
                      clock: Callable[[], float] = time.monotonic,
-                     sleep: Callable[[float], None] = time.sleep) -> Optional[str]:
+                     sleep: Callable[[float], None] = time.sleep,
+                     building: str = GUESSER_BUILDING, percent: int = 12) -> Optional[str]:
     """Build the 4-bit guesser ``wanted`` serves on every machine before the stop (N94).
 
     ``None`` when every machine has it (or it serves none), else
@@ -265,17 +269,17 @@ def prebuild_guesser(wanted: Any, participants: List[Dict[str, Any]], transports
     if row is None:
         return None
     deadline = clock() + float(seconds)
-    names = {node["id"]: str(node.get("name") or node.get("id") or "")
+    names = {node["id"]: name_in_sentence(str(node.get("name") or node.get("id") or ""))
              for node in participants}
     held: Dict[str, str] = {}
     controllers = [node["id"] for node in participants if root_renders_units(transports[node["id"]])]
     for node_id in controllers:
-        report(12, GUESSER_BUILDING.format(names[node_id]))
+        report(percent, building.format(names[node_id]))
         held[node_id] = _ask_bridge(transports[node_id], row, True)
     for node in participants:
         if node["id"] in controllers:
             continue
-        report(12, GUESSER_BUILDING.format(names[node["id"]]))
+        report(percent, building.format(names[node["id"]]))
         try:
             ensure_guesser_on_worker(transports[node["id"]], row,
                                      seconds=max(1.0, deadline - clock()))
@@ -295,6 +299,64 @@ def prebuild_guesser(wanted: Any, participants: List[Dict[str, Any]], transports
         if reasons:
             said.append(sentence.format("; ".join(reasons)))
     return ". ".join(said) or None
+
+
+#: Where a deploy's progress stands while it waits for the guesser: after
+#: every machine's download (35-55) and before the first copy starts (60), so
+#: the bar never runs back (adversarial L1).
+FIRST_SERVE_BUILD_PERCENT = 57
+
+
+def _first_serve_row(vllm_options: Any) -> Any:
+    """The options a deploy serves with when they carry a 4-bit guesser, else ``None``."""
+    from .vllm_serve_options import require_options
+
+    try:
+        wanted = require_options(vllm_options)
+    except (TypeError, ValueError):
+        return None
+    return wanted if GUESSERS.get(str(getattr(wanted, "guesser", None) or "")) else None
+
+
+def begin_first_serve_build(vllm_options: Any, transport: Any) -> None:
+    """Start the controller's build the moment its drafter is on disk (adversarial L2).
+
+    Called by the deploy right after the CONTROLLER's download, so the ~25 s
+    build overlaps the other machines' downloads instead of following them
+    while AI Chat is already down. Best effort: :func:`prebuild_for_first_serve`
+    asks again, and a start already running answers "building".
+    """
+    wanted = _first_serve_row(vllm_options)
+    if wanted is None or not root_renders_units(transport):
+        return
+    _ask_bridge(transport, GUESSERS[wanted.guesser], True)
+
+
+def prebuild_for_first_serve(vllm_options: Any, participants: List[Dict[str, Any]],
+                             transports: Dict[str, Any], report: Callable[[int, str], None],
+                             **wait: Any) -> Optional[str]:
+    """A deploy's wait for the 4-bit guesser it was decided with, before any unit starts.
+
+    VD-133 1.5.5 #10: the first cold serve started the model while the
+    controller's background build ran, so the model served the full-size
+    guesser and its row promised "the next Load" - a restart nobody had asked
+    for. The deploy fetched the drafter the build reads moments before, so the
+    same bounded wait the update's refresh makes (:func:`prebuild_guesser`,
+    N94) is made here and the model starts with it. A build not ready in time
+    is no failure: the unit install says so on the row, as before.
+
+    The CONTROLLER only (adversarial L2): a worker's unit install builds there
+    before its unit starts, with the whole build bound, so building it here
+    too would only add a build killed at this wait's deadline and redone.
+    """
+    wanted = _first_serve_row(vllm_options)
+    if wanted is None:
+        return None
+    controllers = [node for node in participants
+                   if root_renders_units(transports.get(node["id"]))]
+    return prebuild_guesser(wanted, controllers, transports, report,
+                            building=GUESSER_BUILDING_FIRST,
+                            percent=FIRST_SERVE_BUILD_PERCENT, **wait)
 
 
 def _ask_bridge(transport: Any, row: Any, start: bool) -> Optional[str]:

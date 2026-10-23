@@ -10,6 +10,7 @@ import { SettingsSessions, type ManagedSession } from "./SettingsSessions";
 import { SettingsTwoFactor } from "./SettingsTwoFactor";
 import { StatusPill } from "./StatusPill";
 import { TrustThisVaelor } from "./TrustThisVaelor";
+import { WebSearchKeyCard } from "./WebSearchKeyCard";
 import { Button, Notice, TabSet } from "./ui";
 import type { CredentialListing, StoredCredential } from "../lib/credentialStatus";
 import { destinations } from "../lib/destinations";
@@ -463,6 +464,8 @@ export function Administration({ session }: { session: Session; /** The shell pa
                 />
                 <EncryptedConnectionsPanel busy={busy} listing={credentials} onRemove={removeStoredCredential} onTest={testStoredCredential} />
               </div>
+              {/* VD-222 item 2: the owner's optional search key, off until added. */}
+              <WebSearchKeyCard session={session} />
             </>
           )}
 

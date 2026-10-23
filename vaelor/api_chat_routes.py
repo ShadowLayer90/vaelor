@@ -10,7 +10,7 @@ from flask import g, request
 
 from .ai_chat_model_lease import custom_agent_readiness
 from .api_common import ApiContext, payload as _payload
-from .chat_connections import LOCAL_BY_ADDRESS, LOCALITY_UNKNOWN, describe_connections
+from .chat_connections import active_cluster_credential_id, describe_connections
 from .copilot_setup import hardware_inventory
 from .credential_listing import redact_inference_status_for_role
 from .gpu_cluster_mode_state import ClusterModeStore
@@ -19,6 +19,7 @@ from .inference_status import cluster_on_this_adapter, inference_status
 from .model_reachability import probe_connection
 from .chat_appliance_scope import (
     APPLIANCE_SCOPE_PROVIDER,
+    LIVE_FACTS_PROVIDER,
     appliance_scope_decline,
     record_decline,
     retrieval_answers_question,
@@ -33,6 +34,9 @@ from .chat_grounding import (
 )
 from .chat_agent_proposals import agent_proposal, proposal_text
 from .api_chat_thinking_routes import thinking_choice
+from .api_chat_web_search_routes import (
+    record_live_reply, web_search_choice, web_search_refusal, web_search_turn,
+)
 from .chat_inference import HISTORY_DROP_BLOCK, ChatInferenceError
 from .chat_turn_dedupe import IN_FLIGHT_STATUS, in_flight_error
 from .document_text import SUPPORTED_EXTENSIONS
@@ -44,14 +48,6 @@ from .session_affinity import conversation_session_key, opening_session_key
 #: sent. Only a bound on the work: `chat_inference.history_window` picks the
 #: 8-11 the model sees, and needs the conversation's own positions to do it.
 TEMPORARY_HISTORY_LIMIT = 64
-
-#: What the active connection says about where prompts go while the GPU
-#: cluster serves AI Chat (its address is the controller's balancer).
-CLUSTER_ACTIVE_LOCALITY = (
-    "The GPU cluster answers this connection; its replicas can run on other "
-    "machines in the cluster, so prompts may leave this appliance for them."
-)
-
 
 def register_chat_routes(context: ApiContext) -> None:
     blueprint = context.blueprint
@@ -140,21 +136,40 @@ def register_chat_routes(context: ApiContext) -> None:
             status=getattr(error, "status", fallback_status),
         )
 
-    def turn_metadata(result):
-        """What a stored answer says about itself: its timing and, when the
-        provider returned one, its thinking summary (VD-209 item 4)."""
+    def turn_metadata(result, web=None):
+        """What a stored answer says about itself: its timing, the provider's
+        thinking summary when it returned one (VD-209 item 4), why it stopped
+        early if it did (VD-206), and the web search behind it (VD-221)."""
         metadata = {"performance": result.get("performance") or {}}
         if result.get("thinking"):
             metadata["thinking"] = result["thinking"]
-        return metadata
+        if result.get("cut_off"):  # VD-206: a cut answer is never shown as finished
+            metadata["cut_off"] = result["cut_off"]
+        return {**metadata, **(web.metadata if web is not None else {})}
 
-    def cluster_credential_id():
-        """The credential the GPU cluster serves through, from the mode file; ""."""
+    def web_turn(body, message, model, retrieved, history):
+        """VD-221: Web search for this turn, only when the send says so; every
+        search and every live-fact refusal is audited."""
+        return web_search_turn(
+            callbacks, services()[1], actor=g.auth_session.username,
+            role=getattr(g.auth_session, "role", ""),
+            message=message, model=model, enabled=body.get("web_search") is True,
+            retrieved=retrieved, history=history, security=security,
+            remote_addr=request.remote_addr or "", cluster_credential_id=cluster_credential_id(),
+        )
+
+    def cluster_mode_state():
+        """The mode file through this blueprint's store; None when unreadable."""
         modes = callbacks.get("cluster_mode_store") or ClusterModeStore()
         try:
-            return str(getattr(modes.read(), "cluster_credential_id", "") or "")
+            return modes.read()
         except Exception:  # noqa: BLE001 - absence-ok: no cluster credential, no relabel
-            return ""
+            return None
+
+    def cluster_credential_id(state=None):
+        """The credential the GPU cluster serves through, from the mode file; ""."""
+        state = cluster_mode_state() if state is None else state
+        return str(getattr(state, "cluster_credential_id", "") or "")
 
     def citations_for(retrieved):
         return [
@@ -205,30 +220,29 @@ def register_chat_routes(context: ApiContext) -> None:
         # Only the connections the owner added, and Vaelor's own managed
         # serving. Nothing here looks for AI servers on this machine or the
         # network: a server enters Vaelor only when the owner adds it (VD-137).
-        described = describe_connections(connections)
+        # The cluster's connection (the mode file's credential) is described
+        # as Vaelor's own cluster: its loopback address is the controller's
+        # balancer, which forwards to replicas on other machines, so it is not
+        # "this machine" (w2-creds review) - and Vaelor made it, so it is not
+        # "unknown" either (VD-133 1.5.5 #11). `describe_connections` decides
+        # that once, for the list and the active connection alike.
+        mode_state = cluster_mode_state()
+        cluster_credential = cluster_credential_id(mode_state)
+        # Called the cluster's only while the mode file says it serves (an
+        # unreadable store: no cluster, "" - never a second read elsewhere).
+        described = describe_connections(
+            connections, active_cluster_credential_id(mode_state) if mode_state is not None else "",
+        )
         # ACC-101: the active connection is the DESCRIBED one, so it carries the
         # locality `describe_connections` decided (`local`, `local_source`,
         # `local_reason`). It was the raw broker row, which carries none, so the
         # Details panel's "prompts never leave the machine" note - keyed on
         # `local_source` - could never appear. One answer, read by both.
-        cluster_credential = cluster_credential_id()
         if active is not None:
             active = next(
                 (item for item in described if item.get("id") == active.get("id")),
                 active,
             )
-            # When AI Chat's connection IS the cluster's (the mode file's
-            # credential), its loopback address is the controller's balancer,
-            # which forwards to replicas on other machines: a loopback address
-            # does not make it local, so it is not called that (w2-creds
-            # review). Asked of the mode file, not of a refusal: since VD-210
-            # the owner may pick any other connection while clustered.
-            if (active.get("id") and active.get("id") == cluster_credential
-                    and active.get("local_source") == LOCAL_BY_ADDRESS):
-                active.update(
-                    local=None, local_source=LOCALITY_UNKNOWN,
-                    local_reason=CLUSTER_ACTIVE_LOCALITY,
-                )
         return _payload({
             # Every connection, each with `local` and how that was decided.
             # The privacy grouping the picker draws is a presentation of
@@ -502,10 +516,13 @@ def register_chat_routes(context: ApiContext) -> None:
     @require_auth("operator", csrf=True)
     def chat_conversation_update(conversation_id):
         store, _ = services()
+        patch = request.get_json(silent=True) or {}
+        refused = isinstance(patch, dict) and web_search_refusal(patch, g.auth_session.role)
+        if refused:
+            return refused
         try:
             return _payload(store.update_conversation(
-                g.auth_session.username, conversation_id,
-                request.get_json(silent=True) or {},
+                g.auth_session.username, conversation_id, patch,
             ))
         except (AttributeError, RagChatError) as error:
             return _payload(error={"code": "chat_update_rejected", "message": str(error)}, status=400)
@@ -551,6 +568,9 @@ def register_chat_routes(context: ApiContext) -> None:
     def chat_conversation_regenerate(conversation_id):
         store, inference = services()
         body = request.get_json(silent=True) or {}
+        refused = web_search_refusal(body, g.auth_session.role)
+        if refused:
+            return refused
         # The model the picker shows, exactly as a send resolves it. This used
         # to be the conversation's stored model, so a regenerate went to a
         # model the reader could no longer see - in cluster mode one vLLM did
@@ -594,23 +614,35 @@ def register_chat_routes(context: ApiContext) -> None:
                         "model": model,
                         "provider": APPLIANCE_SCOPE_PROVIDER,
                     })
+            web = web_turn(body, prepared["prompt"], model, retrieved, prepared["history"])
+            if web.decline is not None:
+                declined = store.add_message(
+                    g.auth_session.username, conversation_id, "assistant",
+                    web.decline["answer"], web.decline.get("citations") or [], None,
+                    LIVE_FACTS_PROVIDER, web.decline["metadata"],
+                )
+                return _payload({
+                    "messages": store.messages(g.auth_session.username, conversation_id),
+                    "message": declined, "model": model, "provider": LIVE_FACTS_PROVIDER,
+                })
             memory = grounding_memories(prepared["prompt"])
             retrieval = grounded_retrieval(
                 g.auth_session.username, searchable, retrieved, memory
             )
             result = inference.answer(
                 prepared["prompt"], model=model,
-                history=prepared["history"], retrieved=retrieved,
+                history=prepared["history"], retrieved=web.sources(retrieved),
                 memories=memory["memories"],
                 session_key=conversation_session_key(
                     g.auth_session.username, conversation_id
                 ),
                 thinking=thinking_choice(store, body, g.auth_session.username),
+                **web.options,
             )
             assistant_message = store.add_message(
                 g.auth_session.username, conversation_id, "assistant",
-                result["answer"], citations_for(retrieved), retrieval,
-                result["model"], metadata=turn_metadata(result),
+                result["answer"], web.citations(citations_for(web.knowledge(retrieved))),
+                retrieval, result["model"], metadata=turn_metadata(result, web),
             )
         except (
             AttributeError, ChatInferenceError, RagChatError, TypeError, ValueError,
@@ -634,6 +666,9 @@ def register_chat_routes(context: ApiContext) -> None:
     def chat_message():
         store, inference = services()
         body = request.get_json(silent=True) or {}
+        refused = web_search_refusal(body, g.auth_session.role)
+        if refused:
+            return refused
         actor = g.auth_session.username
         message = str(body.get("message", "")).strip()
         preference = store.preference(actor)
@@ -811,6 +846,16 @@ def register_chat_routes(context: ApiContext) -> None:
                         temporary=temporary, conversation=existing,
                         collections=collection_ids,
                     ))
+            earlier = (
+                store.messages(actor, existing["id"]) if existing is not None
+                else body.get("history") if temporary and isinstance(body.get("history"), list) else []
+            )
+            web = web_turn(body, message, model, retrieved, earlier)
+            if web.decline is not None:
+                return accept(record_live_reply(
+                    store, actor, web, message, body, model=model, temporary=temporary,
+                    conversation=existing, collections=collection_ids,
+                ))
             if temporary:
                 sent = body.get("history") if isinstance(body.get("history"), list) else []
                 # VD-216 fix 2: cut only in the window's own blocks. A plain
@@ -834,7 +879,7 @@ def register_chat_routes(context: ApiContext) -> None:
                     actor, searchable, retrieved, memory
                 )
                 result = inference.answer(
-                    message, model=model, history=history, retrieved=retrieved,
+                    message, model=model, history=history, retrieved=web.sources(retrieved),
                     memories=memory["memories"],
                     # A temporary chat has no id: its first message names it
                     # for as long as it lasts (VD-158) - read off everything
@@ -843,24 +888,21 @@ def register_chat_routes(context: ApiContext) -> None:
                         *(body.get("history") if isinstance(body.get("history"), list) else []),
                         {"role": "user", "content": message},
                     ]),
-                    thinking=thinking_choice(store, body, actor),
+                    thinking=thinking_choice(store, body, actor), **web.options,
                 )
                 return accept({
                     "conversation_id": "",
                     "message": {
                         "role": "assistant", "content": result["answer"],
-                        "citations": citations_for(retrieved),
+                        "citations": web.citations(citations_for(web.knowledge(retrieved))),
                         "retrieval": retrieval, "model": result["model"],
-                        "metadata": turn_metadata(result),
+                        "metadata": turn_metadata(result, web),
                     },
                     "model": result["model"], "provider": result["provider"],
                     "temporary": True, "retrieval": retrieval,
                 })
             conversation = existing
-            history = (
-                store.messages(actor, conversation["id"])
-                if conversation else []
-            )
+            history = earlier  # read once, above, for the live-fact guard too
             if conversation is None:
                 conversation = store.ensure_conversation(
                     actor, title=message[:100], collections=collection_ids,
@@ -869,21 +911,22 @@ def register_chat_routes(context: ApiContext) -> None:
             # The model is not recorded anywhere but on the turn it writes.
             conversation = apply_patch(
                 store, actor, conversation,
-                conversation_patch(collection_ids, collections_chosen),
+                {**conversation_patch(collection_ids, collections_chosen),
+                 **web_search_choice(body, new_conversation=existing is None)},
             )
             store.add_message(actor, conversation["id"], "user", message)
             memory = grounding_memories(message)
             retrieval = grounded_retrieval(actor, searchable, retrieved, memory)
             result = inference.answer(
-                message, model=model, history=history, retrieved=retrieved,
+                message, model=model, history=history, retrieved=web.sources(retrieved),
                 memories=memory["memories"],
                 session_key=conversation_session_key(actor, conversation["id"]),
-                thinking=thinking_choice(store, body, actor),
+                thinking=thinking_choice(store, body, actor), **web.options,
             )
-            citations = citations_for(retrieved)
+            citations = web.citations(citations_for(web.knowledge(retrieved)))
             assistant_message = store.add_message(
                 actor, conversation["id"], "assistant", result["answer"], citations,
-                retrieval, result["model"], metadata=turn_metadata(result),
+                retrieval, result["model"], metadata=turn_metadata(result, web),
             )
         except (
             AttributeError, ChatInferenceError, RagChatError, TypeError,

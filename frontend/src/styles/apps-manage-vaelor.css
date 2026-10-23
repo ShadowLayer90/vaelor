@@ -1,0 +1,62 @@
+/* VD-133 1.5.5 #12: Vaelor's own services, collapsed under the owner's apps. */
+
+.manage-vaelor__details {
+  border-top: 1px solid var(--border-list);
+}
+
+.manage-vaelor__summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 10px 18px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui);
+  cursor: pointer;
+}
+
+.manage-vaelor__summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.manage-vaelor__note {
+  margin: 0;
+  padding: 0 18px 12px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+}
+
+.manage-vaelor__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.manage-vaelor__item {
+  min-width: 0;
+}
+
+.manage-vaelor__row {
+  flex-wrap: wrap;
+}
+
+.manage-vaelor__row .manage-row__text {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.manage-vaelor__logs {
+  padding: 0 18px 14px;
+  min-width: 0;
+}
+
+/* The log viewer here sits in the narrow list column at every window width,
+   so it takes the stacked layout the tools panel uses below 720px. */
+.manage-vaelor__logs .manage-logs__filters,
+.manage-vaelor__logs .manage-log-line {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.manage-vaelor__logs .manage-log-line {
+  gap: 2px;
+}

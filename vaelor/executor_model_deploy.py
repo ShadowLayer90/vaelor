@@ -17,7 +17,6 @@ appliance with no assistant and no explanation.
 from __future__ import annotations
 
 import hashlib
-import json
 import shutil
 import socket
 import subprocess
@@ -30,6 +29,7 @@ from typing import Any, Callable, Dict, Optional
 from .app_port_claims import app_port_holders_keeping, pick_model_port
 from .copilot_setup import local_runtime_settings
 from .credential_broker import CredentialBrokerClient, CredentialError
+from .credential_provider_probe import served_profile
 from .hardware_bridge import HardwareBridgeError
 from .executor_network import available_model_port, parse_memory_usage
 from .gpu_serving_target import (
@@ -43,7 +43,7 @@ from .model_sizing import loaded_model_capacity
 from .job_control import JobCancelled
 from .managed_local_credentials import (
     AI_CHAT_MODEL_PREFIX, ASSISTANT_NPU_PREFIX, MANAGED_LOCAL_CREDENTIAL_LABEL, PREFIX,
-    activate_managed_chat, activate_managed_local,
+    activate_managed_chat, activate_managed_local, compose_served_window, note_served_window,
 )
 from .model_catalog import catalog_engine, catalog_surface, deploy_surface
 from .model_service_compose import accelerator_plan, build_model_compose
@@ -386,11 +386,13 @@ class ExecutorModelDeployMixin:
             tag = pinned
             ctx_len = int(plan["context_tokens"])
             supervisor = self._flm_supervisor()
-            if supervisor.healthy(port):
+            if supervisor.healthy(port):  # owner 2026-10-21: record the --ctx-len it serves
+                note_served_window(self.credential_broker, lease, ctx_len, launched=False)
                 return {"served": False, "reason": "already-healthy", "port": port}
-            return self._launch_npu_with_boot_retry(
-                supervisor, tag=tag, ctx_len=ctx_len, port=port, sleep=sleep
-            )
+            served = self._launch_npu_with_boot_retry(
+                supervisor, tag=tag, ctx_len=ctx_len, port=port, sleep=sleep)
+            note_served_window(self.credential_broker, lease, ctx_len, launched=True)
+            return served
         except Exception:
             # Never let a boot-time reconcile keep the executor from processing
             # jobs, under ANY error (FIX 4). The reachable set is wider than it
@@ -491,11 +493,9 @@ class ExecutorModelDeployMixin:
         # then times out on - the deploy fails with "chat API failed" even though
         # the served model is healthy (reproduced live on the Z2, VD-111). Pinning
         # the served tag up front makes the test target the loaded model, and the
-        # explicit select_model below keeps the pin unambiguous.
-        profile = json.dumps(
-            {"base_url": endpoint, "model": tag, "api_key": ""},
-            separators=(",", ":"),
-        )
+        # explicit select_model below keeps the pin unambiguous. The window is
+        # the --ctx-len flm-real was started with (owner 2026-10-21).
+        profile = served_profile(endpoint, tag, context_window=ctx_len)
         # Rollback discipline, the same one the llama.cpp path keeps: a failure
         # after flm-real is up must not leave it running unregistered. Any
         # credential error stops the server and removes the half-written
@@ -525,7 +525,7 @@ class ExecutorModelDeployMixin:
             # both reproduced live on the Z2 (VD-108): its chat template ignores
             # enable_thinking:False, so the Assistant's own _model_answer leaks
             # thinking-out-loud into every reply (leak 3/3 on the deepseek tag,
-            # 0/3 on qwen3.5:4b); and _model_billions("") == 0 makes
+            # 0/3 on qwen3.5:4b); and model_total_billions("") == 0 makes
             # model_capability label the 4B NPU model "Basic local intelligence".
             # Pinning the served tag is what makes the Assistant answer from the
             # NPU model cleanly, so it happens before activation - the credential
@@ -862,11 +862,8 @@ class ExecutorModelDeployMixin:
                     if response.status == 200:
                         endpoint = "http://127.0.0.1:{}/v1".format(port)
                         broker = CredentialBrokerClient()
-                        profile = json.dumps({
-                            "base_url": endpoint,
-                            "model": "",
-                            "api_key": "",
-                        }, separators=(",", ":"))
+                        profile = served_profile(  # owner 2026-10-21: the window it built
+                            endpoint, context_window=compose_served_window(endpoint, runtime))
                         credential = broker.put(
                             "openai-compatible",
                             MANAGED_LOCAL_CREDENTIAL_LABEL.format(model.stem[:48]),

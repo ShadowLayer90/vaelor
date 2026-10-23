@@ -8,11 +8,10 @@ than about assembling completion requests.
 
 from __future__ import annotations
 
-import json
-import urllib.request
 from typing import Any, Dict, Mapping, Optional
 
 from .agent_prompts import LOCAL_SPECIALIST_PROMPT, SPECIALIST_PROMPT
+from .agent_search_planner import _resolve_model
 from .inference_client import chat_completion, inference_timeout, parse_model_object
 from .model_calibration import AGENT_RESULT_SCHEMA
 from .model_profiles import (
@@ -43,14 +42,8 @@ def specialist_review(
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if connection.get("api_key"):
         headers["Authorization"] = "Bearer {}".format(connection["api_key"])
-    model = connection.get("model", "")
-    if not model:
-        request = urllib.request.Request(
-            "{}/models".format(connection["base_url"]), headers=headers
-        )
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            body = json.loads(response.read(1024 * 1024).decode("utf-8"))
-        model = str(body["data"][0]["id"])
+    # The served id, listed the one way every agent path lists it (LESSONS 6).
+    model = str(connection.get("model") or "") or _resolve_model(connection, headers, timeout_seconds)
     local = managed_local_connection(dict(connection))
     # One window, two budgets: see `custom_agent_model.execute_custom_agent`.
     generation_tokens = reasoning_headroom_tokens(
@@ -74,8 +67,8 @@ def specialist_review(
                     "task": task,
                     "appliance_facts": provider_context(
                         context or {},
-                        max_chars=agent_context_chars(
-                            dict(connection), generation_tokens=generation_tokens
+                        max_chars=agent_context_chars(  # the served model's size
+                            {**connection, "model": model}, generation_tokens=generation_tokens
                         ),
                     ),
                 }, connection)},

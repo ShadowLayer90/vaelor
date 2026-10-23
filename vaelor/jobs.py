@@ -24,6 +24,7 @@ from .job_secrets import contains_secret
 from .job_vocabulary import (
     ACTIVE_JOB_STATES,
     ALLOWED_JOB_TYPES,
+    INTERRUPTED_BY_RESTART_CODE,
     JOB_STATES,
     interrupted_message,
     retry_refusal,
@@ -32,12 +33,23 @@ from .job_vocabulary import (
 from .operation_projection import (
     ACTIVE_OPERATION_STATES,
     dismissal_in_force,
+    dismissal_of,
     needs_attention,
-    retry_resolved_ids,
+)
+from .operation_resolution import (
+    job_succeeded,
+    later_run_resolvers,
+    operation_target,
+    retry_resolvers,
 )
 
 
 logger = logging.getLogger(__name__)
+
+#: Why a resolved failure is not retried (review F4).
+ALREADY_RESOLVED = (
+    "This failure was already resolved by a later successful run, so there is nothing to retry."
+)
 
 
 class JobStore:
@@ -247,7 +259,16 @@ class JobStore:
         over it and the owner's dismissal - the one rule (VD-139).
         """
         by_id = {record["id"]: record for record in records}
-        resolved_failures = retry_resolved_ids(records, lambda item: item["operation_state"])
+        state_of = lambda item: item["operation_state"]  # noqa: E731
+        # Only a run that converged resolves: a worker update that ended
+        # "completed" because the worker did not answer changed nothing (F1).
+        retried = retry_resolvers(records, job_succeeded, state_of)
+        # VD-133 1.5.5 #4: a later success of the same operation on the same
+        # target resolves a failure too, retry or not (the worker recheck).
+        later = later_run_resolvers(
+            records, job_succeeded, state_of,
+            lambda item: operation_target(item["type"], item["payload"]))
+        resolved_failures = set(retried)
         for record in records:
             ancestry: list[str] = []
             ancestor = record.get("retry_of")
@@ -264,9 +285,19 @@ class JobStore:
             record["retry_root_id"] = ancestry[-1] if ancestry else record["id"]
         for record in records:
             record["resolved_by_retry"] = record["id"] in resolved_failures
+            kind, resolver = (
+                ("retry", retried[record["id"]]) if record["id"] in retried
+                else ("later_run", later[record["id"]]) if record["id"] in later
+                else ("", None)
+            )
+            # What resolved it and when: shown, never used to hide the row.
+            record["resolution"] = None if resolver is None else {
+                "kind": kind, "by": resolver["id"], "at": resolver["updated_at"]}
+            record["dismissal"] = dismissal_of(record)
             record["needs_attention"] = needs_attention(
                 record["operation_state"],
                 resolved_by_retry=record["resolved_by_retry"],
+                resolved_by_later_run=record["id"] in later,
                 dismissed=dismissal_in_force(record),
             )
         return resolved_failures
@@ -279,26 +310,34 @@ class JobStore:
         from the same read, so the two can never see different rows.
         """
         with closing(self._connect()) as connection:
-            if actor is None:
-                rows = connection.execute(
-                    "SELECT * FROM jobs ORDER BY created_at DESC"
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    "SELECT * FROM jobs WHERE actor=? ORDER BY created_at DESC",
-                    (actor,),
-                ).fetchall()
+            rows = connection.execute(
+                "SELECT * FROM jobs ORDER BY created_at DESC"
+            ).fetchall()
             records = [self._record(row) for row in rows]
             self._attach_revisions(connection, records)
+        # Resolved over the WHOLE ledger, then narrowed to what ``actor`` sees:
+        # an operator's failure that a system recheck fixed is resolved for
+        # them too, as it is for an administrator (VD-133 1.5.5 #4, F6).
         self._retry_lineage(records)
-        return records
+        if actor is None:
+            return records
+        # Who ran the resolving job is not this reader's to learn: the fact
+        # and the time stay, its id is blanked (review F3).
+        owner_of = {record["id"]: record["actor"] for record in records}
+        visible = [record for record in records if record["actor"] == actor]
+        for record in visible:
+            resolution = record.get("resolution")
+            if resolution and owner_of.get(resolution["by"]) != actor:
+                record["resolution"] = {**resolution, "by": ""}
+        return visible
 
     def ledger(self, limit: int = 50, actor: Optional[str] = None) -> Dict[str, Any]:
         """Read rows and counters from one consistent job-ledger snapshot."""
         safe_limit = max(1, min(int(limit), 200))
         records = self.records(actor)
+        # By a successful retry or a later run of the same operation (#4).
         resolved_failures = {
-            record["id"] for record in records if record["resolved_by_retry"]
+            record["id"] for record in records if record["resolution"] is not None
         }
         # #201. This used to be a hand-written five, against the console's six
         # in `frontend/src/lib/operationOwner.ts`. Both were right for the
@@ -315,7 +354,7 @@ class JobStore:
         attention = [record for record in records if record["needs_attention"]]
         retryable = [
             record for record in records
-            if record["retryable"] and not record["resolved_by_retry"]
+            if record["retryable"] and record["resolution"] is None
         ]
         return {
             "jobs": records[:safe_limit],
@@ -424,7 +463,7 @@ class JobStore:
                 )
                 result = {
                     "code": "cancelled_on_restart"
-                    if cancelling else "interrupted_worker",
+                    if cancelling else INTERRUPTED_BY_RESTART_CODE,
                     "recovery": (
                         "No further work was started."
                         if cancelling else
@@ -774,6 +813,11 @@ class JobStore:
         return current is not None and current["state"] == "cancelling"
 
     def retry(self, job_id: str, actor: str, *, allow_all: bool = False) -> Dict[str, Any]:
+        # VD-133 1.5.5 #4 (review F4): a failure a later run already resolved
+        # has nothing left to do; a retry would repeat finished work.
+        settled = next((record for record in self.records() if record["id"] == job_id), None)
+        if settled is not None and settled.get("resolution"):
+            raise ValueError(ALREADY_RESOLVED)
         now = int(time.time() * 1000)
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")  # pairs-with: sqlite-begin-immediate

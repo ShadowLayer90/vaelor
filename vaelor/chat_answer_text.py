@@ -139,3 +139,32 @@ def neutralized_memory(content: str) -> str:
     text = _CITATION_MARKER.sub("[citation removed]", str(content or ""))
     text = _PROMPT_HEADING.sub("(heading removed)", text)
     return " ".join(text.split())
+
+
+#: How much of one answer AI Chat keeps and shows (VD-206: never cut silently).
+ANSWER_KEPT_CHARS = 12000
+
+#: Why the answer a reader sees is not the whole answer, as a turn records it in
+#: ``metadata.cut_off``: the model stopped at its answer-length limit
+#: (``finish_reason: "length"``), or the reply ran past
+#: :data:`ANSWER_KEPT_CHARS` and only the start was kept. The console's note
+#: (`frontend/src/lib/aiChatExport.ts`, ``ANSWER_CUT_OFF_CAUSES``) copies these
+#: two words, pinned by `tests/test_wire_vocabularies.py` ("answer-cut-off").
+#: Found live 2026-10-21: a long cluster answer stopped mid-sentence and read
+#: as finished (VD-133 1.5.5).
+CUT_OFF_CAUSES = ("model_limit", "kept_limit")
+CUT_AT_MODEL_LIMIT, CUT_AT_KEPT_LIMIT = CUT_OFF_CAUSES
+
+
+def answer_cut_off(finish_reason: str, answer: str) -> str:
+    """Why this answer is incomplete, or "" when nothing says it is."""
+    if finish_reason == "length":
+        return CUT_AT_MODEL_LIMIT
+    if len(answer) > ANSWER_KEPT_CHARS:
+        return CUT_AT_KEPT_LIMIT
+    return ""
+
+
+def stored_cut_off(value) -> str:
+    """The ``cut_off`` a stored turn may carry: a cause the runtime reports, else ""."""
+    return value if value in CUT_OFF_CAUSES else ""

@@ -590,6 +590,12 @@ def observe_idle(
     if deployment is None or units.get("engine") != VLLM_ENGINE:
         watch.forget(name)
         return {"idle": False, "reason": "not-vllm"}
+    if _names_uninstalled_machine(cluster_store, deployment):
+        # Owner 2026-10-21 (VD-133 1.5.5 #16): its Load refuses a machine
+        # Vaelor was uninstalled on, so an idle unload here could not be woken
+        # and would take the serving that is left with it.
+        watch.forget(name)
+        return {"idle": False, "reason": "machine-uninstalled"}
     if agent_store is None:
         from .agent_deployments import AgentDeploymentStore
 
@@ -603,6 +609,13 @@ def observe_idle(
     except Exception as error:  # noqa: BLE001 - a bad poll must not kill the watch
         LOGGER.warning("The GPU idle-watch pass did not finish: %s", error)
         return {"idle": False, "reason": "error"}
+
+
+def _names_uninstalled_machine(cluster_store: Any, deployment: Mapping[str, Any]) -> bool:
+    """Whether the record names a machine Vaelor was uninstalled on (`gpu_pool_reload.load_participants`)."""
+    from .worker_profile_state import uninstalled_node_ids
+
+    return bool(uninstalled_node_ids(cluster_store, deployment.get("node_ids") or []))
 
 
 def wake_unloaded_cluster(

@@ -8,21 +8,35 @@ units.
 `maintain-vaelor.sh uninstall` has three modes, each behind a typed
 confirmation (`--help` prints the exact phrases). Every mode stops the
 containers Vaelor runs: the managed application projects, the GPU AI-Chat
-model and the LLM Server proxy. It also stops and removes any GPU-cluster
-(Mode B) serving this node runs - the vLLM servers, Ray workers and gates, the
-model-pull oneshots, and the balancer container - so no LLM is left answering on
-the LAN. A worker node's own replicas and gates are removed by that worker's
-uninstall, not this one.
+model, the LLM Server proxy, the Phoenix trace collector and each custom
+agent's gate. It also stops and removes any GPU-cluster (Mode B) serving this
+node runs - the vLLM servers, Ray workers and gates, the model-pull oneshots,
+and the balancer container - so no LLM is left answering on the LAN. Vaelor's
+containers are found by Vaelor's owner label, or by name when unlabelled and
+outside any Compose project, so a worker, which has no Vaelor runtime, finds its
+own and an owner's Compose app is never taken. A worker node's own replicas and gates are removed by that worker's
+uninstall, not this one. Every mode also turns off GNOME Remote Login (RDP) when
+Vaelor turned it on, and clears the credentials Vaelor stored for it; Remote
+Login set up without Vaelor is left alone.
 
 - **Keep data** (`--confirm uninstall-vaelor-keep-data`): removes the software
   and services; keeps users, credentials, models, workloads, chats, settings
   and every container image, so a reinstall is fast.
 - **Purge data** (`--purge-data`): also deletes all of that, the browser-desktop
-  account (`vaelor-desktop`) with its home, and the container images Vaelor
-  pulled - the two gfx1151 serving images, the LLM Server's nginx and the
-  multi-node vLLM image - by the reference pinned in the installed package
-  (the script asks the venv for the list; it never carries a copy). Images
-  Vaelor did not pull, and Docker itself, stay.
+  account (`vaelor-desktop`) with its home and its AccountsService record,
+  Vaelor's own InfluxDB database (`vaelor`), and the container images Vaelor
+  pulled - the two gfx1151 serving images, the LLM Server's nginx, the
+  multi-node vLLM image, and the Phoenix, web-search and backup-helper images -
+  by the reference pinned in the installed package (the script asks the venv
+  for the list; it never carries a copy). Images Vaelor did not pull, InfluxDB
+  itself and Docker itself stay. On a cluster worker a controller enrolled it
+  is a bare-OS purge (below): the worker goes back to bare OS, by Vaelor's
+  record of what it installed (or the full stack on a worker that has no
+  record) and Docker always - so EVERY container, image and volume on that
+  worker goes, not only Vaelor's. A purge stopped part-way is finished by
+  running it again. Bare OS removes Docker's, containerd's and InfluxDB's data
+  only once each package is really gone, and its last line names anything
+  still installed.
 - **Bare OS** (`--purge-data --bare-os`): also removes the OS stack the
   installer added - Docker and containerd with both image stores
   (`/var/lib/docker` and `/var/lib/containerd`, so *every* container image on

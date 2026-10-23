@@ -31,7 +31,7 @@ from .agent_pool_operations import AGENT_ENDPOINT_PREFIX
 from .agent_reconcile import apply_agent_endpoint_keys
 from .api_cluster_agent_routes import agent_store_from
 from .chat_inference import ChatInference, ChatInferenceError
-from .credential_broker import CREDENTIAL_NOT_FOUND, CredentialError
+from .credential_broker import CREDENTIAL_NOT_FOUND, WEB_SEARCH_PROVIDER, CredentialError
 from .credential_listing import (
     ASSISTANT_KEY_IN_USE, MODEL_SET_BY_VAELOR,
     connection_listing, delete_refusal, read_references, resting_test_answer,
@@ -44,6 +44,7 @@ from .inference_gateway import cluster_model_rest_state
 from .llm_server_state import LLM_SERVER_ENDPOINT_ID, enqueue_apply
 
 LOGGER = logging.getLogger(__name__)
+WEB_SEARCH_KEY_ELSEWHERE = "Add or replace the web search key under Settings > Connections > Web search key."
 
 
 def register_credential_routes(context: ApiContext) -> None:
@@ -240,6 +241,11 @@ def register_credential_routes(context: ApiContext) -> None:
                 status=503,
             )
         body = request.get_json(silent=True) or {}
+        if str(body.get("provider", "")).strip().lower() == WEB_SEARCH_PROVIDER:
+            # VD-222 item 2: the web search key is stored, replaced and removed
+            # only by its own routes, which check its shape and update the
+            # search service; here it would bypass both (adversarial F5).
+            return _payload(error={"code": "invalid_credential", "message": WEB_SEARCH_KEY_ELSEWHERE}, status=400)
         credential = None
         replacement = None
 

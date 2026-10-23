@@ -1,4 +1,8 @@
+import { useEffect, useState } from "react";
 import type { Device, Health, Metrics } from "../types";
+import { apiRequest } from "../lib/api";
+import { updatePill } from "../lib/upgradeState";
+import type { UpgradeStatus } from "./SystemUpdatePanel";
 import { formatPercent, formatQuantity, formatTemperature, timeAgo } from "../lib/format";
 import { gpuTemperature } from "../lib/gpuTemperature";
 import {
@@ -223,6 +227,24 @@ function workerRows(summary: HomeSummary): MachineRow[] {
   });
 }
 
+/**
+ * This controller's update status, read once when Home opens: the same read
+ * and words as System › Update Vaelor (`updatePill`). Once, not polled - the
+ * read asks the release source, which rate-limits. null while unread or
+ * when it could not be read; "Not compared" is not shown here, the version is.
+ */
+function useControllerUpdate(): { label: string; tone: "success" | "info" | "neutral" } | null {
+  const [pill, setPill] = useState<ReturnType<typeof updatePill> | null>(null);
+  useEffect(() => {
+    let live = true;
+    apiRequest<UpgradeStatus>("/upgrade", { cache: "no-store" })
+      .then((status) => { if (live) { const read = updatePill(status); setPill(read.label === "Not compared" ? null : read); } })
+      .catch(() => { if (live) setPill(null); });
+    return () => { live = false; };
+  }, []);
+  return pill;
+}
+
 export function HomeMachines({
   device,
   live,
@@ -236,6 +258,7 @@ export function HomeMachines({
   metrics: Metrics;
   summary: HomeSummary;
 }) {
+  const update = useControllerUpdate();
   const clustered = summary.cluster.state === "ok" && summary.cluster.data.controller?.initialized === true;
   // The role is the cluster's to say: unread, it is "Not read", never "Standalone" (LESSONS 8).
   const role = summary.cluster.state === "ok" ? (clustered ? "Controller" : "Standalone")
@@ -254,7 +277,10 @@ export function HomeMachines({
     gpuFraction: gtt !== null && gttTotal ? gtt / gttTotal : null,
     gpu: gtt !== null && gttTotal ? `${formatQuantity(gtt, "used")} / ${formatQuantity(gttTotal, "capacity")}` : machine.capabilities.gpu.available ? NOT_READ : "No GPU",
     temperature: live && metricNumber(metrics, "cpu_temperature") !== null ? formatTemperature(metrics.cpu_temperature) : NOT_READ,
-    software: device?.version ? { label: `Vaelor ${device.version}`, tone: "neutral" } : { label: NOT_READ, tone: "neutral", reading: "unread" },
+    // The update status, as a worker's row says its software status; the
+    // version stays the fallback while the status is unread (VD-133 1.5.5).
+    software: update ? { label: update.label, tone: update.tone }
+      : device?.version ? { label: `Vaelor ${device.version}`, tone: "neutral" } : { label: NOT_READ, tone: "neutral", reading: "unread" },
   };
   const rows = [self, ...workerRows(summary)];
   return (

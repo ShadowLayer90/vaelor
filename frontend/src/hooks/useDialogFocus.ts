@@ -1,4 +1,4 @@
-import { type RefObject, useEffect, useRef } from "react";
+import { type RefObject, useLayoutEffect, useRef } from "react";
 
 const FOCUSABLE_SELECTOR = [
   "button:not([disabled])",
@@ -145,7 +145,16 @@ export function useDialogFocus({
   const onEscapeRef = useRef(onEscape);
   onEscapeRef.current = onEscape;
 
-  useEffect(() => {
+  /*
+   * A layout effect, not a passive one (owner 2026-10-21 follow-up list,
+   * LESSONS 23). The dialog leaves the document in React's commit; a passive
+   * effect's clean-up runs in a later task, so for that gap the page behind a
+   * closed dialog stayed aria-hidden and inert and a click on it was
+   * swallowed. It surfaced as an "intermittent" EndpointsPanel test whose
+   * second Revoke button could not be found. Hiding and giving back the page
+   * now happen in the same commit that adds and removes the dialog.
+   */
+  useLayoutEffect(() => {
     if (!active) return;
     const root = containerRef.current;
     if (!root) return;

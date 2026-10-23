@@ -13,6 +13,11 @@ import time
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
+from .operation_resolution import (  # noqa: F401 - re-exported, VD-139's readers import them here
+    RETRY_RESOLVABLE_STATES, RETRY_RESOLVING_STATES, later_run_resolvers, retry_resolved_ids,
+    retry_resolvers,
+)
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -89,49 +94,25 @@ ACTIVITY_BUCKETS = (ACTIVITY_IN_PROGRESS, ACTIVITY_ATTENTION, ACTIVITY_FINISHED)
 #: an operation Vaelor cannot read is not known to be fine, so it is counted
 #: rather than quietly left out (review nit on VD-139).
 ATTENTION_STATES = frozenset({"failed", "needs_approval", "paused", "unknown"})
-#: A later attempt in one of these states resolves the failures it retried.
-RETRY_RESOLVING_STATES = frozenset({"completed", "healthy"})
-#: The states a retry can resolve (the ones an operation is retried from).
-RETRY_RESOLVABLE_STATES = frozenset({"failed", "cancelled"})
 
-
-def needs_attention(state: str, *, resolved_by_retry: bool = False, dismissed: bool = False) -> bool:
+def needs_attention(
+    state: str, *, resolved_by_retry: bool = False, dismissed: bool = False,
+    resolved_by_later_run: bool = False,
+) -> bool:
     """THE answer to "does this operation need the owner?" (VD-139).
 
     ``state`` is the canonical operation state; ``resolved_by_retry`` is
-    whether a later successful attempt retried it (:func:`retry_resolved_ids`);
-    ``dismissed`` is whether the owner dismissed it. Whether a retry is even
-    possible plays no part: a failure that cannot be retried (a destructive
-    recovery, say) is cleared by a dismissal.
+    whether a later successful attempt retried it (`operation_resolution`);
+    ``resolved_by_later_run`` whether a later successful run of the same
+    operation on the same target settled it (`operation_resolution`,
+    VD-133 1.5.5 #4); ``dismissed`` is whether the owner dismissed it. Whether
+    a retry is even possible plays no part: a failure that cannot be retried
+    (a destructive recovery, say) is cleared by a dismissal.
     """
-    return state in ATTENTION_STATES and not resolved_by_retry and not dismissed
-
-
-def retry_resolved_ids(records: Any, state_of: Any) -> set:
-    """The ids of every record a later SUCCESSFUL attempt retried, transitively.
-
-    ``records`` carry ``id`` and ``retry_of``; ``state_of(record)`` is its
-    canonical state. Each record in :data:`RETRY_RESOLVING_STATES` resolves
-    every ancestor on its ``retry_of`` chain that is in
-    :data:`RETRY_RESOLVABLE_STATES`. An attempt still running, or one that
-    failed too, resolves nothing. Ancestors outside ``records`` end the walk.
-    """
-    by_id = {str(record["id"]): record for record in records}
-    resolved: set = set()
-    for record in records:
-        if state_of(record) not in RETRY_RESOLVING_STATES:
-            continue
-        ancestor = record.get("retry_of")
-        visited: set = set()
-        while ancestor and str(ancestor) not in visited:
-            visited.add(str(ancestor))
-            prior = by_id.get(str(ancestor))
-            if prior is None:
-                break
-            if state_of(prior) in RETRY_RESOLVABLE_STATES:
-                resolved.add(str(prior["id"]))
-            ancestor = prior.get("retry_of")
-    return resolved
+    return (
+        state in ATTENTION_STATES and not resolved_by_retry
+        and not resolved_by_later_run and not dismissed
+    )
 
 
 def dismissal_in_force(record: Dict[str, Any]) -> bool:
@@ -155,8 +136,12 @@ def dismissal_in_force(record: Dict[str, Any]) -> bool:
     )
 
 
-def _dismissal(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Who dismissed this attention item and when, while that dismissal holds."""
+def dismissal_of(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Who dismissed this attention item and when, while that dismissal holds.
+
+    ``dismissed_at`` is epoch SECONDS (`JobStore.dismiss`), unlike a job's
+    own millisecond timestamps; the console multiplies it.
+    """
     if not dismissal_in_force(record):
         return None
     return {"dismissed_at": record.get("dismissed_at"), "dismissed_by": str(record.get("dismissed_by") or "")}
@@ -451,7 +436,12 @@ def _task_owner(record: Dict[str, Any]) -> tuple[str, Optional[str]]:
 
 def _error(record: Dict[str, Any], state: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
     result = record.get("result") if isinstance(record.get("result"), dict) else {}
-    message = str(record.get("error") or result.get("message") or "")[:2000]
+    # A run that ended well (`RETRY_RESOLVING_STATES`) has no error: its
+    # result's sentence is its outcome, carried as `message` and `result`.
+    # Filing it here made the console read "Finished" and "This operation
+    # needs attention." about one job (owner 2026-10-21 follow-up list).
+    message = "" if state in RETRY_RESOLVING_STATES else str(
+        record.get("error") or result.get("message") or "")[:2000]
     recoverable = state in {"failed", "waiting", "needs_approval", "paused", "cancelled"}
     error = {
         "code": str(result.get("code", "operation_failed" if message else ""))[:120],
@@ -520,11 +510,14 @@ def project_job(
     state = _job_state(record)
     route, resource = _job_owner(record)
     raw_state = str(record.get("state", ""))
+    resolution = record.get("resolution") if isinstance(record.get("resolution"), dict) else None
     permissions = {
         "cancel": raw_state not in {"completed", "healthy", "failed", "rejected", "cancelled", "superseded"},  # vocabulary: terminal-state
+        # VD-133 1.5.5 #4: a failure a later run resolved has nothing to retry.
         "retry": (
             (raw_state == "failed" and state == "failed") or raw_state == "cancelled"
-        ) and record.get("retryable", True) is not False,  # CR1: job_projection decides
+        ) and record.get("retryable", True) is not False  # CR1: job_projection decides
+        and resolution is None,
         "resume": False,
         "discard": False,
     }
@@ -574,7 +567,16 @@ def project_job(
             bool(record["needs_attention"]) if "needs_attention" in record
             else needs_attention(state, dismissed=dismissal_in_force(record))
         ),
-        "dismissal": _dismissal(record),
+        "dismissal": dismissal_of(record),
+        # VD-133 1.5.5 #4: what resolved this failure and when (epoch ms),
+        # attached by `JobStore.records`; the record keeps its state.
+        "resolution": None if resolution is None else {
+            "kind": str(resolution.get("kind", "")),
+            "by_operation_id": (operation_id(LEDGER_JOBS, str(resolution["by"]))
+                                if resolution.get("by") else ""),  # blank: another account's job
+            "at": resolution.get("at"),
+        },
+        "interrupted_by_restart": bool(record.get("interrupted_by_restart")),
     }
     operation["action_endpoints"] = _endpoints(op_id, permissions)
     operation["endpoints"] = operation["action_endpoints"]
@@ -651,7 +653,9 @@ def project_agent_task(
         "needs_attention": attention if attention is not None else needs_attention(
             state, dismissed=dismissal_in_force(record),
         ),
-        "dismissal": _dismissal(record),
+        "dismissal": dismissal_of(record),
+        "resolution": None,  # a task is resolved only by its retry (#4)
+        "interrupted_by_restart": False,
     }
     operation["action_endpoints"] = _endpoints(op_id, permissions)
     operation["endpoints"] = operation["action_endpoints"]
@@ -841,9 +845,13 @@ class OperationProjection:
             record["events"] = self.job_store.events(source_id, actor=actor) if detail else []
             source = self.job_store.list(200, actor=actor)
             by_id = {str(item["id"]): item for item in source}
+            # Verdict and resolution from one read of the ledger, as the list's (#4).
+            ledger_row = next(
+                (item for item in self.job_store.records(actor) if str(item["id"]) == source_id), {})
+            record["resolution"] = ledger_row.get("resolution")
             return project_job(
                 record, by_source_id=by_id, detail=detail,
-                attention=self._verdict(ledger, source_id, actor),
+                attention=bool(ledger_row.get("needs_attention")),
             )
         if self.agent_task_store is None:
             raise OperationNotFound(value)
@@ -915,7 +923,8 @@ class OperationProjection:
 __all__ = [
     "ACTIVITY_ATTENTION", "ACTIVITY_BUCKETS", "ACTIVITY_FINISHED",
     "ACTIVITY_IN_PROGRESS", "ATTENTION_STATES", "activity_bucket",
-    "dismissal_in_force", "needs_attention", "retry_resolved_ids",
+    "dismissal_in_force", "dismissal_of", "later_run_resolvers", "needs_attention",
+    "retry_resolved_ids", "retry_resolvers",
     "CANONICAL_STATES", "LEDGER_AGENT_TASKS", "LEDGER_JOBS", "LEDGERS",
     "OPERATION_SCHEMA", "OPERATION_STALE_AFTER_SECONDS", "STALE_REPORTING_STATES",
     "OperationActionError", "OperationNotFound",

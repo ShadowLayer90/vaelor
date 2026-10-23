@@ -63,14 +63,61 @@ SOURCE_NONE = ""
 #: dormant enough to hide when the name is container plumbing.
 _STATE_UP = "up"
 
-#: A per-container Docker bridge is ``br-`` followed by the first twelve hex
-#: characters of the network id. This matches only that shape, never a
-#: physical NIC that happens to start with ``br``.
-_DOCKER_BRIDGE = re.compile(r"^br-[0-9a-f]{12}$")
+#: The names container runtimes, Kubernetes networking and desktop
+#: hypervisors give the software links that join this machine to its own
+#: containers and VMs: Docker (``docker0``, ``docker_gwbridge``, and ``br-``
+#: plus the first twelve hex digits of a network id - that exact shape, so an
+#: owner's ``br-lan`` is not matched), ``veth`` pair halves, libvirt, LXC/LXD,
+#: Incus, Podman, nerdctl, CNI, flannel, Cilium, kube-router, VirtualBox and
+#: VMware host-only links. **The one list** (VD-133 1.5.5 #1, adversarial review
+#: F4, LESSONS 6): the console certificate, the address the remote console
+#: offers, the interface card and the Assistant's network view all read it.
+PLUMBING_NAME = re.compile(
+    r"(?:docker0|docker_gwbridge|br-[0-9a-f]{12}|veth\w+|virbr\d+(?:-nic)?"
+    r"|lxdbr\d+|lxcbr\d+|incusbr\d+|podman\d+|nerdctl\d+|cni[-\w]*|cbr0"
+    r"|flannel[.\w]*|cilium_\w+|kube-bridge|vboxnet\d+|vmnet\d+)")
+
+#: Where the kernel lists network interfaces.
+NET_CLASS = Path("/sys/class/net")
+
+
+def is_plumbing_name(name: str) -> bool:
+    """Whether ``name`` (``eth0@if5`` forms included) is a plumbing name.
+
+    The name alone, for a caller describing interfaces it cannot look up in
+    this machine's ``/sys`` (another machine's inventory). Anything that can
+    look should ask :func:`is_host_plumbing`.
+    """
+    return bool(PLUMBING_NAME.fullmatch(str(name or "").split("@", 1)[0]))
+
+
+def has_hardware_device(name: str, net_class: Path = NET_CLASS) -> bool:
+    """Whether the kernel ties network interface ``name`` to a hardware device.
+
+    The rule is the kernel's own: a NIC backed by a device - Ethernet, Wi-Fi,
+    a Thunderbolt network link, a USB adapter - has a ``device`` link under
+    ``/sys/class/net/<name>``; a software interface does not.
+    """
+    device = str(name or "").split("@", 1)[0]
+    if not device or device in {".", "..", "lo"} or "/" in device:
+        return False
+    return (Path(net_class) / device / "device").exists()
+
+
+def is_host_plumbing(name: str, net_class: Path = NET_CLASS) -> bool:
+    """Container or VM plumbing: a plumbing NAME on a SOFTWARE link.
+
+    Both are required. The name alone would catch a physical NIC someone
+    named ``veth0``; "software link" alone would catch an owner's ``br0``,
+    ``bond0``, VLAN or WireGuard link, which carry addresses people reach this
+    machine on.
+    """
+    return is_plumbing_name(name) and not has_hardware_device(name, net_class)
 
 
 def _is_hidden_plumbing(
     name: str, state: str, addresses: List[Dict[str, Any]],
+    net_class: Path = NET_CLASS,
 ) -> bool:
     """True for inactive container plumbing that only clutters the card.
 
@@ -80,20 +127,14 @@ def _is_hidden_plumbing(
     buried its single physical port under sixteen dead ``br-*``. None of these
     is a NIC an operator reasons about, so an inactive one is dropped.
 
-    The filter is deliberately narrow in NAME - only ``br-<12 hex>``, ``veth*``
-    and ``docker0`` qualify, never a physical NIC - and hides such plumbing only
-    while its operstate is not ``up``. A Docker bridge keeps its gateway address
+    What counts as plumbing is :func:`is_host_plumbing` - never a physical NIC -
+    and such plumbing is hidden only while its operstate is not ``up``. A Docker bridge keeps its gateway address
     (``172.x.0.1``) whether or not a container uses it, so the address is not a
     sign of life here: a bridge actually carrying containers reads ``up`` and
     stays visible, while a dormant or orphaned one (the sixteen dead ``br-*``) is
     dropped despite its address.
     """
-    is_plumbing = (
-        bool(_DOCKER_BRIDGE.match(name))
-        or name.startswith("veth")
-        or name == "docker0"
-    )
-    if not is_plumbing:
+    if not is_host_plumbing(name, net_class):
         return False
     # A Docker bridge (br-<hex>, docker0) ALWAYS carries a gateway address
     # (172.x.0.1) even when it is orphaned and down, so an address is not a sign
@@ -190,7 +231,7 @@ def _from_ip_json(payload: Any, net_class: Path) -> List[Dict[str, Any]]:
              "prefix": info.get("prefixlen")}
             for info in list(item.get("addr_info", []))[:16]
         ]
-        if _is_hidden_plumbing(name, state, addresses):
+        if _is_hidden_plumbing(name, state, addresses, net_class):
             continue
         stats = net_class / name / "statistics"
         interfaces.append({
@@ -222,7 +263,7 @@ def _from_sysfs(net_class: Path, proc_root: Path) -> List[Dict[str, Any]]:
         name = entry.name
         state = (_text(entry / "operstate") or "unknown").lower()
         addresses = _ipv4_address(name) + ipv6.get(name, [])
-        if _is_hidden_plumbing(name, state, addresses):
+        if _is_hidden_plumbing(name, state, addresses, net_class):
             continue
         stats = entry / "statistics"
         interfaces.append({

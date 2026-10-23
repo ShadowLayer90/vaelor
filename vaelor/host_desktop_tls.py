@@ -98,6 +98,12 @@ def _routed_address() -> str:
         probe.close()
 
 
+def routed_address() -> str:
+    """The address the default route leaves from, or "" (public form of
+    :func:`_routed_address`, for the console address the trust steps name)."""
+    return _routed_address()
+
+
 def _search_domains() -> List[str]:
     """The domains this host's resolver appends to a short name.
 

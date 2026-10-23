@@ -828,6 +828,9 @@ export interface ClusterModel {
   in_use_known?: boolean;
   /** VD-214: set on a draft model's row - the models it drafts for. */
   draft_model_for?: string[];
+  /** VD-133 1.5.5 #9: false on a row known only from the deployment serving
+   *  from it - the weights are there, their size was never measured. */
+  size_known?: boolean;
 }
 
 /** One node's slice of the library: what it holds and how much root space is
@@ -837,6 +840,8 @@ export interface ClusterModelNode {
   name: string;
   root_free_bytes: number;
   cached_bytes: number;
+  /** How many of `models` have no recorded size, so `cached_bytes` leaves them out. */
+  sizes_unrecorded?: number;
   models: ClusterModel[];
 }
 

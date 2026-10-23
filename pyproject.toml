@@ -72,6 +72,16 @@ vaelor = ["www_v2/**/*", "appliance_units/*.service", "build_stamp.json", "worke
   "SECURITY.md",
   "SUPPORT.md",
 ]
+# What the installer and uninstaller of THIS release read from their own folder
+# (release_snapshot.PAYLOAD), so a console update can refresh
+# /usr/lib/vaelor/release from the wheel it installs (vaelor/release_snapshot.py).
+"share/vaelor/release" = [
+  "deploy/install-vaelor.sh",
+  "deploy/maintain-vaelor.sh",
+  "deploy/fetch-npu-model.sh",
+  "deploy/amdrocm-keyring.gpg",
+  "requirements-release.txt",
+]
 
 [tool.setuptools.dynamic]
 version = {attr = "vaelor.__version__"}

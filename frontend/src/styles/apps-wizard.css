@@ -106,6 +106,7 @@
 }
 
 .apps-wizard__inset--danger { border-color: var(--danger-border); }
+.apps-wizard__inset--warning { border-color: var(--warning-border); background: var(--warning-soft); }
 
 .apps-wizard__current-head {
   display: flex;

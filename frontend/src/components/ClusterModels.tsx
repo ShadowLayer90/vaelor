@@ -4,8 +4,8 @@ import { ClusterCard, OptionCard } from "./ClusterPrimitives";
 import { Icon } from "./Icon";
 import { StatusPill } from "./StatusPill";
 import { apiRequest } from "../lib/api";
-import { formatBytes } from "../lib/format";
-import type { ClusterModel, ClusterModelInventory, FleetNode } from "./fleetTypes";
+import { formatBytes, formatQuantity } from "../lib/format";
+import type { ClusterModel, ClusterModelInventory, ClusterModelNode, FleetNode } from "./fleetTypes";
 import type { Session } from "../types";
 
 const STATE_TONE: Record<string, StatusTone> = {
@@ -75,6 +75,18 @@ function weightsUse(model: ClusterModel): { pill: { label: string; tone: StatusT
       + ". Remove that deployment before removing these weights.",
     blocked: "in-use",
   };
+}
+
+/**
+ * A machine's cached total. VD-133 1.5.5 #9: weights known only from the
+ * deployment serving from them have no measured size, so the total leaves
+ * them out and says how many it left out, rather than reading "0 B".
+ */
+function cachedSummary(node: ClusterModelNode): string {
+  const unknown = node.sizes_unrecorded ?? 0;
+  const unknownText = `${unknown} ${unknown === 1 ? "model" : "models"} of unknown size`;
+  if (!unknown) return `${formatBytes(node.cached_bytes)} cached`;
+  return node.cached_bytes ? `${formatBytes(node.cached_bytes)} cached, plus ${unknownText}` : unknownText;
 }
 
 export function ClusterModels({ session, pullTargets, reloadKey, onPull, onRemove }: ClusterModelsProps) {
@@ -183,7 +195,7 @@ export function ClusterModels({ session, pullTargets, reloadKey, onPull, onRemov
           <article className="cl-lib-node" key={node.node_id}>
             <header>
               <h3>{node.name}</h3>
-              <span className="cl-meta">{formatBytes(node.cached_bytes)} cached · {formatBytes(node.root_free_bytes)} free</span>
+              <span className="cl-meta">{cachedSummary(node)} · {formatBytes(node.root_free_bytes)} free</span>
             </header>
             {node.models.length ? (
               <ul className="cl-lib-models">
@@ -197,11 +209,18 @@ export function ClusterModels({ session, pullTargets, reloadKey, onPull, onRemov
                           <span>{modelLabel(model)}</span>
                           {" · "}
                           <span>
-                            {model.state === "ready"
-                              ? formatBytes(model.bytes_on_disk ?? 0)
-                              : model.message || model.state}
+                            {model.state !== "ready"
+                              ? model.message || model.state
+                              : model.size_known === false
+                                ? "size not known"
+                                : formatQuantity(model.bytes_on_disk ?? 0, "model")}
                           </span>
                         </span>
+                        {model.state === "ready" && model.size_known === false && model.message ? (
+                          // VD-133 1.5.5 #9: listed from the deployment serving
+                          // from these weights; the backend says why no size.
+                          <span>{model.message}</span>
+                        ) : null}
                         {model.draft_model_for?.length ? (
                           // VD-214: the library fetches a model's draft model
                           // beside it, so its row says what it is for.

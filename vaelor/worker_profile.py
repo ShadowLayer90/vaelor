@@ -71,6 +71,13 @@ FILE, UNIT, DIRECTORY, PREREQUISITE, MODULE_CONF, PACKAGE, MARKER = (
 #: Where the controller-written fence lives (design §2.1 item 6). P2 writes it.
 MARKER_PATH = telemetry.CONFIG_DIR + "/worker-profile.json"
 
+#: The record a worker's own uninstall leaves beside the marker (owner
+#: 2026-10-21, VD-194 / VD-133 1.5.5 #16): positive evidence that Vaelor was
+#: uninstalled there on purpose, so the controller stops repairing it. Kept by a
+#: keep-data uninstall, gone with the rest of /etc/vaelor on a purge.
+#: `deploy/maintain-vaelor.sh` retypes it and a test compares the two.
+UNINSTALLED_PATH = telemetry.CONFIG_DIR + "/worker-uninstalled.json"
+
 #: The appliance's state root and its model cache (design §2.1 item 2).
 STATE_ROOT = "/var/lib/vaelor"
 MODELS_ROOT = STATE_ROOT + "/models"

@@ -1,4 +1,6 @@
 import type { PerformanceSummary } from "../lib/performanceLine";
+import type { AnswerCutOff } from "../lib/aiChatExport";
+import type { AiChatWebSearchRecord } from "./AiChatWebSearch";
 
 export interface AiChatConnection {
   id: string;
@@ -17,9 +19,11 @@ export interface AiChatConnection {
    * How that was decided, from `vaelor.chat_connections.connection_locality`:
    * `vaelor-managed` (a credential Vaelor minted for its own deploy),
    * `loopback-address` (on this machine, but not one Vaelor deployed), or
-   * `remote`. Only the first proves the appliance is serving the model itself.
+   * `remote`, `vaelor-cluster` (the GPU cluster Vaelor deployed: prompts go to
+   * its machines on the owner's network, `local` stays null), or `unknown`.
+   * Only the first proves the appliance is serving the model itself.
    */
-  local_source?: "vaelor-managed" | "loopback-address" | "remote" | "unknown" | string;
+  local_source?: "vaelor-managed" | "loopback-address" | "remote" | "vaelor-cluster" | "unknown" | string;
   /** The one-sentence reason behind `local`, written by the backend. */
   local_reason?: string;
 }
@@ -49,6 +53,8 @@ export interface AiChatCitation {
   document: string;
   chunk: number;
   excerpt: string;
+  /** A web page's address, on a citation Web search supplied (VD-221). */
+  url?: string;
 }
 
 export interface AiChatAgentGrantOperation {
@@ -106,6 +112,17 @@ export interface AiChatMessage {
     failed_model?: string;
     /** The thinking summary the provider returned (VD-209 item 4), if any. */
     thinking?: AiChatThinking;
+    /**
+     * VD-221: the web search behind this answer, or - on a reply Vaelor wrote
+     * instead of a guess - which state Web search was in ("off", "unavailable").
+     */
+    web_search?: AiChatWebSearchRecord | string;
+    /**
+     * VD-206: why this answer stopped before its end - the model's
+     * answer-length limit, or the 12,000 characters AI Chat keeps
+     * (`ANSWER_CUT_OFF_CAUSES`). Absent on a finished answer.
+     */
+    cut_off?: AnswerCutOff;
   };
 }
 
@@ -150,6 +167,8 @@ export interface AiChatConversation {
   collections: string[];
   updated_at: number;
   archived: boolean;
+  /** VD-221: whether this chat's Web search toggle was left on. Older chats: absent, off. */
+  web_search?: boolean;
 }
 
 /** VD-210: what clustering means for the picker - which row is the cluster, which are held. */

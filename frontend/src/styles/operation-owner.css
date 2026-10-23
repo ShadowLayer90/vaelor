@@ -122,6 +122,12 @@
   overflow-wrap: anywhere;
 }
 
+/* VD-133 1.5.5 #4: a failure the server says is resolved or dismissed - a
+   standing note, not an alert, wrapping like the error it replaces. */
+.operation-owner__settled {
+  overflow-wrap: anywhere;
+}
+
 .operation-owner__correction,
 .operation-owner__result {
   min-width: 0;

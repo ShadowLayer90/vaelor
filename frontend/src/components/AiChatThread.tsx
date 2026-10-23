@@ -2,10 +2,11 @@ import { type ReactNode, useRef, useState } from "react";
 import { useFollowScroll } from "../hooks/useFollowScroll";
 import type { AiChatCitation, AiChatMessage } from "./aiChatTypes";
 import { modelDisplayName } from "../lib/modelIdentity";
-import { modelThatWrote, writtenByVaelor } from "../lib/aiChatExport";
+import { answerCutOffNote, modelThatWrote, writtenByVaelor } from "../lib/aiChatExport";
 import { performanceLine } from "../lib/performanceLine";
 import { AiChatMarkdown } from "./AiChatMarkdown";
 import { AiChatThought } from "./AiChatThinking";
+import { citationLink, citationSite, webSearchLabel } from "./AiChatWebSearch";
 import { Icon, ICON_SIZE } from "./Icon";
 import { Button, Textarea } from "./ui";
 
@@ -212,8 +213,13 @@ export function AiChatThread({
         // The trailing turn while an answer is still arriving. Its final-state
         // controls and byline facts are withheld until the turn actually completes.
         const pendingTail = answerPending && index === messages.length - 1;
-        const retrieval = !isUser && !pendingTail ? retrievalLabel(message.retrieval) : "";
+        const searchedWeb = !isUser && !pendingTail ? webSearchLabel(message.metadata) : ""; // VD-221
+        // "Answered from model knowledge only" is untrue of an answer that read web pages.
+        const retrieval = !isUser && !pendingTail && !(searchedWeb.startsWith("Searched") && !message.retrieval?.searched)
+          ? retrievalLabel(message.retrieval) : "";
         const performance = !isUser && !pendingTail ? performanceLine(message.metadata?.performance) : "";
+        // VD-206: an answer that stopped early says so under it, never passing for finished.
+        const cutOff = !isUser && !pendingTail ? answerCutOffNote(message.metadata?.cut_off) : "";
         /*
          * A question whose answer never arrived is the one turn that most
          * needs a retry, and it was the one turn with no action on it. The
@@ -228,7 +234,7 @@ export function AiChatThread({
               <header className="ai-chat-turn__byline">
                 <span aria-hidden="true" className="ai-chat-turn__mark">V</span>
                 <strong>Vaelor AI</strong>
-                <span>{[author, retrieval, performance].filter(Boolean).join(" · ")}</span>
+                <span>{[author, searchedWeb, retrieval, performance].filter(Boolean).join(" · ")}</span>
               </header>
             )}
             {isEditing ? (
@@ -259,6 +265,7 @@ export function AiChatThread({
               <div className="ai-chat-turn__bubble">
                 {isUser ? <p>{message.content}</p> : <AiChatMarkdown content={message.content} />}
               </div>
+              {cutOff && <p className="ai-chat-turn__cut-off" role="note">{cutOff}</p>}
               </>
             )}
             {!isEditing && !pendingTail && (
@@ -268,8 +275,11 @@ export function AiChatThread({
                     <summary>{plural(cited.length, "cited source")}</summary>
                     {cited.map((citation) => (
                       <blockquote key={citation.id}>
-                        <strong>{citation.document} · chunk {citation.chunk}</strong>
-                        <span>{citation.collection}</span>
+                        {citationLink(citation.url) ? (
+                          // A web page Web search read (VD-221): its title links to it.
+                          <strong><a href={citationLink(citation.url)} rel="noopener noreferrer" target="_blank">{citation.document}</a></strong>
+                        ) : <strong>{citation.document} · chunk {citation.chunk}</strong>}
+                        <span>{citationSite(citation.url) || citation.collection}</span>
                         <p>{citation.excerpt}</p>
                       </blockquote>
                     ))}

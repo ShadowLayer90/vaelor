@@ -98,6 +98,9 @@ _QUERY_STOPWORDS = frozenset({
     "spin", "stream", "the", "them", "then", "their", "to", "together", "up",
     "us", "using", "via", "want", "we", "will", "with", "would",
 })
+#: Public name for the one filler-word list (also used by the reviewed-app
+#: matcher in application_research_workflow, VD-222 live).
+QUERY_STOPWORDS = _QUERY_STOPWORDS
 # Interrogative openers. A message that opens with one (or ends with "?") and
 # carries no direct imperative deploy verb is a question, not a change request:
 # "Can I host a media server?" must decline cleanly rather than mint the
@@ -455,6 +458,16 @@ def normalize_manifest(raw: Any) -> Dict[str, Any]:
         },
         "sources": sources,
     }
+    provenance = raw.get("provenance")
+    if isinstance(provenance, dict):
+        # VD-222: where the image came from and every warning, shown on review.
+        normalized["provenance"] = {
+            "image_source": _text(provenance.get("image_source"), "the image source", 300),
+            "warnings": [
+                _text(item, "a research warning", 300)
+                for item in list(provenance.get("warnings") or [])[:4]
+            ],
+        }
     services = {image["service"] for image in images}
     for item in ports + volumes + variables:
         if item["service"] not in services:

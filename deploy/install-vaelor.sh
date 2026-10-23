@@ -101,8 +101,9 @@ usage() {
   cat <<'EOF'
 Usage: install-vaelor.sh [--wheel FILE] [options]
   --wheel FILE         Versioned Vaelor wheel to install. Optional: when omitted,
-                       the installer finds a single vaelor_control_plane-*.whl in
-                       the current directory, beside this script, or in your home.
+                       the installer downloads the release wheel. A wheel file
+                       lying in the current folder, beside this script or in
+                       your home is never used unless it is named here.
   --wheelhouse DIR     Offline dependency wheel directory
   --unattended         Do not prompt; provision the full stack non-interactively
   --with-docker        Install Docker (the default; kept for compatibility)
@@ -212,7 +213,10 @@ leave_worker_role_now() {
   if command -v apt-mark >/dev/null 2>&1; then
     apt-mark unhold amdrocm-amdsmi7.14 amdrocm-sysdeps7.14 >/dev/null 2>&1 || true
   fi
-  rm -f "${WORKER_PROFILE_MARKER}"
+  # The record a worker's own uninstall leaves (worker_profile.UNINSTALLED_PATH,
+  # VD-133 1.5.5 #16) goes too: this machine is a full appliance from here,
+  # and its old controller must read it as one, not as uninstalled.
+  rm -f "${WORKER_PROFILE_MARKER}" /etc/vaelor/worker-uninstalled.json
   echo "The worker profile was taken off this machine; installing the full appliance."
 }
 
@@ -239,42 +243,14 @@ refuse_full_install_on_worker() {
 }
 refuse_full_install_on_worker
 
-# Find the wheel so a person does not have to cd into the clone and read out its
-# path. When --wheel was not given, look where the release wheel is likely to
-# sit: the directory the installer was run from, the installer's own directory
-# and the repo root, and the invoking user's home (sudo resets HOME to /root, so
-# resolve SUDO_USER's real home). Exactly one match is used; several is ambiguous
-# and asks for --wheel, and none prints where to put it. This keeps --wheel FILE
-# working unchanged for anyone who wants to name a specific build.
-if [[ -z "${wheel}" ]]; then
-  wheel_search=("${PWD}" "${script_dir}" "${script_dir}/..")
-  if [[ -n "${SUDO_USER:-}" ]]; then
-    sudo_home="$(getent passwd "${SUDO_USER}" 2>/dev/null | cut -d: -f6)"
-    [[ -n "${sudo_home}" ]] && wheel_search+=("${sudo_home}")
-  fi
-  wheel_search+=("${HOME:-/root}")
-  declare -A wheel_seen=()
-  wheel_found=()
-  for wheel_root in "${wheel_search[@]}"; do
-    [[ -d "${wheel_root}" ]] || continue
-    while IFS= read -r wheel_hit; do
-      wheel_real="$(readlink -f "${wheel_hit}")"
-      [[ -n "${wheel_seen[${wheel_real}]:-}" ]] && continue
-      wheel_seen[${wheel_real}]=1
-      wheel_found+=("${wheel_real}")
-    done < <(find "${wheel_root}" -maxdepth 1 -type f \
-      -name 'vaelor_control_plane-*.whl' 2>/dev/null)
-  done
-  if ((${#wheel_found[@]} == 1)); then
-    wheel="${wheel_found[0]}"
-    echo "Using Vaelor wheel: ${wheel}"
-  elif ((${#wheel_found[@]} > 1)); then
-    echo "Found more than one Vaelor wheel; pick one with --wheel FILE:" >&2
-    printf '  %s\n' "${wheel_found[@]}" >&2
-    exit 1
-  fi
-fi
-# No wheel given and none on disk: download it from the release. On a PUBLIC repo
+# A local wheel is used only when --wheel names it. This installer used to
+# look for one in the current folder, beside itself and in the invoking user's
+# home, and to use it in place of the release: so a development wheel left in
+# a home folder replaced the release a README install meant to fetch, and two
+# of them stopped the install with "found more than one Vaelor wheel" (VD-133
+# 1.5.5 #15, the 1.5.4 cold install). Nothing on disk is picked up by itself.
+#
+# No wheel given: download it from the release. On a PUBLIC repo
 # this needs no auth, which is what lets `git clone && sudo install-vaelor.sh`
 # work with no cd and no curl. Downloaded to a temp dir so it never litters the
 # clone or home with a root-owned wheel. Point elsewhere with VAELOR_REPO /
@@ -297,9 +273,9 @@ if [[ -z "${wheel}" ]]; then
     }
   fi
   wheel_repo="${VAELOR_REPO:-ShadowLayer90/vaelor}"
-  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5.4}"
+  wheel_tag="${VAELOR_RELEASE_TAG:-v1.5.5}"
   wheel_dl_dir="$(mktemp -d)"
-  echo "No local wheel; downloading it from ${wheel_repo} release ${wheel_tag} ..."
+  echo "No --wheel given; downloading it from ${wheel_repo} release ${wheel_tag} ..."
   wheel="$(VAELOR_REPO="${wheel_repo}" VAELOR_TAG="${wheel_tag}" \
     VAELOR_DEST="${wheel_dl_dir}" python3 - <<'PY'
 import json, os, sys, urllib.error, urllib.request
@@ -342,8 +318,8 @@ PY
   echo "Downloaded wheel: ${wheel}"
 fi
 [[ -f "${wheel}" ]] || {
-  echo "No Vaelor wheel: none on disk, none downloadable, and none passed with" >&2
-  echo "--wheel FILE. Provide vaelor_control_plane-<version>-py3-none-any.whl." >&2
+  echo "No Vaelor wheel at ${wheel}: pass --wheel with the path of a" >&2
+  echo "vaelor_control_plane-<version>-py3-none-any.whl file." >&2
   exit 1
 }
 [[ -r /etc/os-release ]] || {
@@ -376,12 +352,37 @@ esac
 # the UI uninstaller finds a stale or missing script and fails silently. It lives
 # OUTSIDE /opt/vaelor deliberately, so the teardown can delete /opt/vaelor while
 # still running from here.
-install -D -m 0755 "${script_dir}/install-vaelor.sh" \
-  /usr/lib/vaelor/release/install-vaelor.sh
-install -D -m 0755 "${script_dir}/maintain-vaelor.sh" \
-  /usr/lib/vaelor/release/maintain-vaelor.sh
-install -D -m 0644 "${wheel}" \
-  "/usr/lib/vaelor/release/$(basename "${wheel}")"
+#
+# `stage_release_file SOURCE MODE [NAME]` copies one file in, and skips a file
+# that already IS the staged one: `repair` and the native package run THIS
+# script from /usr/lib/vaelor/release, and GNU install refuses to copy a file
+# onto itself ("are the same file"), which under `set -e` ended every repair
+# there (VD-133 1.5.5).
+stage_release_file() {
+  local source="$1" mode="$2" name="${3:-$(basename "$1")}"
+  local target="/usr/lib/vaelor/release/${name}"
+  [[ -f "${source}" ]] || return 0
+  [[ -e "${target}" && "${source}" -ef "${target}" ]] && return 0
+  install -D -m "${mode}" "${source}" "${target}"
+}
+stage_release_file "${script_dir}/install-vaelor.sh" 0755
+stage_release_file "${script_dir}/maintain-vaelor.sh" 0755
+stage_release_file "${wheel}" 0644
+# And everything else this installer reads from its own folder, so the staged
+# copy that `maintain-vaelor.sh repair` runs finds its constraints, units, the
+# NPU model fetcher and AMD's key beside it (VD-133 1.5.5; the console update
+# refreshes the same list - vaelor/release_snapshot.py PAYLOAD - and a test
+# holds the two equal).
+stage_release_file "${script_dir}/fetch-npu-model.sh" 0755
+stage_release_file "${script_dir}/amdrocm-keyring.gpg" 0644
+if [[ -f "${script_dir}/requirements-release.txt" ]]; then
+  stage_release_file "${script_dir}/requirements-release.txt" 0644
+else
+  stage_release_file "${script_dir}/../requirements-release.txt" 0644
+fi
+for staged_unit in "${script_dir}"/systemd/vaelor-*.service; do
+  stage_release_file "${staged_unit}" 0644 "systemd/$(basename "${staged_unit}")"
+done
 
 # The record of what THIS installer added to the OS, one package name per line,
 # beside the staged scripts so the teardown can read it (it removes /usr/lib/
@@ -836,8 +837,14 @@ install_influxdb() {
   # ever connects to 127.0.0.1:8086, so a loopback bind costs nothing. A systemd
   # env drop-in (INFLUXDB_HTTP_BIND_ADDRESS) is used rather than editing the
   # packaged influxdb.conf, so a package upgrade cannot silently reopen it.
+  # The same drop-in turns InfluxDB's per-request and per-query logs off
+  # (VD-133 1.5.5 #13: about a million and ~280k journal lines a day); its
+  # errors still reach the journal.
+  # The text is vaelor/influxdb_config.py's DROP_IN_TEXT - a test holds the two
+  # equal - and every update re-applies it from there (VD-217), so a box
+  # updated from the console gets it without re-running this installer.
   install -d -m 0755 /etc/systemd/system/influxdb.service.d
-  printf '[Service]\nEnvironment=INFLUXDB_HTTP_BIND_ADDRESS=127.0.0.1:8086\n' \
+  printf '[Service]\nEnvironment=INFLUXDB_HTTP_BIND_ADDRESS=127.0.0.1:8086\nEnvironment=INFLUXDB_HTTP_LOG_ENABLED=false\nEnvironment=INFLUXDB_DATA_QUERY_LOG_ENABLED=false\n' \
     > /etc/systemd/system/influxdb.service.d/vaelor-localhost.conf
   systemctl daemon-reload
   systemctl enable influxdb.service
@@ -1350,13 +1357,14 @@ install_wmi_sensors() {
 }
 install_wmi_sensors || true
 
-# The GPU memory pool (VD-161) is the owner's setting, chosen in the console
-# and applied only after they confirm it. The installer never creates,
-# changes or removes it: an install or a repair that silently resized the
-# memory a GPU may use would change what fits on the machine, and it takes a
-# restart nobody asked for to take effect. A file already here - written by
-# the console, or by hand before this setting existed - is kept exactly as it
-# is and shows up in the console as the current setting. The path is
+# The GPU memory pool (VD-161) is the owner's setting, chosen in the console.
+# This shell never writes it. A file already here - written by the console, or
+# by hand before this setting existed - is kept exactly as it is and shows up
+# in the console as the current setting. When none is saved, a post-install
+# step (the model refresh this script runs after its health gate) saves the recommended
+# size (VD-161 amended, owner 2026-10-20: `gpu_memory_pool_apply recommend`,
+# the console's own write, which the console update runs too). It never
+# restarts the machine, and its failure never fails the install. The path is
 # `gpu_memory_pool.CONFIG_PATH`, retyped because bash cannot import it;
 # tests/test_gpu_memory_pool_installer.py compares the two.
 report_gpu_memory_pool() {
@@ -2337,7 +2345,24 @@ trap - ERR
 
 # The one address the owner is told to use: the installed-at line and the
 # trust commands both print it (a bare host name may not resolve on their PC).
-console_address="$(hostname -I | awk '{print $1}'):34001"
+#
+# Derived once, in Python, from the console certificate's own addresses
+# (tls_trust_commands.console_address_for, VD-133 1.5.5 #1/#2): the address the
+# default route leaves from when the certificate names it, else a private one it
+# names that is not Docker's or a VM's bridge. Never `hostname -I`'s first word,
+# which is in no promised order and can be 172.17.0.1 - except as the fallback
+# when Python cannot answer, so the install still says where it is.
+console_address_for_owner() {
+  local derived=""
+  derived="$("${vaelor_venv_python}" -m vaelor.tls_trust_commands --print-address 2>/dev/null)" ||
+    derived=""
+  if [[ -n "${derived}" ]]; then
+    echo "${derived}"
+  else
+    echo "$(hostname -I | awk '{print $1}'):34001"
+  fi
+}
+console_address="$(console_address_for_owner)"
 echo "Vaelor is installed at https://${console_address}/v2/"
 
 # How to trust this console on the owner's own computers and phones (VD-212):
@@ -2346,9 +2371,16 @@ echo "Vaelor is installed at https://${console_address}/v2/"
 # installer cannot do this itself - those devices are not this machine's to
 # change. Printed last so it is what is on screen when the install ends;
 # non-fatal, because the console's Trust this Vaelor panel shows the same.
+#
+# Also saved on this machine (VD-133 1.5.5 #2): a browser that refuses the
+# certificate cannot open the console's panel, and the terminal this ran in may
+# be long closed. The printed text names the file (tls_paths.TRUST_STEPS, its one
+# home; the household authority's pass keeps it current after a console update)
+# and the command that prints it again.
 print_trust_commands() {
   echo
-  if ! "${vaelor_venv_python}" -m vaelor.tls_trust_commands --address "${console_address}"; then
+  if ! "${vaelor_venv_python}" -m vaelor.tls_trust_commands --address "${console_address}" \
+    --save; then
     echo "The trust commands could not be printed here; open the console's" \
       "Settings > Connections > Trust this Vaelor for the same commands." >&2
   fi

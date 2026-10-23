@@ -6,8 +6,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Set
 
 
+#: The name every cluster LLM service starts with (`cluster_driver.deploy_llm`);
+#: its Swarm task containers are ``<service>.<slot>.<task>``, which
+#: `vaelor_containers` recognises as Vaelor's (VD-133 1.5.5 #12).
+LLM_SERVICE_PREFIX = "vaelor-llm-"
+
 MANAGED_SERVICE_PREFIXES = (
-    "vaelor-app-", "vaelor-llm-",
+    "vaelor-app-", LLM_SERVICE_PREFIX,
 )
 
 

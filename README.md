@@ -289,15 +289,25 @@ certificate. At the end of the run it prints the root's fingerprint and one comm
 operating system that installs the root on your own computer, but only if the
 fingerprint matches. The console repeats them under **Settings › Connections › Trust
 this Vaelor**, with a QR code for phones. Until a device trusts the root, its browser warns on
-the first visit. See [SECURE_ACCESS.md](SECURE_ACCESS.md). The first visit asks you to
+the first visit. See [SECURE_ACCESS.md](SECURE_ACCESS.md).
+
+If your browser will not open the console, you do not need it for these steps. They are
+saved on the Vaelor in `/opt/vaelor/tls/trust-this-vaelor.txt` and kept current after
+updates; read them over SSH with `sudo cat /opt/vaelor/tls/trust-this-vaelor.txt`. To
+print them again, run `sudo /opt/vaelor/venv/bin/python -m vaelor.tls_trust_commands` on
+the Vaelor.
+
+The first visit asks you to
 create the administrator account. The installer adopts Docker if it is already present and asks before installing
 it when it is not.
 
 The installer downloads from the **`v1.5.4`** release by default. Set `VAELOR_RELEASE_TAG`
 to install from another release (for example
 `sudo VAELOR_RELEASE_TAG=v1.5.2 ~/vaelor/deploy/install-vaelor.sh --unattended`), or pass
-`--wheel /path/to/…whl` to install a specific build. `deploy/fetch-npu-model.sh` reads the
-same variable.
+`--wheel /path/to/…whl` to install a specific build. A wheel file is only ever installed
+when `--wheel` names it: one lying in the folder you run from, in the clone or in your home
+is ignored, so the command above always installs the release. `deploy/fetch-npu-model.sh`
+reads the same variable.
 
 Near the end of the run — after the console is up and healthy — the installer pre-pulls the
 container images serving runs from, so the first deploy starts immediately instead of

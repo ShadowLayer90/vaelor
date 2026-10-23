@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiRequest } from "../lib/api";
 import type { Session } from "../types";
 import { formatBytes } from "../lib/format";
+import { updatePill } from "../lib/upgradeState";
 import { Icon } from "./Icon";
 import { StatusPill } from "./StatusPill";
 import { KvGrid, SectionCard, SystemDialog, useVisiblePoll } from "./systemUi";
@@ -260,15 +261,8 @@ export function SystemUpdatePanel({ session }: { session: Session }) {
    * working on one (R114: never a second update over a live apply).
    */
   const busyUpdating = Boolean(run?.active) || ((started || following) && !slow);
-  const pill = loading
-    ? { label: "Checking", tone: "neutral" as const }
-    : upgradeAvailable || replaceBuild
-      ? { label: "Update available", tone: "info" as const }
-      : sameBuild
-        ? { label: "Up to date", tone: "success" as const }
-        : manifest && kind === "local-build-newer"
-          ? { label: "Newer local build", tone: "info" as const }
-          : { label: "Not compared", tone: "neutral" as const };
+  // One owner for these words, read by Home › Machines too (VD-133 1.5.5).
+  const pill = loading ? { label: "Checking", tone: "neutral" as const } : updatePill(status);
   const runningBuild = describeBuild(installed);
   const source = status?.source ?? "the release source";
   const whatInstalls = !manifest

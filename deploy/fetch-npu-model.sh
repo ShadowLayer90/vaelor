@@ -23,7 +23,7 @@
 #
 # Usage:  deploy/fetch-npu-model.sh   (after Vaelor is installed)
 # Env:    VAELOR_REPO (default ShadowLayer90/vaelor)
-#         VAELOR_RELEASE_TAG (default v1.5.4)
+#         VAELOR_RELEASE_TAG (default v1.5.5)
 #         FLM_MODELS_DIR (default /var/lib/vaelor/flm/models)
 #         VAELOR_PYTHON (default /opt/vaelor/venv/bin/python)
 set -Eeuo pipefail
@@ -51,7 +51,7 @@ if [[ -z "${NPU_MODEL_NAME}" || -z "${NPU_PART_PREFIX}" ||
 fi
 
 REPO="${VAELOR_REPO:-ShadowLayer90/vaelor}"
-TAG="${VAELOR_RELEASE_TAG:-v1.5.4}"
+TAG="${VAELOR_RELEASE_TAG:-v1.5.5}"
 MODELS_DIR="${FLM_MODELS_DIR:-/var/lib/vaelor/flm/models}"
 MODEL_NAME="${NPU_MODEL_NAME}"
 PART_PREFIX="${NPU_PART_PREFIX}"

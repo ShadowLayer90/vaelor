@@ -66,6 +66,8 @@ export interface ResearchReport {
   minimumMemoryMb?: number;
   minimumStorageGb?: number;
   sources: ResearchSource[];
+  /** VD-222: where the proposed image came from, and every research warning. */
+  imageProvenance?: { source: string; warnings: string[] };
   /**
    * Distinct Compose service names the verified manifest pins an image for.
    * Operator-added published ports and privileged host mounts must name one of

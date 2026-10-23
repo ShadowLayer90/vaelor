@@ -23,14 +23,15 @@ it here.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict
 
+from .cluster_driver import SWARM_CONTEXT_TOKENS
 from .cluster_llm_sizing import swarm_llm_memory_limit_mib
+from .credential_provider_probe import served_profile
 from .cluster_placement import CONTROLLER_PLACEMENT_ID
 from .cluster_capacity import worker_placement_state
 from .model_footprint import MIB
@@ -39,8 +40,17 @@ from .model_footprint import MIB
 OUT_OF_SERVICE_STATES = frozenset({"drained", "paused"})
 
 
-def refuse_out_of_service_nodes(nodes, status) -> None:
-    """Refuse a model deployment onto a drained or paused worker.
+#: Refused when Vaelor was uninstalled on a chosen worker (owner 2026-10-21,
+#: VD-133 1.5.5 #16, round 1 M1): a deploy would lay serving down there again.
+UNINSTALLED_TO_DEPLOY = (
+    "Vaelor was uninstalled on {} while it is still in the cluster, so no model "
+    "is deployed there. Re-add that machine to the cluster, or Remove it, on its "
+    "card under Fleet."
+)
+
+
+def refuse_out_of_service_nodes(nodes, status, store=None) -> None:
+    """Refuse a model deployment onto a drained or paused worker, or one Vaelor was uninstalled on.
 
     ACC-118, and review SC1/SC2. Every model path asks here: the CPU Swarm
     path, the GPU (vLLM) path and the pooled CPU path - the last two run
@@ -54,6 +64,15 @@ def refuse_out_of_service_nodes(nodes, status) -> None:
     a row an older Recheck reset to ``enrolled`` while Swarm still holds it
     drained. The controller is never drained.
     """
+    if store is not None:
+        # Asked first: such a worker is also drained (worker_profile_job), and
+        # "return it to service" would be the wrong advice.
+        from .worker_profile_state import uninstalled_node_ids
+
+        gone = set(uninstalled_node_ids(store, [node.get("id") for node in nodes if node]))
+        named = [str(node.get("name") or node.get("id")) for node in nodes if node and node.get("id") in gone]
+        if named:
+            raise ValueError(UNINSTALLED_TO_DEPLOY.format(", ".join(named)))
     for node in nodes:
         if not node or str(node.get("id", "")) == CONTROLLER_PLACEMENT_ID:
             continue
@@ -101,7 +120,7 @@ def deploy_single_or_replicated(
     # in pooled_operations.deploy, on the path pooled deploys actually run
     # (#Recovery-7b).
     nodes = [operations._placement_node(node_id) for node_id in node_ids]
-    refuse_out_of_service_nodes(nodes, operations.driver.status())
+    refuse_out_of_service_nodes(nodes, operations.driver.status(), operations.store)
     for node in nodes:
         if node["id"] != CONTROLLER_PLACEMENT_ID:
             operations._validate_worker(
@@ -237,9 +256,8 @@ def deploy_single_or_replicated(
             raise RuntimeError(
                 "The cluster model did not become healthy: {}".format(last_error)
             )
-        profile = json.dumps({
-            "base_url": endpoint, "model": "", "api_key": "",
-        }, separators=(",", ":"))
+        # The window is the --ctx-size every swarm LLM service runs (owner 2026-10-21).
+        profile = served_profile(endpoint, context_window=SWARM_CONTEXT_TOKENS)
         credential = operations.broker.put(
             "openai-compatible", f"Cluster LLM · {name}", profile
         )

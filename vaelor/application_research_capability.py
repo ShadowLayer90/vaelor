@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Iterable, Mapping
 
+from .application_research_workflow import request_names_application
 from .provider_runtime import assistant_budget, model_capability, request_complexity
 
 
@@ -56,7 +57,9 @@ def application_research_capability(
     lower = query.lower()
     capability = model_capability(connection)
     risks = sorted({str(item).strip().lower()[:80] for item in risk_flags if str(item).strip()})
-    reviewed_simple = any(name in lower for name in _REVIEWED_SIMPLE)
+    # The same "is this request for that app" rule the reviewed source path
+    # uses (VD-222 live): a substring here called "Tautulli for Plex" Plex.
+    reviewed_simple = request_names_application(query, _REVIEWED_SIMPLE) is not None
     complex_matches = sorted(term for term in _COMPLEX_TERMS if term in lower)
     generic = lower in _GENERIC_NAMES or len(re.findall(r"[a-z0-9]+", lower)) < 2
     score = len(complex_matches) + min(3, len(risks))

@@ -20,6 +20,7 @@ SOCKET_PATH = Path(env_value(
 ))
 MAX_REQUEST = 64 * 1024
 MAX_RESPONSE = 4 * 1024 * 1024
+MAX_DISCOVERY_QUERY = 160
 
 
 class ApplicationResearchClient:
@@ -77,6 +78,14 @@ class ApplicationResearchClient:
         request = json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n"
         return self._request(request)
 
+    def discover_sources(self, query: str) -> Dict[str, Any]:
+        """Ask the broker to find the application on GitHub and Docker Hub (VD-222)."""
+        request = json.dumps(
+            {"action": "discover_sources", "query": str(query)[:MAX_DISCOVERY_QUERY]},
+            separators=(",", ":"),
+        ).encode("utf-8") + b"\n"
+        return self._request(request)
+
     def _request(self, request: bytes) -> Dict[str, Any]:
         if len(request) > MAX_REQUEST:
             raise ValueError("The application research request is too large.")
@@ -124,6 +133,13 @@ def _handle(request: Any, service: ApplicationResearchService) -> Dict[str, Any]
             raise ValueError("The application research URL is invalid.")
         provenance = FetchProvenance.from_dict(request.get("provenance"))
         return service.fetch_evidence(url, provenance)
+    if request.get("action") == "discover_sources":
+        query = request.get("query")
+        if set(request) != {"action", "query"} or not isinstance(query, str) or not (
+            1 <= len(query) <= MAX_DISCOVERY_QUERY
+        ):
+            raise ValueError("The application research discovery request is invalid.")
+        return service.discover_sources(query)
     if set(request) != {"action", "draft", "source_urls"}:
         raise ValueError("The application research request is invalid.")
     if request.get("action") != "research_manifest":

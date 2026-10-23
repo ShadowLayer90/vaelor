@@ -249,8 +249,8 @@ const TILES: TileSpec[] = [
     detail: (metrics) => {
       const total = metricNumber(metrics, "gpu_gtt_total_bytes");
       return total === null
-        ? "Shared aperture in use"
-        : `${formatQuantity(total, "capacity")} shared aperture`;
+        ? "GPU memory pool in use"
+        : `${formatQuantity(total, "capacity")} GPU memory pool`;
     },
     scale: (metrics, points) => metricNumber(metrics, "gpu_gtt_total_bytes") ?? peakOf(points),
     show: (_mode, gpu) => gpu,

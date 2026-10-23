@@ -7,6 +7,7 @@ import type { Session } from "../types";
 import { ActionReviewDialog } from "./ActionReviewDialog";
 import { AppManagerPanel } from "./AppManagerPanel";
 import { ManageModelsCard, ManageServicesCard, type ListState } from "./ManageLists";
+import { VaelorServicesCard } from "./VaelorServicesCard";
 import {
   fileManagerAvailable,
   workloadTools,
@@ -368,6 +369,7 @@ export function WorkloadManager({
     <div className="manage-layout">
       <div className="manage-layout__lists">
         <ManageServicesCard apps={apps} selectedId={selectedModel ? null : selected?.id ?? null} state={listState} onChoose={(app) => openTool(app, "overview")} />
+        <VaelorServicesCard services={inventory?.vaelor_containers ?? []} viewer={session.user.role === "viewer"} />
         <ManageModelsCard
           busy={busy}
           models={models}

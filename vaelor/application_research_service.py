@@ -12,8 +12,12 @@ from .application_compose_evidence import (
     ComposeService,
     parse_compose,
 )
+from .app_source_discovery import (
+    AppSourceDiscovery, describe_candidates, image_provenance,
+)
 from .application_research import ApplicationResearchBroker, ApplicationResearchError
 from .application_research_prompt import interpret_research_evidence
+from .application_research_workflow import request_names_application
 from .container_registry import (
     GHCR_MANIFEST_ACCEPT,
     GHCR_MANIFEST_API,
@@ -197,6 +201,66 @@ class ApplicationResearchService:
         # Optional and deliberately dependency-injected: this service never
         # grants an LLM network, shell, filesystem, or container authority.
         self.model_interpreter = model_interpreter
+        # VD-222 item 1: one discovery (and so one cache and one memory of a
+        # reached GitHub/Docker Hub limit) per broker process, i.e. per box.
+        self.direct_sources = AppSourceDiscovery(
+            self._direct_document, target_architecture=self.target_architecture,
+        )
+        # The last direct-source answer per request, so the manifest built
+        # from it can say where its image came from (bounded).
+        self._direct_answers: Dict[str, Dict[str, Any]] = {}
+
+    @staticmethod
+    def _request_key(query: str) -> str:
+        return " ".join(str(query).split())[:160].lower()
+
+    def _direct_document(self, url: str) -> Any:
+        """One GitHub/Docker Hub JSON read through the broker's guarded fetch."""
+        metadata = self.broker.research(url).to_dict().get("metadata", {})
+        return metadata.get("document") if isinstance(metadata, dict) else None
+
+    def discover_sources(self, query: str) -> Dict[str, Any]:
+        """Find the application on GitHub and Docker Hub first (VD-222 item 1).
+
+        A reviewed application keeps its pinned sources and is not looked up.
+        Several plausible matches come back with the owner's question already
+        written, grounded only in what the two sources returned (#247x).
+        """
+        if self._reviewed(query):
+            return {"status": "none", "notes": [], "source_urls": [], "image_reference": []}
+        found = self.direct_sources.discover(query)
+        repository = found.get("repository") or {}
+        image = found.get("image") or {}
+        found["repository"] = {
+            key: repository[key] for key in (
+                "full_name", "name", "stars", "html_url", "readme_url", "release",
+            ) if key in repository
+        } or None
+        found["image"] = {
+            "reference": found["image_reference"][0] if found.get("image_reference") else "",
+            "proof": str(image.get("proof", "")),
+            "pulls": image.get("pulls"),
+            "architectures": list(image.get("architectures", [])),
+            "architecture_confirmed": bool(image.get("architecture_confirmed")),
+        } if image else None
+        self._direct_answers.pop(self._request_key(query), None)
+        self._direct_answers[self._request_key(query)] = found
+        while len(self._direct_answers) > 64:
+            self._direct_answers.pop(next(iter(self._direct_answers)))
+        if found.get("status") == "ambiguous" and found.get("candidates"):
+            app = " ".join(str(query).split()) or _UNNAMED_APP
+            listed = describe_candidates(found["candidates"])
+            found["clarification"] = clarifying_research_message(
+                "GitHub and Docker Hub list {} for {}, but nothing there proves "
+                "which, if any, is the project's own. Vaelor will not guess."
+                .format(listed, app),
+                [
+                    "Which of these do you want: {}?".format(listed),
+                    "If none of them, what is the project's GitHub repository or "
+                    "Docker Hub image?",
+                ],
+            )
+        return found
 
     def research_manifest(
         self, draft: Mapping[str, Any], source_urls: Iterable[str]
@@ -255,8 +319,18 @@ class ApplicationResearchService:
         return {
             "broker_results": results,
             "broker_failures": failures,
-            "manifest": self._manifest(query, spec, results, synthesis),
+            "manifest": self._with_provenance(
+                query, spec, self._manifest(query, spec, results, synthesis)),
         }
+
+    def _with_provenance(
+        self, query: str, spec: Any, manifest: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        manifest["provenance"] = image_provenance(
+            self._direct_answers.get(self._request_key(query)), bool(spec),
+            manifest.get("images", []),
+        )
+        return manifest
 
     def fetch_evidence(
         self, url: str, provenance: FetchProvenance | Mapping[str, Any] | None = None
@@ -273,11 +347,15 @@ class ApplicationResearchService:
 
     @staticmethod
     def _reviewed(query: str) -> Dict[str, Any] | None:
-        lower = re.sub(r"[^a-z0-9]+", " ", query.lower()).strip()
-        for key, spec in _REVIEWED.items():
-            if key in lower:
-                return dict(spec)
-        return None
+        """The reviewed spec when the request is FOR that application itself.
+
+        Every reviewed check (discovery, the research pipeline, the service)
+        comes through here, and the rule itself is the shared
+        ``request_names_application`` the capability verdict also uses, so
+        nothing is half-locked (VD-222 live check).
+        """
+        key = request_names_application(query, _REVIEWED)
+        return dict(_REVIEWED[key]) if key else None
 
     @staticmethod
     def _validate_reviewed_results(

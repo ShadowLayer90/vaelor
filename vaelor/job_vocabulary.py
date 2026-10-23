@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 
+
 #: The one cluster LLM deploy job, whatever engine the payload picks (pooled
 #: CPU, GPU vLLM, single/replicated). Named because the GPU serving mode watch
 #: asks the executor "is one of these running here right now" to tell a deploy
@@ -190,6 +191,13 @@ def retry_refusal(job_type: object) -> str:
         return RECONFIRM_REQUIRED_REASON
     return ""
 
+
+#: The ``result.code`` a job carries when a restart of the workload service cut
+#: it short (`JobStore.recover_interrupted`). The row's state stays ``failed``
+#: - the state vocabulary is a wire contract - and this code is what says the
+#: work was interrupted rather than broken; the projection reads it as
+#: ``interrupted_by_restart`` (VD-133 1.5.5 #4).
+INTERRUPTED_BY_RESTART_CODE = "interrupted_worker"
 
 def interrupted_message(job_type: object) -> str:
     """What a never-retried job says when a service restart cut it short."""

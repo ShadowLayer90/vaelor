@@ -21,7 +21,8 @@ from typing import Any, Dict, List, Optional
 
 from . import tls_authority_pki as pki
 from . import tls_fleet_gate, tls_identity
-from .tls_authority import LEGACY_RETENTION_SECONDS, LEGACY_SUFFIX, Layout, _load_cert, _read
+from .tls_authority import (LEGACY_RETENTION_SECONDS, LEGACY_SUFFIX, Layout, _load_cert, _read,
+                            notice_is_stale, read_reissue_notice)
 
 MIGRATION_STATES = ("none", "waiting", "blocked", "done")
 
@@ -59,6 +60,19 @@ def _migration(layout: Layout, kind: str, root, now: datetime.datetime) -> Dict[
     return {"state": "waiting", "reason": verdict.reason}
 
 
+def _reissue(layout: Layout, kind: str, now: datetime.datetime) -> Dict[str, Any]:
+    """The announced re-issue as the console may show it: a notice that is stale,
+    or about a certificate this authority no longer serves, is ``stale`` with
+    the reason - never shown as planned (adversarial review F2/F6)."""
+    notice = read_reissue_notice(layout.reissue_notice)
+    if notice["state"] != "planned":
+        return notice
+    why = notice_is_stale(notice, now.timestamp())
+    if not why and kind != pki.KIND_HOUSEHOLD:
+        why = "the console no longer serves a certificate this authority issued"
+    return {"state": "stale", "reason": why} if why else notice
+
+
 def names_left_out(root, hostname: str) -> List[Dict[str, str]]:
     """This machine's bare hostname when the root does not carry it, and why.
 
@@ -83,8 +97,10 @@ def authority_status(layout: Layout, now: Optional[datetime.datetime] = None,
     ``authority``: ``{"state": "not-set-up"}`` | ``{"state": "unreadable", "reason"}``
     | ``{"state": "ready", "fingerprint_sha256", "fingerprint_sha1", "created_at",
     "expires_at"}``; ``kind`` and ``kind_reason``; ``leaf``: ``{"expires_at",
-    "names"}`` or None; ``migration``: ``{"state": none|waiting|blocked|done,
-    "reason": str|None}``; ``names_left_out``: ``[{"name", "reason"}]``.
+    "issued_at", "names"}`` or None; ``migration``: ``{"state":
+    none|waiting|blocked|done, "reason": str|None}``; ``names_left_out``:
+    ``[{"name", "reason"}]``; ``reissue``: the authority's announced re-issue
+    (:func:`vaelor.tls_authority.read_reissue_notice`, VD-133 1.5.5 #1).
     """
     now = now or datetime.datetime.now(datetime.timezone.utc)
     root, root_reason = _load_cert(layout.public_root)
@@ -113,8 +129,10 @@ def authority_status(layout: Layout, now: Optional[datetime.datetime] = None,
     if served is not None:
         names, addresses = pki.leaf_identities(served)
         status["leaf"] = {"expires_at": served.not_valid_after_utc.isoformat(),
+                          "issued_at": pki.issued_at(served),
                           "names": list(names) + list(addresses)}
     status["migration"] = _migration(layout, status["kind"], root, now)
+    status["reissue"] = _reissue(layout, status["kind"], now)
     status["names_left_out"] = names_left_out(
         root, socket.gethostname() if hostname is None else hostname)
     return status

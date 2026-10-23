@@ -62,6 +62,7 @@ from packaging.version import InvalidVersion, Version
 
 from .appliance_recovery import START_SERVICES, STOP_SERVICES
 from .build_provenance import write_installed_record
+from .release_snapshot import refresh_quietly as refresh_release_snapshot
 from .state_root_layout import settle_after_install
 from .upgrade_apply_lock import HELD_ENV, restart_self, start_locked
 from .upgrade_dependencies import install_unmet
@@ -765,6 +766,10 @@ def perform_upgrade_apply(
         # unit and a release that changed a .service silently keeps the stale one
         # until an installer re-run (the deferred half of #178 / VD-102).
         _refresh_units(runner, systemd_dir=systemd_dir)
+        # And the release snapshot Remove Vaelor runs, so a console update
+        # leaves the installer's state (VD-217; `release_snapshot`). Never
+        # fatal: its reason goes into the outcome.
+        snapshot_note = refresh_release_snapshot(Path(VENV_ROOT), wheel=verified)
         _restart_units(runner)
         health_gate()
         # The health gate proves only the control plane. Every OTHER restarted
@@ -789,6 +794,7 @@ def perform_upgrade_apply(
         record_current(to_version, verified, str(plan["sha256"]), int(plan["bytes"]))
         refresh(runner)
         outcome = {
+            **({"release_snapshot_error": snapshot_note} if snapshot_note else {}),
             "ok": True,
             "completed": True,
             "from_version": from_version,
@@ -862,6 +868,7 @@ def _rollback(
         # Restore the units that match the reinstalled (previous) wheel before
         # the restart, the same order the forward path uses (#178 / VD-102).
         _refresh_units(runner, systemd_dir=systemd_dir)
+        snapshot_note = refresh_release_snapshot(Path(VENV_ROOT), wheel=wheel)
         _restart_units(runner)
         health_gate()
         # Same all-services bar as the apply: rollback only reports rolled_back
@@ -882,6 +889,7 @@ def _rollback(
             "running_version": running,
             "rolled_back": True,
             "error": detail,
+            **({"release_snapshot_error": snapshot_note} if snapshot_note else {}),
             "completed_at": int(time.time()),
         }
     except Exception as rollback_error:  # noqa: BLE001

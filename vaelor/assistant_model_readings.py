@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
 from .assistant_vocabulary import TOOL_PHRASES, UPTIME_PHRASES, literal_phrases
+from .network_interfaces import is_plumbing_name
 from .phrase_match import mentions
 
 #: Telemetry sections, and the words that ask for each. The shared vocabulary
@@ -87,8 +88,6 @@ def _bookkeeping(key: str) -> bool:
     """Whether ``key`` names bookkeeping: one of `_NOT_READINGS`, whole or as a ``_suffix``."""
     return key in _NOT_READINGS or any(key.endswith("_" + name) for name in _NOT_READINGS)
 
-#: Docker's per-container link pairs.
-_CONTAINER_LINK_PREFIX = "veth"
 
 GB = 1e9
 
@@ -371,7 +370,9 @@ def _network(value: Dict[str, Any], topics: FrozenSet[str], shown_beside: Frozen
         if not isinstance(interface, dict):
             continue
         name = str(interface.get("name") or "")
-        if name.startswith(_CONTAINER_LINK_PREFIX):
+        # Container and VM plumbing, by name only: the reading may describe
+        # another machine, whose /sys this one cannot look in (VD-133 1.5.5 #1).
+        if is_plumbing_name(name):
             links += 1
             continue
         if name == "lo":
@@ -503,9 +504,18 @@ def _inventory(value: Dict[str, Any], topics: FrozenSet[str], shown_beside: Froz
     models = [_join([str(model.get("name")), str(model.get("kind") or ""), _gb(model.get("size_bytes")),
                      "in use" if model.get("in_use") else ""])
               for model in value.get("models") or [] if isinstance(model, dict)]
+    # VD-133 1.5.5 #12: Vaelor's own containers (Phoenix, web search, model
+    # serving) are listed apart from the owner's apps; the Assistant still
+    # knows they run, said as part of Vaelor (review F6).
+    own = [app for app in value.get("vaelor_containers") or [] if isinstance(app, dict)]
     detail = {"apps": _counted(rows, LIST_ITEMS * 2) or "none installed",
               "models": _counted(models, LIST_ITEMS) or "none"}
-    taken = sorted({str(port.get("host")) for app in apps for port in app.get("ports") or []
+    if own:
+        detail["vaelor_services"] = _counted([
+            _join([str(app.get("name")), str(app.get("status") or ""),
+                   "part of Vaelor (" + str(app.get("vaelor_component") or "") + ")"]) for app in own],
+            LIST_ITEMS * 2)
+    taken = sorted({str(port.get("host")) for app in apps + own for port in app.get("ports") or []
                     if isinstance(port, dict) and port.get("host")}, key=lambda port: (len(port), port))
     if taken:
         detail["ports_in_use"] = " ".join(taken)
@@ -513,6 +523,8 @@ def _inventory(value: Dict[str, Any], topics: FrozenSet[str], shown_beside: Froz
     line = "apps: {} installed, {} running{}".format(
         len(apps), running, " (" + ", ".join(str(app.get("display_identity") or app.get("name")) for app in apps[:LIST_ITEMS]) + ")"
         if apps else "")
+    if own:
+        line += "; Vaelor's own services: {} running".format(sum(1 for app in own if app.get("running")))
     return detail, line
 
 

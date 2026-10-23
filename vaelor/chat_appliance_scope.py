@@ -60,6 +60,11 @@ from .assistant_answer_presentation import (
 #: Which surface answered. Not a model, and it must not be reported as one.
 APPLIANCE_SCOPE_PROVIDER = "appliance-scope"
 
+#: The other boundary reply AI Chat writes itself: it cannot see live facts
+#: about the world (VD-221, `chat_web_search`). Declared here so the store can
+#: keep both out of "which model answered" without importing the search.
+LIVE_FACTS_PROVIDER = "live-facts"
+
 #: Where the question actually belongs. The frontend renders the route.
 ASSISTANT_ROUTE = "#/assistant"
 
@@ -229,6 +234,7 @@ def record_decline(
     model: str = "", temporary: bool = False,
     conversation: Optional[Dict[str, Any]] = None,
     collections: Optional[list] = None,
+    provider: str = APPLIANCE_SCOPE_PROVIDER,
 ) -> Dict[str, Any]:
     """Persist the declined turn and return the route's response body.
 
@@ -239,7 +245,8 @@ def record_decline(
 
     ``model`` is reported unchanged - it is the model the user has selected,
     and this turn does not change that - while ``provider`` says plainly that
-    no model produced this reply.
+    no model produced this reply, and which boundary did: this one, or the
+    live-fact refusal (VD-221).
     """
     if temporary:
         return {
@@ -249,7 +256,7 @@ def record_decline(
                 "citations": [], "metadata": decline["metadata"],
             },
             "model": model,
-            "provider": APPLIANCE_SCOPE_PROVIDER,
+            "provider": provider,
             "temporary": True,
             "declined": True,
         }
@@ -260,13 +267,13 @@ def record_decline(
         )
     recorded = store.add_exchange(
         actor, conversation["id"], message, decline["answer"], [], None,
-        APPLIANCE_SCOPE_PROVIDER,
+        provider,
     )
     recorded["metadata"] = decline["metadata"]
     return {
         "conversation_id": conversation["id"],
         "message": recorded,
         "model": model,
-        "provider": APPLIANCE_SCOPE_PROVIDER,
+        "provider": provider,
         "declined": True,
     }

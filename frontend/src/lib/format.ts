@@ -114,7 +114,12 @@ export function formatQuantity(
   quantity: ByteQuantity,
   suffix = "",
 ): string {
-  return formatBytes(value, { mode: QUANTITY_MODES[quantity], suffix });
+  const binary = formatBytes(value, { mode: QUANTITY_MODES[quantity], suffix });
+  // A model file keeps its GiB (VD-199) with the GB figure beside it, the
+  // paired form typed GiB sizes already use, so "13.6 GiB" on Apps › Manage
+  // reads against the GB on every memory and storage figure (VD-133 1.5.5).
+  if (quantity !== "model" || binary === "—") return binary;
+  return `${binary} (${formatBytes(value, { mode: "si", suffix })})`;
 }
 
 export function formatUptime(bootTime: unknown, now = Date.now()): string {

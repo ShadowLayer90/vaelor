@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
+
+from .application_deployments import QUERY_STOPWORDS
 
 
 RESEARCH_PHASES = frozenset({
@@ -39,6 +42,35 @@ RESEARCH_BLOCKERS = frozenset({
 })
 
 ResearchProgress = Callable[[str, int, str], None]
+
+# Words after an application's name that make the request about another thing:
+# an alternative to it, or a tool around it. Generic, never per application.
+_OTHER_THING_WORDS = frozenset({
+    "alternative", "alternatives", "instead", "like", "manager", "client",
+    "clients", "plugin", "plugins", "request", "requests", "companion",
+    "exporter", "wrapper", "api", "bot", "integration", "addon", "extension",
+})
+
+
+def request_names_application(query: Any, names: Any) -> str | None:
+    """The one of ``names`` this request is FOR, or ``None`` (VD-222 live).
+
+    The one rule for "is this request for that known application": the name
+    must be the first whole words of the request, and no later word may make it
+    a request for something else. The request's filler words ("install",
+    "the", "for my") are dropped first - the same list that turns a message
+    into its application_query - so raw text and the stored query agree. The reviewed
+    source path and the capability verdict both use it, so they cannot
+    disagree (LESSONS 6). A substring match made "Perplexica" and "Tautulli
+    for Plex" count as Plex.
+    """
+    words = [word for word in re.findall(r"[a-z0-9]+", str(query or "").lower())
+             if word not in QUERY_STOPWORDS]
+    for name in names:
+        parts = str(name).split()
+        if words[:len(parts)] == parts and not set(words[len(parts):]) & _OTHER_THING_WORDS:
+            return str(name)
+    return None
 
 
 def canonical_phase(value: Any, *, default: str = "interpreting") -> str:

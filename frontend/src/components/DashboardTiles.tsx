@@ -31,7 +31,9 @@ function Tile({ tile, units, meter, nameFirst }: { tile: DashboardTile; units: U
   // The slowest machine is a machine: its name is the reading and its speed the foot.
   const name = nameFirst && props.value !== null ? tile.cluster?.name ?? "" : "";
   const value = name || props.value;
-  const nodes = (props.nodes ?? []).map((node) => node.name + " " + (node.value ?? node.stateLabel ?? "")).join(", ");
+  // A machine with neither a value nor a state says "Not read"; a bare name read
+  // "This Vaelor controller , 10.20.30.11" on the Prefix cache tile (VD-133 1.5.5 cosmetic).
+  const nodes = (props.nodes ?? []).map((node) => node.name + " " + (node.value ?? node.stateLabel ?? "Not read")).join(", ");
   const foot = props.value === null
     ? [props.stateLabel, props.reason].filter(Boolean).join(" ")
     : [name ? props.value + (props.unit ? " " + props.unit : "") : "", props.caption, props.reason].filter(Boolean).join(" · ");

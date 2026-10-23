@@ -47,6 +47,7 @@ EMITTER_MODULES = frozenset({
     "vaelor.linux_sensors",
     "vaelor.linux_telemetry",
     "vaelor.memory_ecc",
+    "vaelor.network_interfaces",
     "vaelor.package_power",
     "vaelor.platforms",
     "vaelor.platforms.accelerators",

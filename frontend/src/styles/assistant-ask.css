@@ -161,6 +161,13 @@
   align-items: flex-end;
 }
 
+/* Everything in the Assistant's turn - evidence, next steps, a proposed job -
+   stays within the answer bubble's width, so the turn has one right edge
+   instead of a 680px answer above full-column cards. */
+.as-msg--assistant > * {
+  max-width: 680px;
+}
+
 .as-msg__byline {
   display: flex;
   flex-wrap: wrap;

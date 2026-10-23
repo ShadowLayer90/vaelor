@@ -122,6 +122,27 @@ def _cpu_limit_value(value: Any) -> float | None:
     return None
 
 
+#: Labels in Vaelor's own namespace say what Vaelor owns: ``io.vaelor.owner``
+#: hides a container from Apps as part of Vaelor and puts it in the uninstall's
+#: removal set (VD-133 1.5.5 #12, review F2). An owner's, imported or
+#: researched compose may not claim them. The catalog's two labels are the
+#: exception: the blueprint writes them and an edit of its compose keeps them.
+RESERVED_LABEL_PREFIX = "io.vaelor."
+CATALOG_LABELS = frozenset({"io.vaelor.managed", "io.vaelor.template"})
+
+
+def _refuse_reserved_labels(name: str, service: Mapping[str, Any]) -> None:
+    for where in (service.get("labels"), (service.get("deploy") or {}).get("labels")):
+        keys = where.keys() if isinstance(where, Mapping) else (
+            str(item).split("=", 1)[0] for item in where or [])
+        for key in keys:
+            text = str(key).strip().lower()
+            if text.startswith(RESERVED_LABEL_PREFIX) and text not in CATALOG_LABELS:
+                raise ValueError(
+                    "Service {} sets {}; io.vaelor.* labels say what belongs to Vaelor "
+                    "and only Vaelor sets them.".format(name, key))
+
+
 def reject_secret_lines(content: str) -> None:
     if re.search(
         r"(?im)^\s*(?:password|passwd|token|secret|api[_-]?key)\s*:\s*\S+",
@@ -168,6 +189,7 @@ def validate_normalized(
             raise ValueError("Service {} is invalid.".format(name))
         if service.get("privileged"):
             raise ValueError("Privileged containers are blocked.")
+        _refuse_reserved_labels(name, service)
         for key in (
             "cap_add", "cgroup", "cgroup_parent", "configs",
             "credential_spec", "device_cgroup_rules", "env_file", "extends",

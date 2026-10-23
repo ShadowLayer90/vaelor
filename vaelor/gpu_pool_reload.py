@@ -53,6 +53,7 @@ from .cluster_gpu_sizing import VERDICT_DISTRIBUTED, VERDICT_REPLICATED
 from .cluster_link import confirm_recorded_bindings
 from .cluster_llm_deploy import refuse_out_of_service_nodes
 from .cluster_placement import departed_node_ids
+from .worker_profile_state import uninstalled_node_ids
 from .gpu_cluster_ai_chat import record_unload, resume_after_load
 from .gpu_cluster_mode import DEPLOYING_STATE, HEALTHY_STATE, UNLOADED_STATE
 from .gpu_idle_watch import idle_timeout_from_payload, is_deployment_idle_now
@@ -132,6 +133,16 @@ PREDATES_LOAD = (
 DEPARTED_TO_LOAD = (
     "This GPU deployment uses a machine that is no longer in the fleet ({}), "
     "so it cannot be loaded; remove it and deploy it again."
+)
+
+#: Refused when Vaelor was uninstalled on a machine the record names (owner
+#: 2026-10-21, VD-133 1.5.5 #16): a Load would lay serving down there again, and
+#: nothing is put back on that machine until the owner chooses. The upgrade's
+#: refresh asks the same check, so it never stops a model it could not load.
+UNINSTALLED_TO_LOAD = (
+    "Vaelor was uninstalled on {} while it is still in the cluster, so this GPU "
+    "deployment is not loaded there. Re-add that machine to the cluster, or "
+    "Remove it, on its card under Fleet."
 )
 
 #: Refused when a record names no machine at all (review A5): a Load has
@@ -575,7 +586,8 @@ def load_participants(
 
     Every check a Load makes of the record and the fleet before it builds a
     transport, in the Load's own words: a machine that has left the fleet, a
-    machine drained out of service, a split recorded before Load existed. The
+    machine drained out of service, a machine Vaelor was uninstalled on, a
+    split recorded before Load existed. The
     upgrade's refresh (`gpu_pool_refresh`) asks the SAME checks of a serving
     record before it stops anything, so a refresh never stops a model that the
     Load it is about to run would refuse.
@@ -601,6 +613,10 @@ def load_participants(
     participants = [
         ops.joined_node(node_id, include_credential=True) for node_id in node_ids
     ]
+    gone = set(uninstalled_node_ids(ops.store, node_ids))
+    if gone:
+        raise ValueError(UNINSTALLED_TO_LOAD.format(", ".join(
+            str(node.get("name") or node["id"]) for node in participants if node["id"] in gone)))
     # Review R6: the same drain rule every model deploy follows - a load puts
     # model servers on each machine exactly as a deploy does.
     if placement_status is not None:
@@ -717,8 +733,11 @@ def _load_replicated(
         started=started, thinking_default=thinking, vllm_options=vllm_options,
     )
     if credential_id:
-        lease = ops.broker.resolve(credential_id, CLUSTER_INFERENCE_PURPOSE)
-        _reput_cluster_key(ops.broker, credential_id, lease, api_key)
+        # Read and rewritten under the serving mutex, as a rotate and the
+        # served-window backfill do, so none of the three loses another's write.
+        with ops._serving_lock():
+            lease = ops.broker.resolve(credential_id, CLUSTER_INFERENCE_PURPOSE)
+            _reput_cluster_key(ops.broker, credential_id, lease, api_key)
     return new_units, endpoint
 
 
@@ -762,6 +781,7 @@ def _load_distributed(
         vllm_options=vllm_options,
     )
     if api_key and credential_id:
-        lease = ops.broker.resolve(credential_id, CLUSTER_INFERENCE_PURPOSE)
-        _reput_cluster_key(ops.broker, credential_id, lease, api_key)
+        with ops._serving_lock():
+            lease = ops.broker.resolve(credential_id, CLUSTER_INFERENCE_PURPOSE)
+            _reput_cluster_key(ops.broker, credential_id, lease, api_key)
     return new_units, endpoint

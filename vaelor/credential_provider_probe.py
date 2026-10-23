@@ -26,6 +26,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 from .credential_broker_client import CredentialError
 from .credential_profiles import validate_ssh_profile
 from .hosted_providers import HOSTED_KINDS, probe as probe_hosted
+from .token_estimate import CONTEXT_WINDOW_KEY, context_window_tokens
 
 
 #: The largest secret the vault stores. Declared here, beside the profile
@@ -43,8 +44,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def validate_compatible_profile(secret_value: str) -> Dict[str, str]:
-    """Validate and normalize an encrypted compatible-endpoint profile."""
+def validate_compatible_profile(secret_value: str) -> Dict[str, Any]:
+    """Validate and normalize an encrypted compatible-endpoint profile.
+
+    The window a Vaelor deploy recorded (:func:`served_profile`) is carried
+    through to the lease; a profile without one stays without one.
+    """
     try:
         profile = json.loads(secret_value)
     except (TypeError, json.JSONDecodeError) as error:
@@ -91,7 +96,28 @@ def validate_compatible_profile(secret_value: str) -> Dict[str, str]:
     ):
         raise CredentialError("For safety, compatible servers must use a private LAN or loopback address.")
 
-    return {"base_url": base_url, "model": model, "api_key": api_key}
+    result: Dict[str, Any] = {"base_url": base_url, "model": model, "api_key": api_key}
+    if profile.get(CONTEXT_WINDOW_KEY) is not None:
+        window = context_window_tokens(profile[CONTEXT_WINDOW_KEY])
+        if not window:
+            raise CredentialError("The compatible server's context window is not a believable number of tokens.")
+        result[CONTEXT_WINDOW_KEY] = window
+    return result
+
+
+def served_profile(base_url: str, model: str = "", api_key: str = "", *, context_window: Any = 0) -> str:
+    """The profile a Vaelor deploy stores for a model it serves (owner 2026-10-21).
+
+    ``context_window`` is the window the server was started with - the value
+    the deploy passed to it, never a second copy (LESSONS 6) - so the budgets
+    that clamp to a stated window (`provider_runtime.assistant_budget`) reach
+    Vaelor's own models. An unknown window is left out, never guessed.
+    """
+    profile: Dict[str, Any] = {"base_url": base_url, "model": str(model or ""), "api_key": str(api_key or "")}
+    window = context_window_tokens(context_window)
+    if window:
+        profile[CONTEXT_WINDOW_KEY] = window
+    return json.dumps(profile, separators=(",", ":"))
 
 
 def compatible_request(

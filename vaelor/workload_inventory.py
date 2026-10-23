@@ -22,6 +22,7 @@ from .app_capability_registry import app_instance_id_for_workload
 from .app_catalog import APP_TEMPLATES, install_env_from_compose
 from .managed_app_capabilities import safe_published_ports, template_id_from_labels
 from .runtime_paths import data_path
+from .vaelor_containers import vaelor_component
 from .workload_broker import WorkloadBrokerClient
 #: The model listing (which files are downloaded, and which are serving) lives
 #: in `workload_models`, with the managed-credential id rule it reads.
@@ -208,7 +209,7 @@ class WorkloadInventory(WorkloadModelsMixin):
         except (OSError, ValueError):
             return False
 
-    def _docker_apps(self) -> list[dict[str, Any]]:
+    def _containers(self) -> list[dict[str, Any]]:
         # The one container read (`_container_records`): every id, in the
         # batches the workload broker admits; unreadable lists no apps.
         records = self._container_records() or []
@@ -260,6 +261,9 @@ class WorkloadInventory(WorkloadModelsMixin):
             elif template_id.strip() != template_id:
                 template_id = None
             container_name = str(record.get("Name", "")).lstrip("/") or app_id[:12]
+            # VD-133 1.5.5 #12: Vaelor's own containers are not the owner's
+            # apps. A compose app is never matched by name, only by the label.
+            component = vaelor_component(labels, container_name)
             display_identity = (
                 f"{project}/{service}"
                 if managed_identity and isinstance(project, str) and isinstance(service, str)
@@ -290,6 +294,7 @@ class WorkloadInventory(WorkloadModelsMixin):
                         (record.get("HostConfig") or {}).get("NetworkMode", "")
                     ) == "host",
                     "managed": managed,
+                    "vaelor_component": component,
                     "capabilities": {
                         "logs": True,
                         "configuration": managed,
@@ -353,8 +358,12 @@ class WorkloadInventory(WorkloadModelsMixin):
         return None
 
     def list_all(self) -> dict[str, Any]:
+        containers = self._containers()
         return {
-            "apps": self._docker_apps(),
+            # VD-133 1.5.5 #12: the owner's apps, and Vaelor's own containers
+            # apart - still listed, because they hold ports and have logs.
+            "apps": [app for app in containers if not app["vaelor_component"]],
+            "vaelor_containers": [app for app in containers if app["vaelor_component"]],
             "models": self._models(),
             "capabilities": {
                 "logs": True,
@@ -411,7 +420,8 @@ class WorkloadInventory(WorkloadModelsMixin):
     def _app(self, app_id: str) -> dict[str, Any]:
         if not APP_ID.fullmatch(app_id):
             raise ValueError("Invalid app identifier.")
-        app = next((item for item in self._docker_apps() if item["id"] == app_id), None)
+        # Logs and diagnostics reach Vaelor's own containers too (#12).
+        app = next((item for item in self._containers() if item["id"] == app_id), None)
         if app is None:
             raise ValueError("App was not found.")
         return app

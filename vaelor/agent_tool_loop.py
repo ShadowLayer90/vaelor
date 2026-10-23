@@ -434,7 +434,8 @@ def run_agent_tool_loop(
         {"role": "system", "content": provider_system_prompt(system, connection)},
         {"role": "user", "content": provider_user_content({
             "task": str(task)[:4000],
-            "granted_context": _loop_context(connection, context, generation_tokens),
+            # Sized by the served model (owner 2026-10-21), named or not.
+            "granted_context": _loop_context({**connection, "model": model}, context, generation_tokens),
         }, connection)},
     ]
 

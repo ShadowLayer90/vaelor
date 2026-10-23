@@ -6,6 +6,8 @@ import shutil
 import threading
 import time
 from pathlib import Path
+
+from .network_interfaces import has_hardware_device
 from typing import Any, Callable, Optional
 
 from .linux_sensors import (
@@ -72,6 +74,9 @@ def filesystem_bytes(
 def is_physical_interface(sys_root: str, name: str) -> bool:
     """Whether the kernel ties network interface ``name`` to a hardware device.
 
+    The rule itself lives in :func:`vaelor.network_interfaces.has_hardware_device`
+    (one home, LESSONS 6); this keeps the ``sys_root`` form its callers use.
+
     The rule is the kernel's own: a NIC backed by a device - Ethernet, Wi-Fi,
     a Thunderbolt network link, a USB adapter - has a ``device`` link under
     ``/sys/class/net/<name>``; a software interface does not. That excludes
@@ -80,9 +85,9 @@ def is_physical_interface(sys_root: str, name: str) -> bool:
     Counting them would double-count: container traffic crosses its ``veth``,
     its bridge and then the physical NIC, and a bond's traffic is its members'.
     """
-    if not name or name in {".", "..", "lo"} or "/" in name:
-        return False
-    return (Path(sys_root) / "class" / "net" / name / "device").exists()
+    if "@" in str(name or ""):
+        return False  # /proc/net/dev never carries a peer suffix; keep it exact.
+    return has_hardware_device(name, Path(sys_root) / "class" / "net")
 
 
 def physical_interface_counters(

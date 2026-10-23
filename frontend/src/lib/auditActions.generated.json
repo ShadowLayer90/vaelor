@@ -16,8 +16,10 @@
     "ai_chat.conversation.fork",
     "ai_chat.document.delete",
     "ai_chat.document.ingest",
+    "ai_chat.live_fact.decline",
     "ai_chat.message",
     "ai_chat.message.regenerate",
+    "ai_chat.web_search",
     "app.config.update",
     "app.console.exec",
     "app.credentials.read",
@@ -106,7 +108,9 @@
     "cluster.backup.delete",
     "cluster.link.set",
     "cluster.node.architecture-eviction",
+    "cluster.node.drain",
     "cluster.node.enroll",
+    "cluster.node.profile",
     "cluster.node.remove",
     "cluster.performance.kernel-profile",
     "cluster.performance.profile",
@@ -175,6 +179,8 @@
     "upgrade.create",
     "web-research.plan",
     "web-research.queue",
+    "web-search-key.remove",
+    "web-search-key.store",
     "workload_act.agent.grant",
     "workload_act.agent.revoke",
     "workload_act.operator.grant",
@@ -229,11 +235,18 @@
     "ai_chat.document.ingest": [
       "success"
     ],
+    "ai_chat.live_fact.decline": [
+      "success"
+    ],
     "ai_chat.message": [
       "failure",
       "success"
     ],
     "ai_chat.message.regenerate": [
+      "success"
+    ],
+    "ai_chat.web_search": [
+      "failure",
       "success"
     ],
     "app.config.update": [
@@ -524,9 +537,17 @@
       "failure",
       "success"
     ],
+    "cluster.node.drain": [
+      "failure",
+      "queued"
+    ],
     "cluster.node.enroll": [
       "failure",
       "success"
+    ],
+    "cluster.node.profile": [
+      "failure",
+      "queued"
     ],
     "cluster.node.remove": [
       "success"
@@ -767,6 +788,13 @@
     "web-research.queue": [
       "queued"
     ],
+    "web-search-key.remove": [
+      "success"
+    ],
+    "web-search-key.store": [
+      "failure",
+      "success"
+    ],
     "workload_act.agent.grant": [
       "success"
     ],
@@ -792,6 +820,7 @@
     "vaelor/api_mcp_catalog_routes.py:_audit",
     "vaelor/api_operation_routes.py:audit",
     "vaelor/api_skills_routes.py:_audit",
-    "vaelor/api_upgrade_routes.py:audit"
+    "vaelor/api_upgrade_routes.py:audit",
+    "vaelor/worker_profile_job.py:_audit_row"
   ]
 }

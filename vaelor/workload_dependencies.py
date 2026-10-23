@@ -157,6 +157,8 @@ class WorkloadDependencyService:
         if clean_kind not in RESOURCE_KINDS or not clean_id:
             raise DependencyError("Choose a managed app, model, or runtime.")
         data = self.inventory.list_all()
+        # The owner's apps only, on purpose (VD-133 1.5.5 #12): Vaelor's own
+        # containers (`vaelor_containers`) are not removed through this plan.
         apps = list(data.get("apps", []))
         models = list(data.get("models", []))
         dependencies: list[Dict[str, Any]] = []

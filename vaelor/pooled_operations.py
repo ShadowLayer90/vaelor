@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
 import urllib.error
@@ -16,6 +15,7 @@ from .pooled_inference import (
     runtime_artifact,
     validate_pooled_deployment,
 )
+from .credential_provider_probe import served_profile
 from .ssh_transport import SshTransport
 
 
@@ -150,10 +150,9 @@ class PooledDeploymentOperations:
             endpoint = f"http://{root_address}:9998/v1"
             self._wait_for_api(endpoint, payload, report)
 
-            profile = json.dumps(
-                {"base_url": endpoint, "model": "", "api_key": ""},
-                separators=(",", ":"),
-            )
+            # The window is the root's --max-seq-len (owner 2026-10-21).
+            profile = served_profile(
+                endpoint, context_window=preflight["model"].get("max_sequence_length"))
             credential = self.broker.put(
                 "openai-compatible", f"Pooled LLM · {name}", profile
             )

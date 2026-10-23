@@ -4,6 +4,7 @@ import { Button } from "./ui";
 import { StatusPill } from "./StatusPill";
 import type { StatusTone } from "./ui/status";
 import type { ClusterMode } from "../lib/clusterMode";
+import { vaelorUninstalled } from "../lib/fleetNodeState";
 
 /** One component's reading, as `worker_profile_state` words it (VD-194 P1). */
 export interface WorkerSoftwareComponent {
@@ -208,7 +209,9 @@ export function WorkerSoftwareRow({ software, mode, administrator, variant = "fu
         <span className="cf-note">{checked}</span>
         {old && oldWords && <span className="cf-note cf-software__stale">{oldWords}</span>}
       </div>
-      {full && software.sentence && <p className="cf-software__sentence">{software.sentence}</p>}
+      {(full || vaelorUninstalled(software)) && software.sentence && (
+        <p className="cf-software__sentence">{software.sentence}</p>
+      )}
       {software.profile_summary && <p className="cf-note">{software.profile_summary}</p>}
       {software.attempt_note && <p className="cf-note">{software.attempt_note}</p>}
       {software.update_note && <p className="cf-software__update">{software.update_note}</p>}

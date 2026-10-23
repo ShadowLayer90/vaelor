@@ -1,4 +1,5 @@
 import type { AccelerationReading, ContextReading } from "../lib/acceleration";
+import type { OperationResolution } from "../lib/operationOutcome";
 
 export interface WorkloadCapabilities {
   docker: {
@@ -36,7 +37,16 @@ export interface WorkloadJob {
   type: string;
   state: string;
   operation_state?: string;
+  /** Whether the row's STATE is an attention state; not the verdict (below). */
   attention?: boolean;
+  /** The server's one attention verdict (VD-139), after retries, later runs and dismissals. */
+  needs_attention?: boolean;
+  /** What resolved this failure and when (VD-133 1.5.5 #4). */
+  resolution?: OperationResolution | null;
+  /** The owner's dismissal, while it holds. */
+  dismissal?: { dismissed_at: number; dismissed_by: string } | null;
+  /** A service restart cut this job short; its state stays `failed`. */
+  interrupted_by_restart?: boolean;
   retryable?: boolean;
   readiness?: string;
   liveness?: string;

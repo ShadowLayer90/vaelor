@@ -143,6 +143,20 @@
   font-size: var(--font-size-ui-xs);
 }
 
+/* VD-206: the note under an answer that stopped before its end. The thinking
+   note's muted, rule-marked voice, so it reads as about the answer, not in it. */
+.ai-chat-turn__cut-off {
+  box-sizing: border-box;
+  max-width: min(680px, 100%);
+  margin: 0;
+  padding: var(--space-1) 0 var(--space-1) var(--space-3);
+  border-left: 2px solid var(--border-icon);
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .ai-chat-turn__actions {
   display: flex;
   flex-wrap: wrap;
@@ -152,6 +166,25 @@
 
 /* A question's own controls appear while it is pointed at or focused, as the
    boards draw a question with none; Retry answer always shows. */
+/* Hidden controls must not take a line of their own: a long question's bubble
+   filled the row, the controls wrapped below it at opacity 0, and an empty band
+   sat between the question and its answer (VD-133 1.5.5). Where they hide
+   (a pointer that hovers) and the column is wide enough, they stay beside the
+   bubble, which narrows to make room. */
+@media (hover: hover) and (min-width: 721px) {
+  .ai-chat-turn--user {
+    flex-wrap: nowrap;
+  }
+
+  .ai-chat-turn--user .ai-chat-turn__bubble {
+    min-width: 0;
+  }
+
+  .ai-chat-turn--user .ai-chat-turn__actions {
+    flex: none;
+  }
+}
+
 @media (hover: hover) {
   .ai-chat-turn--user .ai-chat-turn__actions:not(.has-retry) {
     opacity: 0;
@@ -448,4 +481,52 @@
 .ai-chat-page .ui-button.ai-chat-composer__attach {
   width: 36px;
   padding: 0;
+}
+
+/* VD-221: Web search beside Knowledge. On reads as the accent (the same
+   selected treatment as a chosen connection); unavailable reads muted but
+   stays pressable, because pressing it opens the reason and the setup row. */
+.ai-chat-page .ui-button.ai-chat-websearch {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.ai-chat-page .ui-button.ai-chat-websearch.is-on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.ai-chat-page .ui-button.ai-chat-websearch.is-on svg {
+  color: var(--accent);
+}
+
+.ai-chat-page .ui-button.ai-chat-websearch.is-unavailable {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+.ai-chat-websearch__note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.5;
+}
+
+.ai-chat-websearch__note.is-error {
+  color: var(--danger-text);
+}
+
+.ai-chat-websearch__setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-card);
+}
+
+.ai-chat-websearch__setup .apps-research-row {
+  align-self: stretch;
 }

@@ -73,7 +73,6 @@ then tears down. No automatic eviction, no re-placement.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from dataclasses import dataclass, replace
@@ -81,7 +80,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .cluster_capacity import gpu_fit_node
 from .cluster_gpu_sizing import VERDICT_REPLICATED
-from .cluster_placement import CONTROLLER_PLACEMENT_ID
+from .cluster_placement import CONTROLLER_PLACEMENT_ID, name_in_sentence
 from .gpu_pool_pull import PULL_TRANSPORT_FAILURES
 from .gpu_pool_startup import (
     API_POLL_SECONDS, NODE_UNREACHABLE, STARTUP_CHECKPOINT_PERCENT,
@@ -107,6 +106,8 @@ from .model_thinking import THINKING_FIELD
 from .vllm_serve_options import OPTIONS_FIELD
 from .vllm_moe_kernels import started_copy_note
 from .ssh_transport import SshTransportError
+from .credential_provider_probe import served_profile
+from .token_estimate import CONTEXT_WINDOW_KEY
 
 LOGGER = logging.getLogger(__name__)
 
@@ -184,9 +185,9 @@ FUSION_MISSING = (
 )
 
 
-def skip_sentences(runtime: Any, transport: Any, unit: str, machine: Any) -> Tuple[str, bool]:
-    """``(sentences, kernel skipped)`` for the set-ups this copy started without (VD-215/216)."""
-    sentences, kernel_skipped = [], False
+def skip_notes(runtime: Any, transport: Any, unit: str, machine: Any) -> Dict[str, str]:
+    """``{runtime method: sentence}`` for each set-up this copy started without (VD-215/216)."""
+    notes: Dict[str, str] = {}
     for method, sentence in (("take_overlay_skip", SPEED_FIX_MISSING),
                              ("take_kernel_skip", KERNEL_MISSING),
                              ("take_guesser_skip", GUESSER_MISSING),
@@ -194,9 +195,118 @@ def skip_sentences(runtime: Any, transport: Any, unit: str, machine: Any) -> Tup
         take = getattr(runtime, method, None)
         skipped = take(transport, unit) if callable(take) else ""
         if isinstance(skipped, str) and skipped:
-            sentences.append(sentence.format(machine=machine, reason=skipped.rstrip(". ")))
-            kernel_skipped = kernel_skipped or method == "take_kernel_skip"
-    return ". ".join(sentences), kernel_skipped
+            notes[method] = sentence.format(machine=name_in_sentence(str(machine)),
+                                            reason=skipped.rstrip(". "))
+    return notes
+
+
+def skip_sentences(runtime: Any, transport: Any, unit: str, machine: Any) -> Tuple[str, bool]:
+    """``(sentences, kernel skipped)`` for the set-ups this copy started without (VD-215/216)."""
+    notes = skip_notes(runtime, transport, unit, machine)
+    return ". ".join(notes.values()), "take_kernel_skip" in notes
+
+
+#: VD-133 1.5.5 #10: the controller copy's guesser sentence, kept apart from
+#: :data:`SERVING_NOTE_FIELD` (which carries it among the others) so a reader
+#: can say what is true NOW. The controller builds its 4-bit guesser in the
+#: background after the copy started, and the row kept promising "the next
+#: Load" for ever after the build had finished (:func:`live_guesser_units`).
+GUESSER_NOTE_FIELD = "guesser_note"
+#: What the row says once the controller's build has finished since.
+GUESSER_BUILT_SINCE = (
+    "Serving the full-size guesser on {machine} until the model's next Load: "
+    "the 4-bit guesser has been built there since this copy started, and the "
+    "next Load uses it"
+)
+#: What the row says while the controller's build runs.
+GUESSER_BUILDING_NOW = (
+    "Serving the full-size guesser on {machine} while the 4-bit guesser is "
+    "built there; the model's first Load after the build uses it"
+)
+
+
+def awaiting_build(sentence: str) -> str:
+    """``sentence`` when this copy went without the guesser only because it was not built yet.
+
+    Adversarial L5: only then does a later "ready" mean "built since this copy
+    started". A copy whose folder was gone at its start, or whose check was
+    deferred, had a build all along; its sentence stays as the serve wrote it.
+    """
+    from .vllm_guesser_build import BUILD_BUSY, NOT_BUILT
+
+    return sentence if sentence and (NOT_BUILT in sentence or BUILD_BUSY in sentence) else ""
+
+
+#: How long the control plane reuses one answer about the controller's build
+#: (adversarial M2): the Cluster page reads the summary every 15 s, and a build
+#: takes about 25 s, so the note is at most this late and the root bridge is
+#: asked about once a minute, not at every read.
+BUILD_STATE_TTL_SECONDS = 45.0
+#: The bridge read's own bound here: a summary never waits 30 s on it.
+BUILD_STATE_TIMEOUT_SECONDS = 4.0
+_BUILD_STATE_CACHE: Dict[str, Tuple[float, Any]] = {}
+
+
+def _cached_build_state(image: str, *, clock: Callable[[], float] = time.monotonic) -> Any:
+    """The controller bridge's ``guesser_build`` answer for ``image``, read at most once per TTL.
+
+    A failed read is not kept: the next summary asks again.
+    """
+    held = _BUILD_STATE_CACHE.get(image)
+    if held is not None and clock() - held[0] < BUILD_STATE_TTL_SECONDS:
+        return held[1]
+    from .hardware_bridge import HardwareBridgeClient
+
+    answer = HardwareBridgeClient().guesser_build(image, False,
+                                                  timeout=BUILD_STATE_TIMEOUT_SECONDS)
+    _BUILD_STATE_CACHE[image] = (clock(), answer)
+    return answer
+
+
+def live_guesser_units(units: Any, ask: Optional[Callable[[str], Any]] = None) -> Any:
+    """``units`` with each controller copy's guesser sentence read again, now.
+
+    VD-133 1.5.5 #10. ``ask(image)`` is the controller's root bridge verb
+    ``guesser_build`` with ``start`` false (`vllm_guesser_verb`): built since
+    reads :data:`GUESSER_BUILT_SINCE`, building :data:`GUESSER_BUILDING_NOW`,
+    and a refusal its own reason in :data:`GUESSER_MISSING`. A bridge that
+    cannot be read leaves the sentence as the serve wrote it (LESSONS 8: the
+    observer failing is no evidence). A copy that serves the 4-bit guesser has
+    no such sentence, and a Load writes the row again, so neither is asked.
+    """
+    replicas = units.get("replicas") if isinstance(units, Mapping) else None
+    pending = [entry for entry in replicas or () if isinstance(entry, Mapping)
+               and isinstance(entry.get(GUESSER_NOTE_FIELD), Mapping)]
+    if not pending:
+        return units
+    from .vllm_guesser_build import GUESSERS, NOT_BUILT, RETIRED_GUESSERS
+
+    options = units.get(OPTIONS_FIELD)
+    key = options.get("guesser") if isinstance(options, Mapping) else None
+    row = GUESSERS.get(RETIRED_GUESSERS.get(key, key)) if isinstance(key, str) else None
+    if row is None:
+        return units
+    try:
+        answer = (ask or _cached_build_state)(row.image) or {}
+    except Exception:  # noqa: BLE001 - an unread bridge is no reading
+        return units
+    state = str(answer.get("state", "")) if isinstance(answer, Mapping) else ""
+    fresh = []
+    for entry in replicas:
+        held = entry.get(GUESSER_NOTE_FIELD) if isinstance(entry, Mapping) else None
+        if not isinstance(held, Mapping) or state not in ("ready", "building", "started", "refused"):
+            fresh.append(entry)
+            continue
+        machine = name_in_sentence(str(held.get("machine") or ""))
+        now = (GUESSER_BUILT_SINCE.format(machine=machine) if state == "ready"
+               else GUESSER_MISSING.format(machine=machine, reason=str(
+                   answer.get("reason") or "").rstrip(". ") or NOT_BUILT) if state == "refused"
+               else GUESSER_BUILDING_NOW.format(machine=machine))
+        note = str(entry.get(SERVING_NOTE_FIELD) or "")
+        said = str(held.get("sentence") or "")
+        fresh.append(dict(entry, **{SERVING_NOTE_FIELD: note.replace(said, now) if said and said in note
+                                    else ". ".join(filter(None, (note, now)))}))
+    return dict(units, replicas=fresh)
 
 
 def serving_notes(result: Any) -> List[str]:
@@ -239,6 +349,8 @@ class ReplicaPlacement:
     #: The sentence(s) saying which set-up this copy serves without, and why
     #: (VD-215's draft model, VD-216's expert kernel), or ``""``.
     serving_note: str = ""
+    #: The controller copy's guesser sentence alone (:data:`GUESSER_NOTE_FIELD`).
+    guesser_note: str = ""
 
     @property
     def node_id(self) -> str:
@@ -264,6 +376,8 @@ class ReplicaPlacement:
             entry["gate"] = self.gate
         if self.serving_note:
             entry[SERVING_NOTE_FIELD] = self.serving_note
+        if self.guesser_note:
+            entry[GUESSER_NOTE_FIELD] = {"machine": self.name, "sentence": self.guesser_note}
         return entry
 
 
@@ -548,8 +662,8 @@ class ReplicatedServing:
             started.append((transport, node, unit))
             # VD-215/VD-216: this copy may have been started without the draft
             # model, or with vLLM's own expert kernel.
-            missing, kernel_skipped = skip_sentences(self.runtime, transport, unit,
-                                                     node.get("name") or node.get("id"))
+            notes = skip_notes(self.runtime, transport, unit, node.get("name") or node.get("id"))
+            missing, kernel_skipped = ". ".join(notes.values()), "take_kernel_skip" in notes
             if missing:
                 report(60 + int(20 * index / len(participants)), missing)
             gate = ""
@@ -562,6 +676,10 @@ class ReplicatedServing:
             replicas.append(ReplicaPlacement(
                 node=node, transport=transport, unit=unit, address=address,
                 port=replica_port, gate=gate, serving_note=missing,
+                # VD-133 1.5.5 #10: only the controller builds after the copy
+                # started (in the background); a worker builds before its unit.
+                guesser_note=awaiting_build(notes.get("take_guesser_skip", ""))
+                if str(node.get("id", "")) == CONTROLLER_PLACEMENT_ID else "",
             ))
             if kernel_skipped:
                 skipped_kernel.add(index)
@@ -570,7 +688,8 @@ class ReplicatedServing:
         # started copy, from that unit's own log lines.
         for at, replica in enumerate(replicas):
             note = "" if at in skipped_kernel else started_copy_note(
-                self.runtime, replica.transport, replica.unit, replica.name, vllm_options)
+                self.runtime, replica.transport, replica.unit,
+                name_in_sentence(str(replica.name)), vllm_options)
             if note:
                 report(82, note)
                 replicas[at] = replace(replica, serving_note=". ".join(
@@ -732,14 +851,11 @@ def _reput_cluster_key(
     preserved from the lease. A ``put`` with the existing id bumps the version
     and re-encrypts, exactly as an outbound-credential rotation does.
     """
-    profile = json.dumps(
-        {
-            "base_url": str(lease.get("base_url", "") or ""),
-            "model": str(lease.get("model", "") or ""),
-            "api_key": str(new_key),
-        },
-        separators=(",", ":"),
-    )
+    # The recorded window rides along (owner 2026-10-21): a key rotation must
+    # not drop the field the budgets clamp to (LESSONS 24).
+    profile = served_profile(
+        str(lease.get("base_url", "") or ""), str(lease.get("model", "") or ""), str(new_key),
+        context_window=lease.get(CONTEXT_WINDOW_KEY))
     return broker.put(
         "openai-compatible", str(lease.get("label", "") or ""), profile, credential_id
     )
@@ -843,7 +959,11 @@ def rotate_cluster_serving_key(
     )
     report(60, "Restarting the balancer on the new cluster key")
     with serving_lock():
-        rekeyed = _reput_cluster_key(broker, credential_id, lease, new_key)
+        # Read the credential again under the lock: a window recorded since
+        # the read above (the served-window backfill, owner 2026-10-21) must
+        # ride along, not be overwritten by that earlier copy (LESSONS 24).
+        current = broker.resolve(credential_id, CLUSTER_INFERENCE_PURPOSE)
+        rekeyed = _reput_cluster_key(broker, credential_id, current, new_key)
         balancer.start(deployment, new_key)
     report(85, "Retiring the old key from every worker gate")
     _rekey_worker_gates(

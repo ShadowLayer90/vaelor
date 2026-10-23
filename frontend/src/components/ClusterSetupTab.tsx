@@ -305,7 +305,7 @@ export function ClusterSetupTab({
         <div className="cl-stack">
           <ClusterCard
             actions={<StatusPill label={cluster.label} tone={controllerPill(cluster)} />}
-            description="This Vaelor node"
+            description="This Vaelor controller"
             icon="cluster"
             iconAccent
             title="Head controller"

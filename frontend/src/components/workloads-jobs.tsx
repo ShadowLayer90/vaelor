@@ -4,6 +4,7 @@ import { activityStateLabel, canRetryFromActivity, filesForCandidate, currentAss
   modelForJob, summarizeWorkloadActivity } from "../lib/workloadActivity";
 import { canonicalOperationState, jobCanCancel, jobIsReady, jobIsRetryable, jobLabel, jobNeedsAttention, jobIsSuccessful, jobRecoveryGuidance, jobStateLabel, jobSummary, jobTechnicalDetail } from "../lib/jobPresentation";
 import { exactTime, timeAgo } from "../lib/format";
+import { failureWord, settledFailure } from "../lib/operationOutcome";
 import { useOperationOwner } from "../hooks/useOperationOwner";
 import { AccelerationVerdict } from "./AccelerationVerdict";
 import { AppsIconTile, AppsInset, AppsProgress } from "./appsKit";
@@ -175,15 +176,34 @@ function jobIcon(type: string): IconName {
   return "activity";
 }
 
-/** A job's pill: red only for attention, green only for a finished good outcome, blue while it works. */
+/**
+ * A job's pill: red only for attention, green only for a finished good outcome, blue while it works.
+ *
+ * VD-133 1.5.5 #4: red follows the server's verdict (`needs_attention`) when it
+ * gave one - the row's raw `attention` says only that its state is an
+ * attention state, which a later run or the owner's dismissal does not change.
+ */
 export function jobTone(job: WorkloadJob): StatusTone {
-  if (jobNeedsAttention(job)) return "danger";
+  const settled = jobSettled(job);
+  if (settled) return settled.tone;
+  if (typeof job.needs_attention === "boolean" ? job.needs_attention : jobNeedsAttention(job)) return "danger";
   if (jobIsReady(job)) return "success";
   const state = canonicalOperationState(job);
   return state === "running" || state === "queued" ? "info" : "neutral";
 }
 
 const sentenceCase = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
+
+/** A failure the server says is resolved or dismissed (VD-133 1.5.5 #4), or null. */
+const jobSettled = (job: WorkloadJob) => (canonicalOperationState(job) === "failed" ? settledFailure(job) : null);
+
+/** The row's pill words: settled, a restart's cut-off, or the state. */
+function jobPillLabel(job: WorkloadJob, models: ManagedInventory["models"], currentDeployId: string | null) {
+  const settled = jobSettled(job);
+  if (settled) return settled.label;
+  if (canonicalOperationState(job) === "failed") return failureWord(job);
+  return sentenceCase(activityStateLabel(job, models, currentDeployId) ?? jobStateLabel(job));
+}
 
 export function WorkloadJobActivity({
   applicationResumeJobId,
@@ -270,6 +290,7 @@ function JobRow({
   resolved?: number;
 }) {
   const guidance = jobRecoveryGuidance(job);
+  const settled = jobSettled(job);
   const technical = jobTechnicalDetail(job);
   const choices = job.type === "model.inspect" && jobIsReady(job) ? fileChoices(job) : [];
   const history = resolved
@@ -282,7 +303,7 @@ function JobRow({
   const deployed = job.type === "model.deploy" && jobIsSuccessful(job) && Boolean(job.result?.endpoint);
   const readings = job.type === "model.deploy" && Boolean(job.result?.acceleration || job.result?.context_built);
   const gpuTier = job.type === "model.deploy" && jobIsSuccessful(job) && Boolean(job.result) && isGpuChatTier(job.result);
-  const hasBody = Boolean(guidance || technical || choices.length || noMatch || deployable || deployed || readings || gpuTier);
+  const hasBody = Boolean(settled || guidance || technical || choices.length || noMatch || deployable || deployed || readings || gpuTier);
   return (
     <li className="apps-job">
       <div className="apps-job__head">
@@ -299,17 +320,18 @@ function JobRow({
           {canonicalOperationState(job) === "running" && <AppsProgress fraction={job.progress / 100} label={`${job.progress}% complete`} />}
         </div>
         <div className="apps-job__controls">
-          <StatusPill label={sentenceCase(activityStateLabel(job, managedModels, currentDeployId) ?? jobStateLabel(job))} tone={jobTone(job)} />
+          <StatusPill label={jobPillLabel(job, managedModels, currentDeployId)} tone={jobTone(job)} />
           {applicationResumeJobId === job.id ? <Button variant="quiet" onClick={onResumeApplicationResearch}>Resume application research</Button> : jobCanCancel(job) ? (
             <Button variant="quiet" onClick={() => void onJobAction(job, "cancel")}>Cancel</Button>
-          ) : canRetryFromActivity(job) && jobIsRetryable(job) ? (
+          ) : canRetryFromActivity(job) && jobIsRetryable(job) && !job.resolution ? (
             <Button variant="quiet" onClick={() => void onJobAction(job, "retry")}>Retry</Button>
           ) : null}
         </div>
       </div>
       {hasBody && (
         <div className="apps-job__body">
-          {guidance && <p className="apps-job__guidance">{guidance.cause} {guidance.recovery}</p>}
+          {settled && <p className="apps-job__note" data-field="settled">{settled.note}</p>}
+          {guidance && !settled && <p className="apps-job__guidance">{guidance.cause} {guidance.recovery}</p>}
           {technical && (
             <details className="apps-disclosure">
               <summary>Technical details</summary>

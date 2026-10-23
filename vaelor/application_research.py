@@ -87,6 +87,30 @@ class ResearchTimeout(ResearchFetchError):
     """The bounded outbound request timed out."""
 
 
+# VD-222 item 1: the response headers a caller may read off a refused fetch, so
+# a public API's rate limit can be told to the owner plainly ("try again in N
+# minutes") instead of as a bare HTTP status. Only these are carried; nothing
+# else from the refused response leaves the broker (GitHub's limit message, for
+# one, names the box's public address).
+RATE_LIMIT_HEADERS = frozenset({
+    "retry-after", "x-ratelimit-limit", "x-ratelimit-remaining",
+    "x-ratelimit-reset", "x-ratelimit-resource",
+})
+
+
+class ResearchHTTPError(ResearchFetchError):
+    """The public source answered with a non-success HTTP status."""
+
+    def __init__(self, status: int, headers: Mapping[str, str] | None = None) -> None:
+        super().__init__("The public source returned HTTP {}.".format(status))
+        self.status = int(status)
+        self.rate_headers = {
+            str(key).lower(): str(value)[:64]
+            for key, value in (headers or {}).items()
+            if str(key).lower() in RATE_LIMIT_HEADERS
+        }
+
+
 def source_relevance_tokens(query: str) -> frozenset[str]:
     """Lowercase tokens an on-topic research source is expected to mention.
 
@@ -433,7 +457,7 @@ class ApplicationResearchBroker:
                 redirects.append(current)
                 continue
             if not 200 <= response.status < 300:
-                raise ResearchFetchError("The public source returned HTTP {}.".format(response.status))
+                raise ResearchHTTPError(response.status, response.headers)
             return self._normalize(requested_url, canonical, redirects, response)
         raise ResearchSecurityError("The public source used too many redirects.")
 

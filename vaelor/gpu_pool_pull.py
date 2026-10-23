@@ -28,6 +28,7 @@ so the dependency runs one way.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Callable, Dict, Mapping, Optional
 
@@ -35,6 +36,7 @@ from .ssh_transport import SshTransportError
 from .vllm_drafters import drafter_profile
 from .vllm_serve_options import require_options
 
+LOGGER = logging.getLogger(__name__)
 
 #: How the deploy's weight pre-fetch is polled: the gap between reads of the
 #: pull unit, and the ceiling on one node's fetch. Generous because the artifact
@@ -190,10 +192,15 @@ class ModelPullWaiter:
         *,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
+        on_cached: Optional[Callable[[str, str, str, int], None]] = None,
     ):
         self.runtime = runtime
         self._sleep = sleep
         self._monotonic = monotonic
+        # VD-133 1.5.5 #9: told ``(node id, repo, revision, bytes on disk)``
+        # when a fetch ends with the weights there, so the model library
+        # lists what a deploy downloaded (`gpu_model_library.deploy_cache_recorder`).
+        self._on_cached = on_cached
 
     def wait(
         self,
@@ -312,6 +319,7 @@ class ModelPullWaiter:
             self.runtime.stop_pull_unit(transport, unit)
             tracked.pop(node_id, None)
             if state == "ok":
+                self._record(node_id, repo, revision, progress)
                 return
             raise RuntimeError(
                 "{} could not fetch {}: {}".format(
@@ -323,6 +331,17 @@ class ModelPullWaiter:
         raise RuntimeError(
             f"{node['name']} did not finish fetching {repo} in time."
         )
+
+    def _record(self, node_id: str, repo: str, revision: Optional[str], progress: Any) -> None:
+        """Tell ``on_cached`` the weights are on ``node_id``; a failed record never fails the serve."""
+        if self._on_cached is None:
+            return
+        size = progress.get("total_bytes") if isinstance(progress, Mapping) else 0
+        try:
+            self._on_cached(node_id, repo, str(revision or ""), int(size or 0))
+        except Exception as error:  # noqa: BLE001 - the weights are served either way
+            LOGGER.warning("The model library could not record %s on %s: %s",
+                           repo, node_id, error)
 
     def stop_quietly(self, transport: Any, unit: str) -> None:
         """Stop a pull unit on an abort path, tolerating a dead transport."""

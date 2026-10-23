@@ -78,7 +78,9 @@ export function KvGrid({ cells, className }: { cells: { label: ReactNode; value:
 /** One serving gauge: its value, or the honest mark saying why there is none. */
 function ServingValue({ value, render, label, reason = "The serving engine did not emit this gauge." }: { value: number | null | undefined; render: (value: number) => string; label: string; reason?: string }) {
   return value === null || value === undefined
-    ? <UnavailableValue label={`${label} unavailable`} reason={reason} />
+    // "Not read", the word the page's tiles and charts use for the same gauge;
+    // a bare "?" beside "Decode speed: Not read" read as a second verdict (VD-133 1.5.5 cosmetic).
+    ? <UnavailableValue label={`${label} unavailable`} mark="Not read" reason={reason} />
     : <>{render(value)}</>;
 }
 

@@ -30,6 +30,7 @@ from .assistant_machine_tools import (
 from .device_identity import appliance_identity
 from .live_readings import active_session, bound_session, coherent_reading
 from .assistant_cluster_tools import cluster_and_history_tools
+from .application_search import SEARCH_CATEGORIES
 from .research_provenance import (
     FetchProvenance,
     canonical_url,
@@ -475,7 +476,8 @@ class AssistantToolRegistry:
                     {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string", "minLength": 2, "maxLength": 300}
+                            "query": {"type": "string", "minLength": 2, "maxLength": 300},
+                            "categories": {"type": "string", "enum": list(SEARCH_CATEGORIES)},
                         },
                         "required": ["query"],
                         "additionalProperties": False,
@@ -761,7 +763,10 @@ class AssistantToolRegistry:
         search = self.callbacks.get("public_search")
         if search is None:
             raise AssistantToolError("Guarded public research is unavailable.")
-        results = search(query)
+        categories = arguments.get("categories", "general")  # VD-222: "news" reaches the news engines
+        if categories not in SEARCH_CATEGORIES:
+            raise AssistantToolError("Choose a search category: general or news.")
+        results = search(query) if categories == "general" else search(query, categories)
         if not isinstance(results, list):
             raise AssistantToolError("Guarded public research returned an invalid result.")
         filtered = []
@@ -908,7 +913,10 @@ class AssistantToolRegistry:
         administrator: bool = True,
         granted_scopes: Optional[Iterable[str]] = None,
         web_access: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
+        # ``timeout_seconds`` may only shorten the tool's own limit: an
+        # interactive caller's remaining budget (AI Chat's Web search, VD-221).
         tool = self._tools.get(str(name))
         if tool is None:
             raise AssistantToolError("Unknown assistant tool.")
@@ -950,7 +958,8 @@ class AssistantToolRegistry:
         else:
             future = executor.submit(_in_session, tool.handler, args)
         try:
-            raw = future.result(timeout=tool.timeout_seconds)
+            raw = future.result(timeout=tool.timeout_seconds if timeout_seconds is None
+                                else max(1.0, min(float(tool.timeout_seconds), timeout_seconds)))
         except FutureTimeout as error:
             future.cancel()
             raise AssistantToolError("The tool timed out safely.") from error

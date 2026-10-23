@@ -63,6 +63,8 @@ TARGET_KINDS: Dict[str, str] = {
     "credential.test": "key",
     "credential.model.select": "key",
     "ai_chat.connection.activate": "key",
+    # VD-222: the owner's web search key; the target is its credential id.
+    "web-search-key.store": "key",
     "endpoint.key.mint": "key",
     "endpoint.key.rotate": "key",
     "endpoint.key.revoke": "key",
@@ -104,6 +106,9 @@ TARGET_KINDS: Dict[str, str] = {
     "cluster.node.enroll": "node",
     "cluster.node.remove": "node",
     "cluster.node.architecture-eviction": "node",
+    # The automatic drain and worker software update (owner 2026-10-21 follow-up list).
+    "cluster.node.drain": "node",
+    "cluster.node.profile": "node",
     "cluster.telemetry.install": "node",
     "cluster.telemetry.reconcile": "node",
     "cluster.telemetry.remove": "node",
@@ -202,6 +207,8 @@ RESOLVED_KINDS: FrozenSet[str] = frozenset({
 
 #: The target the code writes is already a name an owner reads.
 NAMED_TARGETS: FrozenSet[str] = frozenset({
+    # VD-221: the target is the search query the administrator's question became.
+    "ai_chat.web_search",
     "admin.user.create",
     "admin.user.delete",
     "admin.user.update",
@@ -266,6 +273,10 @@ FIXED_TARGETS: Dict[str, str] = {
 
 #: The action is not about one item.
 NO_TARGET_ACTIONS: FrozenSet[str] = frozenset({
+    # VD-222: removing the web search key names no item; its details count the keys removed.
+    "web-search-key.remove",
+    # VD-221: a refusal to guess a live fact names no item; its details say why.
+    "ai_chat.live_fact.decline",
     "appliance.backup.offsite",
     "appliance.backup.offsite_push",
     "appliance.backup.passphrase",

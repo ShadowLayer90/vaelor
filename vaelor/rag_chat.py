@@ -12,7 +12,8 @@ import uuid
 from contextlib import closing
 from typing import Any, Dict, Optional, Sequence
 
-from .chat_appliance_scope import APPLIANCE_SCOPE_PROVIDER
+from .chat_appliance_scope import APPLIANCE_SCOPE_PROVIDER, LIVE_FACTS_PROVIDER
+from .chat_answer_text import ANSWER_KEPT_CHARS, stored_cut_off
 from .chat_thinking_store import stored_thinking
 from .conversation_titles import conversation_title
 from .document_text import DocumentExtractionError, extract_text
@@ -56,10 +57,10 @@ AGENT_ROUTER_AUTHOR = "agent-router"
 _ANSWERED_MODEL = (
     "(SELECT m.model FROM ai_chat_messages m "
     "WHERE m.conversation_id = c.id AND m.role = 'assistant' AND m.model != '' "
-    "AND m.model NOT IN ('{}', '{}') "
+    "AND m.model NOT IN ('{}', '{}', '{}') "
     "AND m.metadata_json NOT LIKE '%\"failed\": true%' "
     "ORDER BY m.id DESC LIMIT 1) AS answered_model"
-).format(AGENT_ROUTER_AUTHOR, APPLIANCE_SCOPE_PROVIDER)
+).format(AGENT_ROUTER_AUTHOR, APPLIANCE_SCOPE_PROVIDER, LIVE_FACTS_PROVIDER)
 
 
 def _stored_json(raw: Any, default: Any) -> Any:
@@ -115,7 +116,50 @@ def _message_metadata(value: Any) -> Dict[str, Any]:
     thinking = stored_thinking(value.get("thinking"))  # VD-209, bounded
     if thinking:
         metadata["thinking"] = thinking
+    cut_off = stored_cut_off(value.get("cut_off"))  # VD-206: a reload keeps the cut
+    if cut_off:
+        metadata["cut_off"] = cut_off
+    web = _web_search_view(value.get("web_search"))  # VD-221, bounded
+    if web:
+        metadata["web_search"] = web
     return metadata
+
+
+#: The states a reply Vaelor wrote instead of a guess records (VD-221).
+_WEB_SEARCH_STATES = frozenset({"off", "unavailable", "failed", "no_results"})
+
+
+def _web_search_view(value: Any) -> Any:
+    """What a stored answer says about the web search behind it (VD-221): the
+    search's summary, or - on a live-fact reply - the state Web search was in."""
+    if isinstance(value, str):
+        return value if value in _WEB_SEARCH_STATES else ""
+    if not isinstance(value, dict) or not str(value.get("outcome", "")).strip():
+        return {}
+    view: Dict[str, Any] = {
+        key: str(value.get(key, "")).strip()[:limit]
+        for key, limit in (("outcome", 40), ("query", 200), ("sent_to", 120))
+    }
+    for key in ("sources", "results"):
+        try:
+            view[key] = max(0, min(int(value.get(key, 0)), 100))
+        except (TypeError, ValueError):
+            view[key] = 0
+    return view
+
+
+def _add_column(connection: sqlite3.Connection, statement: str) -> None:
+    """Run one ``ALTER TABLE ... ADD COLUMN``, tolerating a concurrent opener.
+
+    Two processes opening an older database at once both read the column as
+    missing and both add it; the second ``ALTER`` then fails with "duplicate
+    column name" and that store would not open (VD-221 review round 1).
+    """
+    try:
+        connection.execute(statement)
+    except sqlite3.OperationalError as error:
+        if "duplicate column" not in str(error).lower():
+            raise
 
 
 def _chunks(text: str, size: int = 900, overlap: int = 140):
@@ -223,16 +267,18 @@ class RagChatStore:
                 for row in connection.execute("PRAGMA table_info(ai_chat_messages)")
             }
             if "retrieval_json" not in columns:
-                connection.execute(
+                _add_column(
+                    connection,
                     "ALTER TABLE ai_chat_messages "
-                    "ADD COLUMN retrieval_json TEXT NOT NULL DEFAULT '{}'"
+                    "ADD COLUMN retrieval_json TEXT NOT NULL DEFAULT '{}'",
                 )
             # The model that produced an answer is a property of that answer,
             # not of the picker's current value. Older messages record no
             # model rather than borrowing today's selection.
             if "model" not in columns:
-                connection.execute(
-                    "ALTER TABLE ai_chat_messages ADD COLUMN model TEXT NOT NULL DEFAULT ''"
+                _add_column(
+                    connection,
+                    "ALTER TABLE ai_chat_messages ADD COLUMN model TEXT NOT NULL DEFAULT ''",
                 )
             # Whether a stored turn is a recorded failure or a real reply is
             # not something a reader can infer from the text: a model may
@@ -241,9 +287,22 @@ class RagChatStore:
             # the Retry affordance vanished with the page. It is recorded
             # explicitly, and messages saved earlier simply claim nothing.
             if "metadata_json" not in columns:
-                connection.execute(
+                _add_column(
+                    connection,
                     "ALTER TABLE ai_chat_messages "
-                    "ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+                    "ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
+                )
+            # VD-221: whether this chat's Web search toggle is on, so reopening
+            # the chat shows what it was left at. Older chats read as off.
+            conversation_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(ai_chat_conversations)")
+            }
+            if "web_search" not in conversation_columns:
+                _add_column(
+                    connection,
+                    "ALTER TABLE ai_chat_conversations "
+                    "ADD COLUMN web_search INTEGER NOT NULL DEFAULT 0",
                 )
             connection.commit()
 
@@ -633,6 +692,7 @@ class RagChatStore:
         item["model"] = str(item.pop("answered_model", "") or "")
         item["collections"] = json.loads(item.pop("collections_json"))
         item["archived"] = bool(item["archived"])
+        item["web_search"] = bool(item.get("web_search"))
         return item
 
     def add_message(
@@ -660,7 +720,7 @@ class RagChatStore:
                 (conversation_id,role,content,citations_json,created_at,retrieval_json,model,metadata_json)
                 VALUES(?,?,?,?,?,?,?,?)
                 """,
-                (conversation_id, role, str(content)[:12000],
+                (conversation_id, role, str(content)[:ANSWER_KEPT_CHARS],
                  json.dumps(citations or []), now, json.dumps(retrieval or {}),
                  str(model)[:200], json.dumps(stored_metadata)),
             )
@@ -671,7 +731,7 @@ class RagChatStore:
             connection.commit()
         return {
             "id": cursor.lastrowid, "conversation_id": conversation_id,
-            "role": role, "content": str(content)[:12000],
+            "role": role, "content": str(content)[:ANSWER_KEPT_CHARS],
             "citations": citations or [], "created_at": now,
             "retrieval": retrieval or {}, "model": str(model)[:200],
             "metadata": stored_metadata,
@@ -695,7 +755,7 @@ class RagChatStore:
                 (conversation_id,role,content,citations_json,created_at)
                 VALUES(?,?,?,?,?)
                 """,
-                (conversation_id, "user", user_text[:12000], "[]", now),
+                (conversation_id, "user", user_text[:ANSWER_KEPT_CHARS], "[]", now),
             )
             cursor = connection.execute(
                 """
@@ -704,7 +764,7 @@ class RagChatStore:
                 VALUES(?,?,?,?,?,?,?)
                 """,
                 (
-                    conversation_id, "assistant", assistant_text[:12000],
+                    conversation_id, "assistant", assistant_text[:ANSWER_KEPT_CHARS],
                     json.dumps(citations or []), now, json.dumps(retrieval or {}),
                     str(model)[:200],
                 ),
@@ -716,7 +776,7 @@ class RagChatStore:
             connection.commit()
         return {
             "id": cursor.lastrowid, "conversation_id": conversation_id,
-            "role": "assistant", "content": assistant_text[:12000],
+            "role": "assistant", "content": assistant_text[:ANSWER_KEPT_CHARS],
             "citations": citations or [], "created_at": now,
             "retrieval": retrieval or {}, "model": str(model)[:200],
             "metadata": {},
@@ -803,8 +863,9 @@ class RagChatStore:
         # No `model`: which model answered here is derived from the turns, so a
         # client cannot relabel a chat with a model that never spoke in it.
         requested = patch.get("collections", current["collections"])
-        if not title or not isinstance(archived, bool):
-            raise RagChatError("Enter a title and valid archived state.")
+        web_search = patch.get("web_search", current["web_search"])  # VD-221
+        if not title or not isinstance(archived, bool) or not isinstance(web_search, bool):
+            raise RagChatError("Enter a title, a valid archived state and a valid web search choice.")
         with closing(self._connect()) as connection:
             owned = {
                 row["id"] for row in connection.execute(
@@ -818,11 +879,11 @@ class RagChatStore:
             connection.execute(
                 """
                 UPDATE ai_chat_conversations
-                SET title=?,archived=?,collections_json=?,updated_at=?
+                SET title=?,archived=?,collections_json=?,web_search=?,updated_at=?
                 WHERE id=? AND actor=?
                 """,
                 (
-                    title, int(archived), json.dumps(collections),
+                    title, int(archived), json.dumps(collections), int(web_search),
                     time.time(), conversation_id, actor,
                 ),
             )

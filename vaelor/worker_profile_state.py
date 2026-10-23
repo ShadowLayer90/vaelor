@@ -18,12 +18,15 @@ the card says so - and its ownership differences are the appliance's own.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from . import worker_profile as wp
 from .api_host_settings_routes import STALE_AFTER_SECONDS
 from .worker_profile_compare import DIFFERS, MATCHES, NO_STATE, UNREAD, compare
+
+LOGGER = logging.getLogger(__name__)
 
 #: Said wherever the full appliance is on a worker: today nothing converts it.
 #: Found on the Z2, 2026-10-04 (LESSONS 10): the exit read "Conversion" while
@@ -46,7 +49,9 @@ STATES: Dict[str, Dict[str, str]] = {
     "current": {
         "label": "Up to date", "tone": "success",
         "meaning": "Measured matches this controller's profile, read within 15 minutes.",
-        "allowed": "Everything.", "exit": "A profile change or a hand edit; Recheck re-reads it."},
+        "allowed": "Everything.", "exit": ("It stays up to date until this controller's profile changes, someone "
+                 "edits the machine by hand, or its reading is more than 15 minutes old; "
+                 "Recheck re-reads it.")},
     "current-reading-old": {
         "label": "Up to date at last check", "tone": "neutral",
         "meaning": "Matched at its last reading, which is more than 15 minutes old.",
@@ -113,7 +118,43 @@ STATES: Dict[str, Dict[str, str]] = {
         "meaning": "Never measured, or not readable.",
         "allowed": "Nothing claims current; serving and deploys carry on unaffected.",
         "exit": "Recheck."},
+    # Owner 2026-10-21 (VD-133 1.5.5 #16): Vaelor was uninstalled on the
+    # machine while it is still in the cluster. Read from positive evidence
+    # only (:func:`uninstall_evidence`); the exit is the owner's choice, and
+    # Re-add is the reviewed join, Remove the reviewed removal.
+    "uninstalled": {
+        "label": "Vaelor uninstalled", "tone": "warning",
+        "meaning": "Vaelor was uninstalled on this machine while it is still in the cluster.",
+        "allowed": ("Nothing is installed, repaired or loaded on it automatically. This controller "
+                    "asks the cluster to drain it, and the line below says whether that worked; the "
+                    "rest of the cluster carries on."),
+        "exit": "Re-add it to the cluster, or Remove it."},
 }
+
+#: Why the controller holds a worker as uninstalled: the record the worker's own
+#: uninstall leaves (`worker_profile.UNINSTALLED_PATH`), or the marker this
+#: controller wrote there gone from a machine that answered (a purge, or the
+#: machine wiped). Both are positive readings; a machine that did not answer,
+#: or a file that could not be read, is neither (LESSONS 8).
+UNINSTALL_RECORD, MARKER_GONE = "uninstall-record", "marker-gone"
+#: What the card says for each, in plain words (VD-173).
+UNINSTALLED_SENTENCES = {
+    UNINSTALL_RECORD: ("Vaelor was uninstalled on this machine. Nothing is put back until you "
+                       "choose: Re-add it to the cluster, or Remove it."),
+    MARKER_GONE: ("Vaelor was removed from this machine together with its data: the file this "
+                  "controller placed there to know it as a worker is gone. Nothing is put back "
+                  "until you choose: Re-add it to the cluster, or Remove it."),
+}
+#: Set on the stored record when this controller took the profile off itself,
+#: so its own removal of the marker is never read as the machine being wiped.
+PROFILE_TAKEN_OFF = "profile_taken_off"
+#: Set when a verdict that had queued a cluster drain ends without the owner's
+#: Re-add (the full appliance was installed there): the drain still stands.
+DRAINED_WHILE_UNINSTALLED = "drained_while_uninstalled"
+#: The card's line while that drain stands, until the owner returns it to service.
+STILL_DRAINED = ("This machine is still drained in the cluster from when Vaelor was uninstalled "
+                 "on it, so the cluster places no new work there. Use Return to service on this "
+                 "card when it should take work again.")
 
 NEVER_CHECKED = "never checked"
 STALE_SENTENCE = "reading is old — Recheck"
@@ -314,6 +355,106 @@ def appliance_present(appliance: Mapping[str, Any]) -> bool:
     return appliance.get("reading") in _APPLIANCE_STATES
 
 
+def uninstall_evidence(previous: Mapping[str, Any], reading: Optional[Mapping[str, Any]]) -> str:
+    """Which positive evidence says Vaelor was uninstalled on the worker, or ``""``.
+
+    Owner 2026-10-21 (VD-133 1.5.5 #16). Only a reading the machine answered
+    counts, and only two things in it: the uninstall record present, or this
+    controller's marker read as absent where the previous stored reading found
+    it - unless this controller took the profile off itself, or the full
+    appliance is on the machine (an installer run with --leave-worker-role
+    takes the marker off and installs it: that is a reinstall, and the
+    full-appliance state says so). An unreachable
+    machine, an unread file or a reading that never saw the marker is none of
+    these, and keeps today's behaviour (LESSONS 8).
+    """
+    if not isinstance(reading, Mapping) or reading.get("ok") is not True:
+        return ""
+    record = reading.get("uninstalled")
+    if isinstance(record, Mapping) and record.get("present") is True:
+        return UNINSTALL_RECORD
+    marker = (reading.get("items") or {}).get("marker")
+    before = previous.get("reading") if isinstance(previous.get("reading"), Mapping) else {}
+    earlier = (before.get("items") or {}).get("marker") if before.get("ok") is True else None
+    # ``present: false`` is the probe's own "not there"; a file it could not
+    # read carries ``error`` and no such answer.
+    if (isinstance(marker, Mapping) and marker.get("present") is False
+            and isinstance(earlier, Mapping) and earlier.get("present") is True
+            and not previous.get(PROFILE_TAKEN_OFF)
+            and not appliance_present(appliance_reading(reading.get("appliance")))):
+        return MARKER_GONE
+    return ""
+
+
+def reinstalled(reading: Optional[Mapping[str, Any]]) -> bool:
+    """Whether a reading shows the full appliance installed and no uninstall record.
+
+    An uninstall writes its record before it stops anything, so a reading taken
+    mid-uninstall still has it; a reading without it, with the appliance's
+    services present, is an installer having run there since.
+    """
+    if not isinstance(reading, Mapping) or reading.get("ok") is not True:
+        return False
+    record = reading.get("uninstalled")
+    return (isinstance(record, Mapping) and record.get("present") is False
+            and appliance_present(appliance_reading(reading.get("appliance"))))
+
+
+def uninstalled(record: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The stored uninstalled verdict on a worker's record, or ``None``."""
+    held = (record or {}).get("uninstalled")
+    if isinstance(held, Mapping) and held.get("evidence") in UNINSTALLED_SENTENCES:
+        return dict(held)
+    return None
+
+
+def hold_uninstalled(previous: Mapping[str, Any], record: Dict[str, Any], now: float) -> Dict[str, Any]:
+    """Put the uninstalled verdict on a new ``record``: kept from ``previous``, or found in its reading.
+
+    Kept until the owner's Re-add clears it (`worker_profile_job`), so a later
+    reading without the evidence - a purge after a keep-data uninstall, which
+    takes the record and the marker away - is still a machine Vaelor was
+    uninstalled on, never one that drifted.
+    """
+    held = uninstalled(previous)
+    left = previous.get(DRAINED_WHILE_UNINSTALLED)
+    if held is not None and reinstalled(record.get("reading")):
+        # The full appliance was installed there since, and no uninstall
+        # record stands: the full-appliance state wins. A drain queued while
+        # it was uninstalled is not undone by that, so it is remembered and
+        # the card keeps saying so (round 2 M2).
+        if held.get("drain_job"):
+            left = {"drain_job": held["drain_job"]}
+        held = None
+    elif held is None:
+        evidence = uninstall_evidence(previous, record.get("reading"))
+        held = {"evidence": evidence, "at": int(now)} if evidence else None
+    if held is not None:
+        record["uninstalled"] = held
+    if isinstance(left, Mapping):
+        record[DRAINED_WHILE_UNINSTALLED] = dict(left)
+    return record
+
+
+def uninstalled_node_ids(store: Any, node_ids: Iterable[Any]) -> List[str]:
+    """The ids in ``node_ids`` whose stored record says Vaelor was uninstalled there.
+
+    Every automatic path that would write to a worker asks this first (owner
+    2026-10-21). A record that cannot be read is logged and not counted: that
+    machine keeps today's behaviour, and the write path's own read of it decides.
+    """
+    found = []
+    for node_id in node_ids:
+        try:
+            record = store.node_profile(str(node_id))
+        except Exception:  # noqa: BLE001 - unread is not uninstalled (LESSONS 8); logged
+            LOGGER.warning("could not read the software record of node %s", node_id, exc_info=True)
+            continue
+        if uninstalled(record) is not None:
+            found.append(str(node_id))
+    return found
+
+
 def profile_verdict(rows: List[Mapping[str, Any]], measured_digest: Optional[str],
                     expected_digest: str) -> str:
     """The one answer to "does this worker match this controller's profile?".
@@ -354,6 +495,10 @@ def derive_state(*, record: Mapping[str, Any], rows: List[Mapping[str, Any]],
     """
     if not record.get("reading") or not _dated(record.get("checked_at")):
         return "unknown"
+    # Owner 2026-10-21: an uninstalled worker outranks every other reading -
+    # nothing is compared, queued or repaired until the owner chooses.
+    if uninstalled(record) is not None:
+        return "uninstalled"
     if appliance["reading"] == "unread":
         return "unknown"
     if appliance["reading"] in _APPLIANCE_STATES:
@@ -387,6 +532,8 @@ def _sentence(state: str, rows: List[Mapping[str, Any]], appliance: Mapping[str,
     attempt = record.get("attempt") or {}
     if state in _APPLIANCE_STATES.values():
         return appliance["sentence"]
+    if state == "uninstalled":
+        return UNINSTALLED_SENTENCES[uninstalled(record)["evidence"]]
     differing = _labels(rows, DIFFERS)
     if state == "unknown":
         if record.get("reading") and not _dated(record.get("checked_at")):

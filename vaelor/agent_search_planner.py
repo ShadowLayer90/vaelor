@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -90,6 +92,97 @@ SEARCH_PLANNER_PROMPT = (
 )
 
 
+# VD-222 item 5: words about WHEN that a planner model adds on its own. The live
+# case (VD-221, 2026-10-19): "what is the temperature in osaka?" was planned as
+# "current temperature Osaka Japan weather", and the engine answered with pages
+# about a bank named Current. A recency word the owner wrote stays; one the
+# model added is dropped only where it is about time: at the start or end of
+# the query, or beside a date or time word. Mid-phrase it is often a noun
+# ("RTX 4090 current draw"), at the end "current" usually is ("ocean current"),
+# and after a capitalised word it is a name ("USA Today"), so those stay.
+RECENCY_PHRASES = ("right now", "this week")
+RECENCY_WORDS = ("current", "currently", "latest", "today", "now")
+#: What the owner may have written for each word: "currently" and "currents"
+#: protect "current" (and the other way round); "today's" protects "today".
+_OWNER_FORMS = {"current": r"current(?:ly|s)?", "currently": r"current(?:ly|s)?"}
+#: Date and time words beside which a recency word is about time, mid-query.
+TIME_WORDS = frozenset((
+    "time", "date", "day", "days", "week", "weekend", "month", "year", "hour",
+    "hours", "tonight", "tomorrow", "yesterday", "morning", "evening",
+))
+_EDGE = ".,;:!?()[]\"'"
+
+
+def _owner_wrote(word: str, task: str) -> bool:
+    form = _OWNER_FORMS.get(word, re.escape(word))
+    return re.search(r"(?<![A-Za-z0-9])" + form + r"(?![A-Za-z0-9])", task, re.I) is not None
+
+
+def _recency_units(words: list) -> list:
+    """``(start, end, text)`` for each recency phrase or word in ``words``."""
+    plain = [word.strip(_EDGE).lower() for word in words]
+    units, index = [], 0
+    while index < len(plain):
+        pair = " ".join(plain[index:index + 2])
+        if pair in RECENCY_PHRASES:
+            units.append((index, index + 2, pair))
+            index += 2
+            continue
+        if plain[index] in RECENCY_WORDS:
+            units.append((index, index + 1, plain[index]))
+        index += 1
+    return units
+
+
+def drop_added_recency(query: str, task: str) -> tuple[str, list[str]]:
+    """``query`` without the recency words the model added where they are about
+    time, and the words dropped. A phrase is kept when the owner wrote it or a
+    recency word inside it ("now" keeps "right now")."""
+    words = query.split()
+    plain = [word.strip(_EDGE).lower() for word in words]
+    added = [
+        unit for unit in _recency_units(words)
+        if not any(_owner_wrote(part, task) for part in (unit[2], *unit[2].split()))
+    ]
+
+    def name(start: int) -> bool:  # "USA Today": a capitalised word after another
+        return start > 0 and words[start][:1].isupper() and words[start - 1][:1].isupper()
+
+    drop = set()
+    position = 0
+    for start, end, _text in added:  # the leading run
+        if start != position:
+            break
+        drop.add(start)
+        position = end
+    position = len(words)
+    for start, end, text in reversed(added):  # the trailing run
+        if end != position or text == "current" or start in drop or name(start):
+            break
+        drop.add(start)
+        position = start
+    for start, end, _text in added:  # beside a date or time word, mid-query
+        if start in drop:
+            continue
+        beside = {plain[i] for i in (start - 1, end) if 0 <= i < len(words)}
+        if beside & TIME_WORDS and not name(start):
+            drop.add(start)
+    removed = {index for start, end, _text in added if start in drop for index in range(start, end)}
+    dropped = [text for start, _end, text in added if start in drop]
+    return " ".join(word for index, word in enumerate(words) if index not in removed), dropped
+
+
+#: The words that make a question one for SearXNG's news engines (VD-222 F4).
+NEWS_WORDS = frozenset(("news", "headline", "headlines"))
+
+
+def news_category(task_text: Any) -> str:
+    """"news" when the owner's question asks for news or headlines, else
+    "general": the category `acquire_web_research` searches."""
+    words = set(re.findall(r"[a-z]+", str(task_text or "").lower()))
+    return "news" if words & NEWS_WORDS else "general"
+
+
 def _resolve_model(connection: Mapping[str, str], headers: Dict[str, str], timeout: int) -> str:
     """The configured model id, or the endpoint's first advertised model."""
     if not allowed_inference_endpoint(dict(connection)):
@@ -140,7 +233,7 @@ def _extract_query(content: Any) -> str:
 
 def plan_search_query(
     connection: Mapping[str, str], task_text: Any, timeout_seconds: int,
-    *, prior: Optional[Mapping[str, Any]] = None,
+    *, prior: Optional[Mapping[str, Any]] = None, timeout_cap: Optional[float] = None,
 ) -> tuple[str, str]:
     """One bounded model call turning a task into a web-search query.
 
@@ -150,6 +243,10 @@ def plan_search_query(
 
     ``prior`` carries ``{"query": <previous>, "off_topic_titles": [...]}`` so the
     model can REFORMULATE after a first pass that read only off-topic results.
+
+    ``timeout_cap`` is a hard ceiling on the call: `inference_timeout` raises a
+    small budget to its own floor (45-900 s), which an interactive caller such
+    as AI Chat's Web search cannot wait for (VD-221 review round 1).
     """
     task = " ".join(str(task_text or "").split())[:2000]
     if not task:
@@ -178,6 +275,8 @@ def plan_search_query(
             reformulated = True
     try:
         timeout = inference_timeout(dict(connection), timeout_seconds)
+        if timeout_cap is not None:
+            timeout = max(1, min(timeout, int(timeout_cap)))
         model = _resolve_model(connection, headers, timeout)
         body = chat_completion(
             dict(connection),
@@ -217,35 +316,54 @@ def plan_search_query(
         # code is broken". The reason string still records the fallback.
         LOGGER.warning("search query planning failed; using the deterministic query", exc_info=True)
         return "", "planner-unavailable: model query planning failed; used the deterministic query"
-    query = _extract_query(content)
+    # Both passes (VD-222 item 5): a reformulation adds "latest" as readily.
+    query, dropped = drop_added_recency(_extract_query(content), task)
     if len(query) < 2:
         return "", "planner-empty: model returned no usable query; used the deterministic query"
+    note = "; dropped {} the task did not ask for".format(
+        ", ".join("'{}'".format(word) for word in dropped)
+    ) if dropped else ""
     if reformulated:
         return query, (
             "model-reformulated: the model rewrote the query after the first pass "
-            "read only off-topic results ('{}')".format(query)
+            "read only off-topic results ('{}'){}".format(query, note)
         )
     return query, (
         "model-formulated: the model wrote the web-search query for this task "
-        "('{}')".format(query)
+        "('{}'){}".format(query, note)
     )
+
+
+def _remaining(deadline: Optional[float]) -> Dict[str, Any]:
+    """A tool call's timeout capped at what is left, or nothing without a deadline
+    (so the agent runner's calls stay exactly as they were)."""
+    if deadline is None:
+        return {}
+    return {"timeout_seconds": max(1.0, deadline - time.monotonic())}
 
 
 def run_web_search(
     tools, query: str, *, actor: str, administrator: bool, scopes, web_access,
+    deadline: Optional[float] = None, categories: str = "general",
 ) -> tuple[Any, list, Optional[dict]]:
     """Run one guarded ``research.search``; return ``(facts, candidates, failure)``.
+
+    ``categories="news"`` asks SearXNG's news engines (VD-222); the default
+    sends the arguments exactly as before.
 
     On success ``facts`` is the search result dict and ``candidates`` its
     results. On an acquisition error ``facts`` is ``{"unavailable": failure}`` -
     the same shape the runner records elsewhere - ``candidates`` is empty, and
     ``failure`` is the recorded entry so the caller can append it once.
+    ``deadline`` (a ``time.monotonic`` instant) caps the search's own timeout.
     """
     try:
         result = tools.run(
-            "research.search", {"query": query}, actor=actor,
+            "research.search",
+            {"query": query, **({} if categories == "general" else {"categories": categories})},
+            actor=actor,
             administrator=administrator, granted_scopes=scopes,
-            web_access=web_access,
+            web_access=web_access, **_remaining(deadline),
         )["result"]
     except AssistantToolError as error:
         failure = {
@@ -288,7 +406,7 @@ def rank_search(
 
 def fetch_relevant_pages(
     tools, heartbeat, *, relevant: list, search: Any, domains: list, web_access,
-    actor: str, administrator: bool, scopes,
+    actor: str, administrator: bool, scopes, deadline: Optional[float] = None,
 ) -> tuple[list, list, Optional[list], Optional[dict]]:
     """Read up to three on-topic pages and build the citable source index.
 
@@ -308,7 +426,8 @@ def fetch_relevant_pages(
     (the fetched text says it better, measured at 7,000 of 9,900 characters), and
     a redirect is recorded on the source so a citation never hides that the
     evidence came from a different page than the link. ``fetched`` and
-    ``search_index`` are ``None`` when nothing was read.
+    ``search_index`` are ``None`` when nothing was read. ``deadline`` (a
+    ``time.monotonic`` instant) stops further reads once it has passed.
     """
     research_sources = [
         {
@@ -325,11 +444,15 @@ def fetch_relevant_pages(
     fetch_access = {**web_access, "search_result_urls": vetted_urls}
     fetched: list = []
     for candidate in relevant[:3]:
+        # Checked before the first read too: a budget spent on the search
+        # reads no page at all (VD-221 review round 2, item 5).
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         try:
             fetched.append(tools.run(
                 "research.fetch", {"url": candidate.get("url", "")},
                 actor=actor, administrator=administrator,
-                granted_scopes=scopes, web_access=fetch_access,
+                granted_scopes=scopes, web_access=fetch_access, **_remaining(deadline),
             )["result"])
         except AssistantToolError as error:
             fetch_failures.append({
@@ -390,6 +513,7 @@ class ResearchAcquisition:
 def acquire_web_research(
     tools, heartbeat, *, agent, mode: str, task_description: str, scopes,
     administrator: bool, actor: str, web_access: Mapping[str, Any], domains: list,
+    budget_seconds: Optional[float] = None, categories: str = "general",
 ) -> ResearchAcquisition:
     """Run the a83 research pre-fetch and return everything the runner surfaces.
 
@@ -399,7 +523,23 @@ def acquire_web_research(
     ``shaped_query`` stands in otherwise, and every query actually run is recorded
     in ``search_attempts`` - so this path is byte-for-byte the behaviour the
     runner had before the loop existed.
+
+    ``budget_seconds`` bounds the whole stage for an interactive caller (VD-221):
+    every planner call, search and page read is capped at what is left of it,
+    the reformulation pass is skipped once half is spent, and no page is read
+    once it has run out - including the first. ``None`` keeps the agent
+    runner's behaviour unchanged.
+
+    ``categories`` ("general" or "news") is the SearXNG category both passes
+    search (VD-222); the agent runner leaves it at "general".
     """
+    started = time.monotonic()
+    deadline = None if budget_seconds is None else started + budget_seconds
+
+    def capped() -> Dict[str, Any]:
+        # Passed only when there is a budget, so the runner's call is unchanged.
+        return {} if deadline is None else {"timeout_cap": max(1.0, deadline - time.monotonic())}
+
     facts: Dict[str, Any] = {}
     tool_failures: List[Dict[str, Any]] = []
     search_query, query_shaping = shaped_query(task_description)
@@ -412,14 +552,14 @@ def acquire_web_research(
     planner_timeout = getattr(agent, "timeout_seconds", 20)
     if planner_connection:
         planned_query, planned_reason = plan_search_query(
-            planner_connection, task_description, planner_timeout,
+            planner_connection, task_description, planner_timeout, **capped(),
         )
         if planned_query:
             search_query, query_shaping = planned_query, planned_reason
     search_attempts = [{"query": search_query, "reason": query_shaping}]
     search, candidates, failure = run_web_search(
         tools, search_query, actor=actor, administrator=administrator,
-        scopes=scopes, web_access=web_access,
+        scopes=scopes, web_access=web_access, deadline=deadline, categories=categories,
     )
     if failure:
         tool_failures.append(failure)
@@ -433,6 +573,7 @@ def acquire_web_research(
         planner_connection is not None and not domains and not relevant
         and isinstance(search, dict) and "unavailable" not in search
         and web_access.get("enabled") is True
+        and (deadline is None or time.monotonic() - started < budget_seconds / 2)
     ):
         prior = {
             "query": search_query,
@@ -443,13 +584,14 @@ def acquire_web_research(
         }
         next_query, next_reason = plan_search_query(
             planner_connection, task_description, planner_timeout, prior=prior,
+            **capped(),
         )
         if next_query and next_query != search_query:
             search_query, query_shaping = next_query, next_reason
             search_attempts.append({"query": next_query, "reason": next_reason})
             retry, candidates, retry_failure = run_web_search(
                 tools, next_query, actor=actor, administrator=administrator,
-                scopes=scopes, web_access=web_access,
+                scopes=scopes, web_access=web_access, deadline=deadline, categories=categories,
             )
             if retry_failure:
                 tool_failures.append(retry_failure)
@@ -460,6 +602,7 @@ def acquire_web_research(
     research_sources, fetch_failures, fetched, search_index = fetch_relevant_pages(
         tools, heartbeat, relevant=relevant, search=search, domains=domains,
         web_access=web_access, actor=actor, administrator=administrator, scopes=scopes,
+        deadline=deadline,
     )
     tool_failures.extend(fetch_failures)
     if fetched is not None:

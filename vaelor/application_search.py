@@ -13,6 +13,16 @@ from .runtime_paths import env_value
 
 
 MAX_SEARCH_RESPONSE = 1024 * 1024
+#: The SearXNG categories a caller may ask for. "news" is the only one beside
+#: the default, for the news engines web_research.SEARCH_ENGINES_ON turns on.
+SEARCH_CATEGORIES = ("general", "news")
+#: The time range a news search carries, fixed here and never taken from a
+#: caller. Measured on the Z2 2026-10-19 (VD-222 live check): without it the
+#: news category returned mostly stale Reuters items (2021-2025) and Wikinews;
+#: with time_range=week, "latest news headlines Japan", "Japan news" and
+#: "Japan prime minister" each returned current pages (Bing news, Reuters of
+#: 2026-10-18); "day" was too thin (2-11 results). General searches carry none.
+NEWS_TIME_RANGE = "week"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -75,7 +85,11 @@ class SearxSearchClient:
     def configured(self) -> bool:
         return bool(self.base_url)
 
-    def search(self, queries: Iterable[str]) -> list[Dict[str, Any]]:
+    def search(self, queries: Iterable[str], categories: str = "general") -> list[Dict[str, Any]]:
+        """``categories`` is one of SEARCH_CATEGORIES: "news" reaches the news
+        engines (Bing news, DuckDuckGo news), which "general" never asks (VD-222)."""
+        if categories not in SEARCH_CATEGORIES:
+            raise ValueError("Choose a search category Vaelor offers: {}.".format(", ".join(SEARCH_CATEGORIES)))
         if not self.configured:
             return []
         query_results: list[list[Dict[str, Any]]] = []
@@ -87,9 +101,10 @@ class SearxSearchClient:
             url = self.base_url + "/search?" + urllib.parse.urlencode({
                 "q": query,
                 "format": "json",
-                "categories": "general",
+                "categories": categories,
                 "language": "en-US",
                 "safesearch": "1",
+                **({"time_range": NEWS_TIME_RANGE} if categories == "news" else {}),
             })
             request = urllib.request.Request(
                 url,

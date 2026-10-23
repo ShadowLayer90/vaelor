@@ -2,9 +2,10 @@ import { Fragment, useEffect, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { RecordFacts } from "./RecordKit";
 import { StatusPill } from "./StatusPill";
-import { Button, Card, Notice } from "./ui";
+import { Button, Card, Notice, TabSet } from "./ui";
 import type { StatusTone } from "./ui/status";
 import type { TransportStatus } from "./ConnectionsSettings";
+import "../styles/settings.css";
 import "../styles/trust.css";
 
 /*
@@ -101,6 +102,53 @@ function CopyCommand({ entry }: { entry: TrustCommand }) {
   );
 }
 
+/** The systems the controller renders a command for (`render` in tls_trust_commands.py). */
+export type TrustSystem = "windows" | "macos" | "linux";
+
+type NavigatorHints = Pick<Navigator, "platform" | "userAgent"> & {
+  maxTouchPoints?: number;
+  userAgentData?: { platform?: string };
+};
+
+/**
+ * What this page is open on, from what the browser says about itself: a
+ * computer's system, "phone" for a phone or tablet (its steps are the QR code,
+ * not a command), or "" when it cannot tell (ChromeOS has no command). Only a
+ * default: the owner can pick another tab, so a wrong guess costs one click
+ * (VD-133 1.5.5 #2). macOS is read before Windows because "darwin" contains
+ * "win"; an iPad asking for the desktop site says "MacIntel" but has touch.
+ */
+export function thisDevicesSystem(hints: NavigatorHints | undefined = typeof navigator === "undefined" ? undefined : navigator): TrustSystem | "phone" | "" {
+  if (!hints) return "";
+  const said = `${hints.userAgentData?.platform ?? ""} ${hints.platform ?? ""} ${hints.userAgent ?? ""}`.toLowerCase();
+  if (/android|iphone|ipad|ipod|mobile/.test(said)) return "phone";
+  if (/mac|darwin/.test(said)) return (hints.maxTouchPoints ?? 0) > 1 ? "phone" : "macos";
+  if (said.includes("win")) return "windows";
+  if (said.includes("cros")) return "";
+  if (/linux|x11/.test(said)) return "linux";
+  return "";
+}
+
+/**
+ * One tab per system the controller rendered a command for, opened on this
+ * computer's system, so the owner sees the one command they need first.
+ */
+function CommandTabs({ commands, mine }: { commands: TrustCommand[]; mine: string }) {
+  const [selected, setSelected] = useState<string>(() => commands.some((entry) => entry.os === mine) ? mine : commands[0]?.os ?? "");
+  const entry = commands.find((item) => item.os === selected) ?? commands[0];
+  if (!entry) return null;
+  return (
+    <TabSet
+      items={commands.map((item) => ({ id: item.os, label: item.os === mine ? `${item.label} (this computer)` : item.label }))}
+      label="Command for your computer's system"
+      onSelect={setSelected}
+      selectedId={entry.os}
+    >
+      <CopyCommand entry={entry} key={entry.os} />
+    </TabSet>
+  );
+}
+
 type QrState = { svg: string } | { error: string } | null;
 
 /**
@@ -171,7 +219,16 @@ function PhoneSteps({ rootUrl }: { rootUrl: string }) {
  * The panel. `transport` is the one `/security/transport` read Settings makes;
  * the commands are fetched here only once that read says the authority exists.
  */
-export function TrustThisVaelor({ transport }: { transport: TransportStatus | null }) {
+export function TrustThisVaelor({
+  transport,
+  heading = "Trust this Vaelor",
+  description = "Install this Vaelor's own certificate authority on your computers and phones, so browsers stop warning",
+}: {
+  transport: TransportStatus | null;
+  /** First-run setup gives the page its own title, so the card names what it holds instead. */
+  heading?: string;
+  description?: string;
+}) {
   const authority = transport?.authority;
   const ready = authority?.state === "ready";
   const [commands, setCommands] = useState<TrustCommands | null>(null);
@@ -186,6 +243,14 @@ export function TrustThisVaelor({ transport }: { transport: TransportStatus | nu
     return () => { live = false; };
   }, [ready, authority?.fingerprint_sha256]);
 
+  const [device] = useState(() => thisDevicesSystem());
+  const phones = commands && (
+    <>
+      <h3 className="trust-subhead">Phones</h3>
+      <PhoneSteps rootUrl={commands.root_url} />
+    </>
+  );
+
   // Not read is not "not set up": an old controller or a failed read has no authority field at all.
   const pill = !transport ? { label: "Reading", tone: "neutral" as StatusTone }
     : authority ? (STATE_PILL[authority.state] ?? STATE_PILL.unreadable)
@@ -196,8 +261,8 @@ export function TrustThisVaelor({ transport }: { transport: TransportStatus | nu
       actions={<StatusPill label={pill.label} tone={pill.tone} />}
       as="section"
       className="trust-panel"
-      description="Install this Vaelor's own certificate authority on your computers and phones, so browsers stop warning"
-      heading="Trust this Vaelor"
+      description={description}
+      heading={heading}
     >
       {transport && !authority && <p className="trust-note">Not read: this controller did not report its certificate authority.</p>}
       {authority?.state === "not-set-up" && (
@@ -220,18 +285,15 @@ export function TrustThisVaelor({ transport }: { transport: TransportStatus | nu
           {authority.kind === "custom" && (
             <p className="trust-note">The console serves your own certificate, which Vaelor leaves alone. Trusting this authority helps with Vaelor's own machines; browsers reaching the console follow your certificate.</p>
           )}
+          {/* A phone leads with its own steps (VD-133 1.5.5 #2): it has no command to run. */}
+          {device === "phone" && phones}
           <h3 className="trust-subhead">Computers</h3>
           <p className="trust-note">Each command downloads the authority and installs it only if its SHA-256 fingerprint matches the one above. A mismatch installs nothing.</p>
           {!commands && !commandsFailed && <p className="trust-note">Reading the commands for this address.</p>}
           {commandsFailed && <Notice severity="warning">{`The commands could not be read: ${commandsFailed}`}</Notice>}
-          {commands?.commands.map((entry) => <CopyCommand entry={entry} key={entry.os} />)}
+          {commands && <CommandTabs commands={commands.commands} mine={device} />}
           {commands && <p className="trust-note">{commands.firefox}</p>}
-          {commands && (
-            <>
-              <h3 className="trust-subhead">Phones</h3>
-              <PhoneSteps rootUrl={commands.root_url} />
-            </>
-          )}
+          {device !== "phone" && phones}
           <p className="trust-note">Moving this authority to a new controller is a command-line step for now: <code className="record-mono">python -m vaelor.tls_authority export --output FILE</code> on this one, then install the new controller with <code className="record-mono">--import-authority FILE</code>. Without it, a new controller makes a new authority and every device has to trust that one.</p>
         </>
       )}

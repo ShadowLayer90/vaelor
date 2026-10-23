@@ -16,6 +16,7 @@ from .api_trust_routes import register_trust_routes
 from .api_common import ApiContext
 from .api_chat_routes import register_chat_routes
 from .api_chat_thinking_routes import register_chat_thinking_routes
+from .api_chat_web_search_routes import register_chat_web_search_routes
 from .api_cluster_routes import register_cluster_routes
 from .api_cluster_performance_routes import register_cluster_performance_routes
 from .performance_dashboard_wiring import register_dashboard
@@ -38,6 +39,7 @@ from .api_cluster_agent_routes import register_cluster_agent_routes
 from .api_upgrade_routes import register_upgrade_routes
 from .api_workload_routes import register_workload_routes
 from .api_web_research_routes import register_web_research_routes
+from .api_web_search_key_routes import register_web_search_key_routes
 from .security import SecurityStore
 
 
@@ -72,8 +74,10 @@ def create_api_v2_blueprint(
     register_phoenix_routes(context)
     register_application_routes(context)
     register_web_research_routes(context)
+    register_web_search_key_routes(context)
     register_chat_routes(context)
     register_chat_thinking_routes(context)
+    register_chat_web_search_routes(context)
     register_cluster_routes(context)
     register_cluster_performance_routes(context)
     register_host_settings_routes(context)

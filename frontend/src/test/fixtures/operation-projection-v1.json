@@ -32,6 +32,8 @@
   "cleanup": { "state": "not_required", "message": "" },
   "needs_attention": false,
   "dismissal": null,
+  "resolution": null,
+  "interrupted_by_restart": false,
   "action_endpoints": { "self": "/api/v2/operations/jobs:job-42", "cancel": "/api/v2/operations/jobs:job-42/cancel", "retry": null, "resume": null, "audit": "/api/v2/operations/jobs:job-42/audit" },
   "endpoints": { "self": "/api/v2/operations/jobs:job-42", "cancel": "/api/v2/operations/jobs:job-42/cancel", "retry": null, "resume": null, "audit": "/api/v2/operations/jobs:job-42/audit" }
 }

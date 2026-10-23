@@ -1,13 +1,17 @@
 import { type FormEvent, type KeyboardEvent, useId, useRef } from "react";
 import type { AiChatCollection } from "./aiChatTypes";
 import { DOCUMENT_ACCEPT } from "../lib/aiChatDocument";
+import type { AiChatWebSearchState } from "../hooks/useAiChatWebSearch";
+import type { Session } from "../types";
+import { AiChatWebSearchNote, AiChatWebSearchToggle, useWebSearchExplanation } from "./AiChatWebSearch";
 import { Icon } from "./Icon";
 import { Button } from "./ui";
 
 /**
  * The message box under the transcript (the Chat boards): the question, then
- * one row with Attach, Knowledge, what the answer will draw on, the keyboard
- * hint and Send. A temporary chat draws the box with a dashed edge.
+ * one row with Attach, Knowledge, Web search (VD-221), what the answer will
+ * draw on, the keyboard hint and Send. A temporary chat draws the box with a
+ * dashed edge. Web search is drawn only where the page hands its state in.
  */
 export function AiChatComposer({
   value,
@@ -20,6 +24,8 @@ export function AiChatComposer({
   onSubmit,
   onOpenDetails,
   onFile,
+  webSearch,
+  session,
 }: {
   value: string;
   busy: boolean;
@@ -31,6 +37,8 @@ export function AiChatComposer({
   onSubmit: (event: FormEvent) => void;
   onOpenDetails: () => void;
   onFile: (file: File) => void;
+  webSearch?: AiChatWebSearchState;
+  session?: Session;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const ids = useId().replaceAll(":", "");
@@ -69,8 +77,10 @@ export function AiChatComposer({
     ? "Temporary"
     : selectedCollections.length
       ? `${selectedCollections.length} source set`
-      : "Model knowledge only";
+      : webSearch?.on ? "Web pages and model knowledge" : "Model knowledge only";
   const hintId = `ai-chat-composer-hint-${ids}`;
+  const webNoteId = `ai-chat-websearch-note-${ids}`;
+  const explanation = useWebSearchExplanation(webSearch);
   return (
     <form className={temporary ? "ai-chat-composer is-temporary" : "ai-chat-composer"} onSubmit={onSubmit}>
       <div className="ai-chat-composer__box">
@@ -119,6 +129,15 @@ export function AiChatComposer({
               <Icon name="add" size={16} />
             </Button>
             <Button onClick={onOpenDetails} type="button">Knowledge</Button>
+            {webSearch && (
+              <AiChatWebSearchToggle
+                busy={busy}
+                expanded={explanation.explaining}
+                noteId={webNoteId}
+                onPress={explanation.toggle}
+                webSearch={webSearch}
+              />
+            )}
             <small title={chosen.map((item) => item.name).join(", ") || undefined}>{sources}</small>
           </div>
           <div className="ai-chat-composer__send-row">
@@ -133,6 +152,15 @@ export function AiChatComposer({
             </Button>
           </div>
         </div>
+        {webSearch && session && (
+          <AiChatWebSearchNote
+            explaining={explanation.explaining}
+            noteId={webNoteId}
+            onClose={explanation.close}
+            session={session}
+            webSearch={webSearch}
+          />
+        )}
       </div>
     </form>
   );

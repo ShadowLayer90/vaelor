@@ -83,6 +83,7 @@ from .inference_context import GPU_RECOMMENDED_CONTEXT_TOKENS
 from .model_catalog import RUNTIME_Z2_GPU_ROCMFP4
 from .platforms.accelerators import device_grants
 from .runtime_paths import data_path
+from .vaelor_containers import owner_label_args
 
 
 #: The ROCmFPX ``llama-server`` fork binary. **Superseded by the container image
@@ -555,6 +556,20 @@ def _fork_serve_args(
     ]
 
 
+def launch_context_window(runtime: Any) -> int:
+    """The window a launch of ``runtime`` passes the engine, or 0 when unknown.
+
+    The mainline image is told ``-c`` (:func:`_mainline_context`, the same
+    reading :func:`gpu_container_command` makes, so a recorded window and the
+    flag cannot disagree - LESSONS 6). The fork's own ``run_server.sh`` applies
+    its window, which Vaelor does not pass and so does not claim (owner
+    2026-10-21: an unknown window is left undeclared, never guessed).
+    """
+    resolved = _runtime_mapping(runtime)
+    engine = resolved.get("engine")
+    return _mainline_context(resolved) if _engine_container(engine).entrypoint else 0
+
+
 def gpu_container_command(
     model_path: str,
     port: int,
@@ -621,6 +636,8 @@ def gpu_container_command(
     context = _mainline_context(resolved) if profile.entrypoint else 0
     command = [
         docker, "run", "-d", "--name", container_name,
+        # VD-133 1.5.5 #12: part of Vaelor, so Apps does not list it as the owner's.
+        *owner_label_args("gpu-model"),
         "--device", "/dev/kfd", "--device", "/dev/dri",
     ]
     for gid in group_ids:

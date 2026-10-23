@@ -111,6 +111,7 @@ from .vllm_entry_program import (
 #: The one host a served API may bind, as `gpu_serving_target` spells it.
 from .gpu_serving_target import SERVER_LOOPBACK_HOST
 from .ssh_transport import SshTransportError
+from .pooled_runtime import STILL_RUNNING_STATES  # one rule for both stop paths (LESSONS 6)
 #: The host/container paths the on-demand GPU-kernel profile (VD-128) dumps to.
 from .serving_profiler import SERVING_PROFILES_DIR, SERVING_PROFILES_MOUNT  # noqa: F401
 
@@ -883,6 +884,10 @@ class GpuPoolRuntime(GateMixin, PullUnitsMixin, ray_plane.RayPlaneMixin):
         state = self.unit_state(transport, unit)
         if state.get(_LOAD_STATE) != _UNIT_NOT_FOUND:
             transport.run(["systemctl", "disable", "--now", unit], sudo=True)
+        elif state.get("ActiveState") in STILL_RUNNING_STATES:
+            # Its file is gone but systemd still runs it: stopped, never
+            # reported removed while it runs (owner 2026-10-22, LESSONS 8).
+            transport.run(["systemctl", "stop", unit], sudo=True)
         transport.run(["rm", "-f", f"{UNIT_DIRECTORY}/{unit}"], sudo=True)
         transport.run(["systemctl", "daemon-reload"], sudo=True)
         # W4-D9: a removed unit that had failed stays listed "not-found failed"

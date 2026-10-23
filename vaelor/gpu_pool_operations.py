@@ -97,6 +97,7 @@ from .cluster_placement import CONTROLLER_PLACEMENT_ID
 from .gpu_cluster_mode import UNLOADED_STATE
 from .gpu_model_catalog import GPU_MODEL_CATALOG, catalog_spec_body, repo_of_source
 from .gpu_node_facts import interface_name
+from .gpu_model_library import deploy_cache_recorder
 from .gpu_pool_pull import ModelPullWaiter
 from .gpu_pool_removal import (  # noqa: F401 - UNITS_NOT_STOPPED is re-exported
     UNITS_NOT_STOPPED, remove_gpu_deployment, stop_derived_units, stop_placements,
@@ -121,6 +122,7 @@ from .model_thinking import THINKING_FIELD, thinking_for_deploy
 #: decided once, from its profile and the payload (`vllm_serve_options`).
 from .hf_cached_config import with_cached_config
 from .gpu_pool_refit import WEIGHT_FIELD, refit_after_fetch
+from .gpu_pool_refresh import begin_first_serve_build, prebuild_for_first_serve
 from .gpu_ray_plane import confirm_unit_in_slice, prepare_split
 from .gpu_pool_refit import fit_nodes as refit_fit_nodes
 from .vllm_model_profile import kernel_note, profile_for
@@ -231,7 +233,8 @@ class GpuPoolOperations:
         self._probe = probe or probe_health
         self._sleep = sleep
         self._monotonic = monotonic
-        self._pull = ModelPullWaiter(runtime, sleep=sleep, monotonic=monotonic)
+        self._pull = ModelPullWaiter(runtime, sleep=sleep, monotonic=monotonic,
+                                     on_cached=deploy_cache_recorder(store))
         # The probe is handed over as a thunk so ``_probe`` stays a live seam:
         # a test that swaps it after construction is still what the wait asks.
         self._startup = ServerStartupWaiter(
@@ -530,6 +533,7 @@ class GpuPoolOperations:
                     transports[node["id"]], node, repo, revision, report, pulls,
                     image=vllm_options[IMAGE_FIELD], vllm_options=vllm_options,
                 )
+                begin_first_serve_build(vllm_options, transports[node["id"]])  # 1.5.5 #10
             # A model whose config.json was not in the library when this
             # deploy began has just been fetched: the fit is asked again with
             # the model's own layout before anything starts, and the options
@@ -541,6 +545,8 @@ class GpuPoolOperations:
                 replicated=replicated,
             )
             vllm_options = refitted or vllm_options
+            # VD-133 1.5.5 #10: built first (bounded), so the model starts with it.
+            prebuild_for_first_serve(vllm_options, participants, transports, report)
 
             api_key = ""
             with render_ledger.recording() as renders:
@@ -571,6 +577,7 @@ class GpuPoolOperations:
             units["idle_timeout"] = idle_timeout_from_payload(payload)
             credential_id = register_cluster_credential(
                 self.broker, name, endpoint, repo, api_key, payload, report,
+                context_window=max_model_len,
             )
             if entered:
                 # The cluster is healthy and tested: AI Chat and, if it was on

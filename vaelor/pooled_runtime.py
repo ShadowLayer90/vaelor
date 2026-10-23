@@ -11,6 +11,13 @@ from .ssh_transport import SshTransportError
 
 INSTALL_ROOT = "/opt/vaelor/runtimes/distributed-llama"
 SERVICE_USER = "vaelor-inference"
+#: The exact shape of the two units this runtime writes (`start_worker`,
+#: `start_root`): `stop_unit` refuses any other, and a join's sweep of serving
+#: an earlier controller left (`worker_left_serving`) recognises them by it.
+POOLED_UNIT_PATTERN = r"vaelor-pooled-[a-z0-9][a-z0-9-]{0,38}-(?:root|worker)\.service"
+#: The ActiveStates in which a unit is still running, or still starting or
+#: stopping: one whose file is gone but which is in one of these is stopped.
+STILL_RUNNING_STATES = frozenset({"active", "activating", "deactivating", "reloading"})
 
 
 class PooledRuntime:
@@ -173,13 +180,27 @@ WantedBy=multi-user.target
         return unit
 
     def stop_unit(self, transport, unit: str) -> None:
-        if not re.fullmatch(
-            r"vaelor-pooled-[a-z0-9][a-z0-9-]{0,38}-(?:root|worker)\.service",
-            str(unit),
-        ):
+        if not re.fullmatch(POOLED_UNIT_PATTERN, str(unit)):
             raise ValueError("The pooled service name is invalid.")
-        transport.run(["systemctl", "disable", "--now", unit], sudo=True)
+        # The GPU path's rule (`GpuPoolRuntime.stop_unit`, LESSONS 6): systemd
+        # is asked first, and a unit it does not know - its file already gone,
+        # still listed "not-found failed" - is already stopped, not a failure
+        # that every later stop repeats (LESSONS 8 / 22).
+        # A unit whose file is gone can still be RUNNING (systemd keeps it until
+        # it stops): that one is stopped, never reported removed while it runs.
+        answer = str(transport.run(["systemctl", "show", unit, "--property=LoadState,ActiveState"]))
+        state = dict(line.strip().partition("=")[::2] for line in answer.splitlines() if "=" in line)
+        if state.get("LoadState") != "not-found":
+            transport.run(["systemctl", "disable", "--now", unit], sudo=True)
+        elif state.get("ActiveState") in STILL_RUNNING_STATES:
+            transport.run(["systemctl", "stop", unit], sudo=True)
         transport.run(
             ["rm", "-f", f"/etc/systemd/system/{unit}"], sudo=True
         )
         transport.run(["systemctl", "daemon-reload"], sudo=True)
+        # A removed unit that had failed stays listed until systemd forgets it;
+        # one it no longer holds answers non-zero, which is the state wanted.
+        try:
+            transport.run(["systemctl", "reset-failed", unit], sudo=True)
+        except (SshTransportError, RuntimeError):
+            pass

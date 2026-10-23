@@ -56,9 +56,21 @@ START_HELD = (
 #: The background unit's states that mean a build is on its way or running.
 _BUILDING = frozenset({"active", "activating", "reloading"})
 
+#: How long a call that may START a build waits for another call's check to
+#: end (VD-133 1.5.5 #10, adversarial M2). A read that finds the lock held
+#: answers "building" at once; a start that did so started nothing, and the
+#: wait polling after it read "refused" with no build ever begun. A check is
+#: one hash of about 1 GB, about a second on the Z2.
+START_LOCK_WAIT_SECONDS = 15.0
+
 _VERB_LOCK = threading.Lock()
 _READY: Dict[str, Tuple[Any, ...]] = {}
 _STARTED: Dict[str, Tuple[float, Optional[Tuple[Any, ...]]]] = {}
+#: A refused verdict, kept by the ``lstat`` signatures of the build's own
+#: folder AND the key folder its record sits in (adversarial M2): asked again
+#: with neither changed - no build ran, no record was written - the folder is
+#: not hashed again as root at every read.
+_REFUSED: Dict[str, Tuple[Any, Dict[str, Any]]] = {}
 
 
 def folder_signature(folder: str) -> Optional[Tuple[Any, ...]]:
@@ -95,7 +107,9 @@ def bridge_build_state(
     row = guesser_build.guesser_for_image(image_ref)
     if row is None:
         raise ValueError("No 4-bit guesser is built for that image.")
-    if not _VERB_LOCK.acquire(blocking=False):
+    acquired = (_VERB_LOCK.acquire(timeout=START_LOCK_WAIT_SECONDS) if start
+                else _VERB_LOCK.acquire(blocking=False))
+    if not acquired:
         return {"state": "building", "reason": ""}
     try:
         return _answer(row, start, run, root, owners, hub, clock)
@@ -111,13 +125,20 @@ def _answer(row: Any, start: bool, run: Callable[[List[str]], Any], root: str,
     signature = folder_signature(folder)
     if signature is not None and _READY.get(row.key) == signature:
         return {"state": "ready", "reason": ""}
-    verdict = guesser_build.run_host(guesser_build.host_plan(row, "check", root=root,
-                                                             owners=owners))
+    seen = (signature, folder_signature(os.path.dirname(folder)))
+    held = _REFUSED.get(row.key)
+    if held is not None and held[0] == seen:
+        verdict = held[1]
+    else:
+        verdict = guesser_build.run_host(guesser_build.host_plan(row, "check", root=root,
+                                                                 owners=owners))
     if verdict.get("ready"):
         _READY[row.key] = folder_signature(folder)
         _STARTED.pop(row.key, None)
+        _REFUSED.pop(row.key, None)
         return {"state": "ready", "reason": ""}
     _READY.pop(row.key, None)
+    _REFUSED[row.key] = (seen, dict(verdict))
     reason = guesser_build.reason_of(verdict)
     if not (start and guesser_build.worth_starting(verdict)):
         return {"state": "refused", "reason": reason}

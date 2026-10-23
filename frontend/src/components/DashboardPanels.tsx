@@ -63,6 +63,40 @@ const LAYER_MARKS: SeriesMark[] = ["layer-1", "layer-2", "layer-3"];
  * in a generated hue. A machine's second line (memory beside CPU) keeps its
  * machine's mark and is drawn dashed.
  */
+/**
+ * Why a line with no sample is empty, in one phrase. With no reason of its own
+ * but bucket reasons saying why each interval is empty, it says "Not read" and
+ * the newest of them, and with neither just "Not read" - never its state label
+ * alone: the GPU power card's
+ * notes read "Cluster total: Measured" beside "Not read" in its legend (VD-133
+ * 1.5.5 cosmetic). Decided from what was sent, never from a state word (the
+ * dashboard holds none, VD-147 S6).
+ */
+export function whyAbsent(one: Pick<ChartSeries, "stateLabel" | "reason" | "reasons">): string {
+  if (one.reason) return [one.stateLabel, one.reason].filter(Boolean).join(" ");
+  const newest = [...(one.reasons ?? [])].reverse().find((text) => typeof text === "string" && text.trim() !== "");
+  // Nothing drawn and nothing sent to say why: "Not read", never the bare label.
+  return typeof newest === "string" ? `${NOT_READ} - ${newest.trim()}` : NOT_READ;
+}
+
+/**
+ * The empty plot's reasons, each once, each naming the lines it is about when
+ * more than one line is in view. Bare, "Vaelor recorded nothing for this
+ * machine" and "Vaelor could not read this machine" sat one above the other
+ * with no machine named and read as two verdicts on one thing (VD-133 1.5.5
+ * cosmetic, the 1.5.4 Decode speed card).
+ */
+export function emptyPlotReasons(lines: readonly Pick<ChartSeries, "name" | "reasons">[]): string[] {
+  const named = new Map<string, string[]>();
+  for (const line of lines) {
+    for (const reason of new Set((line.reasons ?? []).filter((text): text is string => Boolean(text && text.trim())).map((text) => text.trim()))) {
+      named.set(reason, [...(named.get(reason) ?? []), line.name]);
+    }
+  }
+  const several = lines.length > 1;
+  return [...named.entries()].map(([reason, names]) => (several && names.length ? `${names.join(", ")}: ${reason}` : reason));
+}
+
 function assignMarks(series: readonly ChartSeries[]): SeriesMark[] {
   const taken = new Set<number>();
   let layer = 0;
@@ -283,11 +317,10 @@ function Panel({ spec, panel: sent, range, badge, context, units, names, floor, 
   const tickText = (value: number) => (suffix === "%" ? tick(value) + suffix : suffix ? tick(value) + " " + suffix : tick(value));
   const xTicks = count > 0 && anySample ? timeTicks(start, step, count, 3) : [];
   // Nothing to draw: the backend's bucket reasons say why (each distinct one once), else "Not read".
-  const blankReasons = anySample ? [] : [...new Set(scopedAt.flatMap((at) => series[at].reasons ?? [])
-    .filter((reason): reason is string => Boolean(reason && reason.trim())))];
+  const blankReasons = anySample ? [] : emptyPlotReasons(scopedAt.map((at) => series[at]));
   const absent = scopedAt.map((at) => series[at]).filter((one) => !hasSample(one) && (one.stateLabel || one.reason));
   const notes = [shown.caption, shown.bands_note, bandsByNode(shown), shown.reason,
-    ...absent.map((one) => one.name + ": " + [one.stateLabel, one.reason].filter(Boolean).join(" "))]
+    ...absent.map((one) => one.name + ": " + whyAbsent(one))]
     .filter((part): part is string => Boolean(part && part.trim())).map((part) => part.trim());
 
   const xAt = (index: number) => bucketX(index, count, box);
@@ -340,7 +373,7 @@ function Panel({ spec, panel: sent, range, badge, context, units, names, floor, 
               </span>
             )}
             {/* Why a line was not read is in the card's notes; here it is the value's title too. */}
-            <b className="perf-legend__value" title={newest ? undefined : [one.stateLabel, one.reason].filter(Boolean).join(" ") || undefined}>{value}</b>
+            <b className="perf-legend__value" title={newest ? undefined : whyAbsent(one) || undefined}>{value}</b>
           </li>
         );
       })}

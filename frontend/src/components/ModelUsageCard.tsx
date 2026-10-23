@@ -26,8 +26,13 @@ function engineLine(row: DeploymentUsage): string {
   return row.model && row.model !== row.name ? `${row.model} · ${engine}` : engine;
 }
 
+const NO_USE_COUNTED = "No request counted since counting began.";
+
 function ModelUsageRow({ row }: { row: DeploymentUsage }) {
-  const used = row.last_used_at ? `Last used ${timeAgo(row.last_used_at * 1000)}.` : "No request served yet.";
+  // "Since counting began": the serving card's vLLM counter also holds the
+  // deploy's own test request, made before counting began, so "No request
+  // served yet" sat beside "Requests served 1" (VD-133 1.5.5 cosmetic).
+  const used = row.last_used_at ? `Last used ${timeAgo(row.last_used_at * 1000)}.` : NO_USE_COUNTED;
   // How fresh the COUNT is: whether the model is serving is the serving card's answer, not this one's.
   const freshness = row.live
     ? "Counting"

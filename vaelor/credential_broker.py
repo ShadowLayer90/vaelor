@@ -52,6 +52,12 @@ from .model_credential_roles import (  # noqa: F401 - ASSISTANT_PURPOSE re-expor
     role_refusal,
 )
 from .served_endpoint_keys import SERVED_ENDPOINT_PROVIDER
+from .token_estimate import CONTEXT_WINDOW_KEY, context_window_tokens
+
+#: VD-222 item 2: the kind and purpose of the owner's web search key. The
+#: search service (`web_research.WEB_SEARCH_KEY_PURPOSE`) leases the same name.
+WEB_SEARCH_PROVIDER = "brave-search"
+WEB_SEARCH_PURPOSE = "web-search"
 
 MAX_PROVIDER_RESPONSE_BYTES = 1024 * 1024
 #: How many chat models a model list returns (Anthropic's own list maximum).
@@ -87,6 +93,11 @@ PROVIDERS = {
     # ``CredentialVault.mint``; ``put`` refuses it and ``capabilities`` hides it
     # so the generic create route can never store a weak, unbound one.
     SERVED_ENDPOINT_PROVIDER: served_endpoint_keys.PROVIDER_DESCRIPTOR,
+    # VD-222 item 2: the owner's optional web search key. Added only from
+    # Settings > Connections > Web search key, never automatically; leased
+    # under the "web-search" purpose by the executor that writes it into the
+    # search service's settings.yml.
+    WEB_SEARCH_PROVIDER: {"name": "Brave Search API", "auth": "api_key"},
     # VD-206: the hosted services AI Chat may use, one kind each
     # (`hosted_providers` owns the table and says why they are kinds).
     **{
@@ -110,6 +121,7 @@ ASSIGNMENT_PROVIDERS = {
     "custom-agent-connector": {"application-secret"},
     "backup-passphrase": {"application-secret"},
     "backup-offsite": {"application-secret"},
+    WEB_SEARCH_PURPOSE: {WEB_SEARCH_PROVIDER},
 }
 ASSIGNMENT_PURPOSES = set(ASSIGNMENT_PROVIDERS)
 
@@ -845,6 +857,44 @@ class CredentialVault:
             "provider": available["provider"],
             "selected_model": selected,
         }
+
+    def record_window(self, credential_id: str, version: Any, window: Any) -> Dict[str, Any]:
+        """Record the window a model Vaelor serves runs with, in place (owner 2026-10-21).
+
+        A fact about the server, not a new secret: the version, the fingerprint
+        and the last connection test stay as they were, so the credential does
+        not read as untested and a cluster agent's surface digest (which folds
+        in the version) does not change. Compare-and-set on the row read: a
+        rotate or a delete in between wins, and nothing is resurrected.
+        """
+        tokens = context_window_tokens(window)
+        if not tokens:
+            raise CredentialError("The context window is not a believable number of tokens.")
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT id, provider, nonce, ciphertext, version FROM credentials WHERE id = ?",
+                (str(credential_id),),
+            ).fetchone()
+            if row is None or row["provider"] != "openai-compatible" or str(row["version"]) != str(version):
+                return {"recorded": False, "reason": "changed"}
+            profile = json.loads(self._decrypt(row))
+            if context_window_tokens(profile.get(CONTEXT_WINDOW_KEY)) == tokens:
+                return {"recorded": False, "reason": "unchanged"}
+            profile[CONTEXT_WINDOW_KEY] = tokens
+            nonce = os.urandom(12)
+            ciphertext = self._cipher.encrypt(
+                nonce, json.dumps(profile, separators=(",", ":")).encode("utf-8"),
+                self._associated_data(row["id"], row["provider"], row["version"]),
+            )
+            cursor = connection.execute(
+                "UPDATE credentials SET nonce = ?, ciphertext = ? WHERE id = ? AND version = ? AND ciphertext = ?",
+                (nonce, ciphertext, row["id"], row["version"], row["ciphertext"]),
+            )
+            connection.commit()
+        if cursor.rowcount != 1:
+            return {"recorded": False, "reason": "changed"}
+        self._audit("credential.window", str(credential_id), "openai-compatible")
+        return {"recorded": True, "context_window": tokens}
 
     def _decrypt(self, row: sqlite3.Row) -> str:
         try:

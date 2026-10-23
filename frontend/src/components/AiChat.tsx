@@ -4,7 +4,7 @@ import { modelDisplayName } from "../lib/modelIdentity";
 import type { Session } from "../types";
 import { AiChatComposer } from "./AiChatComposer";
 import { AiChatDetails } from "./AiChatDetails";
-import { blamedModel, effectiveModel, reopenedChatModel } from "./AiChatModelPicker";
+import { effectiveModel, reopenedChatModel } from "./AiChatModelPicker";
 import { AiChatProposalCard } from "./AiChatProposalCard";
 import { AiChatRail } from "./AiChatRail";
 import { AiChatToolbar, type AgentsReading } from "./AiChatToolbar";
@@ -22,12 +22,15 @@ import type {
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TextPromptDialog } from "./TextPromptDialog";
 import { Button, Notice } from "./ui";
-import { downloadConversationMarkdown } from "../lib/aiChatExport";
+import { answeredByLine, downloadConversationMarkdown } from "../lib/aiChatExport";
 import { prepareDocumentUpload } from "../lib/aiChatDocument";
 import { conversationIdFromHash, useAiChatRoute } from "../hooks/useAiChatRoute";
 import { useModalAction } from "../hooks/useModalAction";
 import { useAiChatThinking } from "../hooks/useAiChatThinking";
+import { useAiChatModelFailures } from "../hooks/useAiChatModelFailures";
+import { useAiChatWebSearch } from "../hooks/useAiChatWebSearch";
 import { bytesIn } from "../lib/format";
+import { agentRunSavedNotice, openAgentRun, saveAgentRun } from "../lib/aiChatAgentRun";
 
 type DeleteTarget = {
   type: "conversation" | "collection";
@@ -93,12 +96,7 @@ export function AiChat({ session }: { session: Session }) {
   const [agentsResolved, setAgentsResolved] = useState(false);
   const [agentsReading, setAgentsReading] = useState<AgentsReading>({ failed: false, inactive: 0 });
   const [selectedAgentId, setSelectedAgentId] = useState("");
-  /*
-   * Models the server could not run, and what it said about each. The model
-   * list is bare ids, so a model that is not loaded looks like any other; what
-   * the appliance said cannot run is shown against the model until it answers.
-   */
-  const [modelFailures, setModelFailures] = useState<Record<string, string>>({});
+  const { modelFailures, reportFailure, clearModelFailure } = useAiChatModelFailures();
   /*
    * Which thread the user is looking at right now. A reply belongs to the
    * conversation it was sent from: switching threads mid-request used to
@@ -431,32 +429,6 @@ export function AiChat({ session }: { session: Session }) {
     } finally { setBusy(""); }
   };
 
-  /**
-   * One failure, reported one way.
-   *
-   * Every failed question leaves the same three things behind: the failed
-   * exchange in the transcript, the question back in the composer, and a
-   * banner. What the banner could not do until now was say which model failed,
-   * so a picker full of models the appliance cannot run gave the same sentence
-   * whichever one produced it.
-   */
-  const reportFailure = (error: unknown, model: string, failure: string) => {
-    const blamed = blamedModel(error, model);
-    if (!blamed) return failure;
-    setModelFailures((current) => ({ ...current, [blamed]: failure }));
-    return `${blamed} could not run this request. ${failure}`;
-  };
-
-  const clearModelFailure = (model: string) => {
-    if (!model) return;
-    setModelFailures((current) => {
-      if (!(model in current)) return current;
-      const next = { ...current };
-      delete next[model];
-      return next;
-    });
-  };
-
   const regenerate = async (message: AiChatThreadMessage, content?: string) => {
     if (!conversationId || !message.id) return;
     const ticket = threadTicket.current;
@@ -471,14 +443,20 @@ export function AiChat({ session }: { session: Session }) {
         `/ai-chat/conversations/${conversationId}/regenerate`,
         {
           method: "POST",
-          body: JSON.stringify({ message_id: message.id, content, model: requestModel, thinking: thinking.step || undefined }),
+          body: JSON.stringify({
+            message_id: message.id,
+            content,
+            model: requestModel,
+            thinking: thinking.step || undefined,
+            web_search: webSearch.on, // VD-221: only the owner's toggle searches
+          }),
           timeoutMs: AI_CHAT_CLIENT_TIMEOUT_MS,
         },
         session.csrf_token,
       );
       setMessages(result.messages);
       clearModelFailure(result.model || requestModel);
-      setNotice(`${result.provider} · ${result.model}`);
+      setNotice(answeredByLine(result.provider, result.model));
       await loadConversations();
     } catch (error) {
       const failure = error instanceof Error
@@ -620,49 +598,14 @@ export function AiChat({ session }: { session: Session }) {
     setBusy("agent-run");
     setNotice("");
     try {
-      await apiRequest<{ id?: string }>(
-        "/assistant/tasks",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            title: `${agentProposal.profile_name} chat request`,
-            description: agentProposal.task,
-            profile: agentProposal.profile_id,
-            profile_version: agentProposal.profile_version,
-            approval_required: true,
-            idempotency_key: globalThis.crypto?.randomUUID?.() ?? `ai-chat-${Date.now()}`,
-          }),
-        },
-        session.csrf_token,
-      );
+      await saveAgentRun(agentProposal, session.csrf_token);
       setAgentRunSubmitted(true);
-      /*
-       * Assistant › Agents is administrator-only. Naming it to anyone else sent
-       * them looking for a tab that is not in their tablist; the run is in the
-       * Assistant's own run history either way, under the Agent runs filter.
-       * `task.id` used to pick between two identical strings.
-       */
-      setNotice(
-        session.user.role === "administrator"
-          ? "Saved. Open it under Assistant › Agents, in this agent's run history, to approve and run it."
-          : "Saved. Open it under Assistant, in the Agent runs filter, to approve and run it.",
-      );
+      setNotice(agentRunSavedNotice(session.user.role));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "The agent run could not be prepared.", true);
     } finally {
       setBusy("");
     }
-  };
-
-  /*
-   * This used to offer the "Assistant task ledger" and land on the Assistant's
-   * chat tab. No ledger exists in this product, and the run the user was sent
-   * to find was on a different tab behind a collapsed disclosure - so the one
-   * button offered after a matched agent request led nowhere useful.
-   */
-  const openAgentRun = () => {
-    window.dispatchEvent(new CustomEvent("pironman:navigate", { detail: "assistant" }));
-    window.dispatchEvent(new CustomEvent("vaelor:assistant-tab", { detail: "customAgents" }));
   };
 
   const stopGeneration = useCallback(() => {
@@ -707,7 +650,9 @@ export function AiChat({ session }: { session: Session }) {
             collection_ids: selectedCollections,
             temporary,
             history: temporary ? priorMessages : undefined,
-            agent_id: selectedAgentId || undefined, thinking: thinking.step || undefined,
+            agent_id: selectedAgentId || undefined,
+            thinking: thinking.step || undefined,
+            web_search: webSearch.on, // VD-221: only the owner's toggle searches
             idempotency_key: globalThis.crypto?.randomUUID?.() ?? `ai-chat-${Date.now()}`, // VD-112: one key per send, reused by the api.ts transport retry so the appliance dedupes the turn.
           }),
           timeoutMs: AI_CHAT_CLIENT_TIMEOUT_MS,
@@ -737,7 +682,7 @@ export function AiChat({ session }: { session: Session }) {
       setNotice(
         result.proposed_agent_task
           ? "Agent proposal ready. Nothing has run."
-          : `${result.provider} · ${result.model}${temporary ? " · not saved" : ""}`,
+          : answeredByLine(result.provider, result.model, temporary),
       );
       if (!temporary) await loadConversations();
     } catch (error) {
@@ -858,6 +803,14 @@ export function AiChat({ session }: { session: Session }) {
   const composerModel = selectedModel || selectedAgentId || "agent-delegation";
   const noticeIsError = noticeRefused || /could not|did not|failed|too long|exceeded|stopped waiting|rejected|lost the connection|error|unavailable/i.test(notice);
   const administrator = session.user.role === "administrator";
+  // VD-221: the Web search toggle, remembered per conversation.
+  const webSearch = useAiChatWebSearch({
+    csrfToken: session.csrf_token,
+    conversationId,
+    temporary,
+    record: current,
+    connection: setup?.active_connection,
+  });
   return (
     <div className={focusMode ? "ai-chat-page ai-chat-page--focus" : "ai-chat-page"}>
       <div className={detailsOpen ? "ai-chat-workspace has-details" : "ai-chat-workspace"} {...(focusMode ? { role: "region", "aria-label": "AI Chat, focus view" } : {})}>
@@ -945,7 +898,9 @@ export function AiChat({ session }: { session: Session }) {
             onOpenDetails={() => setDetailsOpen(true)}
             onSubmit={(event) => void send(event)}
             selectedCollections={selectedCollections}
+            session={session}
             temporary={temporary}
+            webSearch={webSearch}
             value={input}
           />
         </section>

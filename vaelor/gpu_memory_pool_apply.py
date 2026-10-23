@@ -38,13 +38,16 @@ refusal names that unit.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
 import signal
 import subprocess
 import sys
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional
 
 from . import gpu_memory_pool as pool
@@ -83,12 +86,23 @@ STDERR_TAIL_BYTES = 2000
 
 ACTION_SET = "set"
 ACTION_REVERT = "revert"
+#: The install and update step (`post_install_steps`): save the recommended
+#: size when none is saved (VD-161 amended, owner 2026-10-20). Root only, run
+#: by the installer's root shell or the update's root broker, never the bridge.
+ACTION_RECOMMEND = "recommend"
+#: What the step's share keeps back for itself (reading the machine, the
+#: result line) after the rebuilds, so it ends before the outer kill.
+RECOMMEND_MARGIN_SECONDS = 10
+#: A rebuild given less than this is not started: it could not finish.
+MIN_REBUILD_SECONDS = 1.0
 
 #: What a caller is told when the machine, not the request, was the problem.
-_MACHINE_REFUSAL = (
-    "The GPU memory pool setting could not be changed on this machine. Run "
-    "'journalctl -u " + DETAIL_UNIT + "' there to see why."
-)
+_SEE_WHY = "{} Run 'journalctl {}' there to see why."
+_MACHINE_REFUSAL = _SEE_WHY.format(
+    "The GPU memory pool setting could not be changed on this machine.", "-u " + DETAIL_UNIT)
+#: The install step's own words for the same, pointing at where ITS detail goes.
+_RECOMMEND_REFUSAL = _SEE_WHY.format(
+    "This machine's GPU memory pool could not be read or changed.", "-t " + APPLY_UNIT)
 #: How a person finishes a roll-back this program could not confirm.
 _FINISH_BY_HAND = (
     "Run 'sudo update-initramfs -u' on this machine, then Refresh the machine "
@@ -173,11 +187,44 @@ def _boot_image_tool() -> List[str]:
     return []
 
 
-def _run(argv: List[str]) -> int:
-    return subprocess.run(
-        argv, check=False, timeout=REBUILD_TIMEOUT_SECONDS,
-        stdout=sys.stderr, stderr=sys.stderr,
-    ).returncode
+def _kill_group(process: "subprocess.Popen[Any]") -> None:
+    """Kill a timed-out rebuild and every child it started (mkinitramfs runs many)."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)  # type: ignore[attr-defined]
+    except (OSError, AttributeError):
+        process.kill()
+
+
+def _run(argv: List[str], timeout: float = REBUILD_TIMEOUT_SECONDS,
+         sink: Optional[Callable[[str], None]] = None) -> int:
+    """Run the boot-image tool in its own process group; its exit status.
+
+    Review (VD-161 amended, H1/2): a timeout kills the whole group, so no
+    ``mkinitramfs`` child can finish a boot image after the roll-back began,
+    or hold a caller's output open. With ``sink`` the tool's output is
+    captured and handed to it (the install step sends it to the journal, so
+    it never crowds out the step's one result line); without, it goes to this
+    process's error output, as the bridge has always logged it. Raises
+    ``subprocess.TimeoutExpired`` after the kill.
+    """
+    capture = sink is not None
+    process = subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+        stdout=subprocess.PIPE if capture else sys.stderr,
+        stderr=subprocess.STDOUT if capture else sys.stderr,
+        text=capture, errors="replace" if capture else None,
+    )
+    try:
+        output, _ = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_group(process)
+        output, _ = process.communicate()
+        if capture:
+            sink(output or "")
+        raise
+    if capture:
+        sink(output or "")
+    return process.returncode
 
 
 def _local_gpu() -> Dict[str, Any]:
@@ -185,6 +232,62 @@ def _local_gpu() -> Dict[str, Any]:
     from .platforms import select_hardware_platform
 
     return gpu_facts_from_accelerators(select_hardware_platform().accelerators())
+
+
+#: Why the update step saves nothing after the owner's own Remove setting.
+OWNER_REMOVED = (
+    "Nothing saved: the last change to this machine's GPU memory pool was your own "
+    "Remove setting, so it stays on the kernel's own size."
+)
+HISTORY_UNREAD = (
+    "Nothing saved: Vaelor's job history could not be read, so whether you removed "
+    "the size yourself is not known."
+)
+
+
+def _owner_removed_last() -> bool:
+    """Whether the owner's Remove setting is the last pool change finished here.
+
+    VD-161 amended (Adopted, coordinator 2026-10-20): an update must not undo
+    it. Read from the jobs the console ran (`gpu_memory_pool_nodes.last_pool_change`,
+    the history the card's own restart rule reads). A box with no job store yet
+    is a fresh install with no history: never created here, because this runs
+    as root and the console's own services own that file. Raises when the
+    store exists and cannot be read.
+    """
+    from .cluster_placement import CONTROLLER_PLACEMENT_ID
+    from .gpu_memory_pool_nodes import last_pool_change
+    from .jobs import JobStore
+
+    path = JobStore().database_path
+    if not os.path.exists(path):
+        return False
+    job = last_pool_change(_read_only_jobs(path), CONTROLLER_PLACEMENT_ID)
+    return job is not None and job["payload"].get("action") == ACTION_REVERT
+
+
+def _read_only_jobs(path: str) -> Any:
+    """The job store at ``path``, opened read-only (review 6).
+
+    `JobStore` creates the file, sets its mode and applies its schema on every
+    connection; this root step must never write the console's own database,
+    so only the connection differs (``mode=ro``, no schema) and every query
+    and row reader is `JobStore`'s own, so the two cannot read a job
+    differently.
+    """
+    import sqlite3
+    from pathlib import Path
+
+    from .jobs import JobStore
+
+    class ReadOnlyJobs(JobStore):
+        def _connect(self) -> sqlite3.Connection:
+            uri = Path(self.database_path).resolve().as_uri() + "?mode=ro"
+            connection = sqlite3.connect(uri, uri=True, timeout=10)
+            connection.row_factory = sqlite3.Row
+            return connection
+
+    return ReadOnlyJobs(path)
 
 
 @dataclass(frozen=True)
@@ -198,6 +301,7 @@ class Host:
     remove_config: Callable[[], None] = _remove_config
     boot_image_tool: Callable[[], List[str]] = _boot_image_tool
     run: Callable[[List[str]], int] = _run
+    owner_removed_last: Callable[[], bool] = _owner_removed_last
 
 
 HOST = Host()
@@ -278,6 +382,100 @@ def revert(host: Host = HOST) -> Dict[str, Any]:
     return _change(host, None, pool.file_now_holds(None))
 
 
+def save_recommended(host: Host = HOST) -> str:
+    """Save the recommended size when none is saved; one sentence saying what happened.
+
+    VD-161 amended (owner, 2026-10-20): the controller's install and every
+    update run this (`post_install_steps`), so a fresh machine's card never
+    opens on a pool that shrinks at the next restart. The decision is
+    `gpu_memory_pool.recommended_save`, the one a worker's join takes too;
+    the write is :func:`apply_size`, the console's own path, with its bounds,
+    boot-image rebuild and checked roll-back. Never restarts the machine, and
+    never re-saves after the owner's own Remove setting (the last finished
+    pool change) - nor when that history cannot be read. Raises as
+    :func:`apply_size` does when the size could not be saved.
+    """
+    size, why = pool.recommended_save(local_status(host))
+    if size is None:
+        return why
+    try:
+        if host.owner_removed_last():
+            return OWNER_REMOVED
+    except Exception as error:  # noqa: BLE001 - unreadable saves nothing, and says so
+        print("{}: job history: {}: {}".format(MODULE, type(error).__name__, error), file=sys.stderr)
+        return HISTORY_UNREAD
+    return pool.recommended_saved_message(size, apply_size(size, host))
+
+
+def _journal(text: str) -> None:
+    """A bounded tail of what the step did not print, to the journal under the unit's name."""
+    tail = str(text or "")[-STDERR_TAIL_BYTES:].strip()
+    if not tail:
+        return
+    try:
+        import syslog
+
+        syslog.openlog(APPLY_UNIT)
+        for line in tail.splitlines():
+            syslog.syslog(syslog.LOG_INFO, line)
+    except Exception:  # noqa: BLE001 - the result line stands without it
+        pass
+
+
+def _deadline_runner(
+    deadline: float, clock: Callable[[], float], sink: Callable[[str], None],
+) -> Callable[[List[str]], int]:
+    """A ``Host.run`` whose every rebuild gets ALL the time left before ``deadline``.
+
+    Review (VD-161 amended, H1): halving the share made a slow machine's
+    save fail by construction. The change's rebuild gets what is left; only
+    if it fails does the roll-back's rebuild get the rest - and with none
+    left it is not started, which ``_change`` reports as the file put back
+    and the boot image unconfirmed, with the command to run.
+    """
+    def run(argv: List[str]) -> int:
+        left = min(float(REBUILD_TIMEOUT_SECONDS), deadline - clock())
+        if left < MIN_REBUILD_SECONDS:
+            sink("{}: no time left to rebuild the boot image".format(MODULE))
+            return 1
+        return _run(argv, left, sink)
+    return run
+
+
+def _recommend(
+    within: float, host: Host, clock: Callable[[], float] = time.monotonic,
+    journal: Callable[[str], None] = _journal,
+) -> int:
+    """``recommend [--within N]``: exactly one line out, last; 0 saved or kept, 3 not saved.
+
+    ``within`` is the step's share; less :data:`RECOMMEND_MARGIN_SECONDS` it
+    bounds every rebuild together (:func:`_deadline_runner`). Measured on the
+    Z2 (2026-10-20) one rebuild takes 6.5 s, so the 255 s a 300 s step is
+    given is ample; a slower machine spends what it needs on the change, and
+    the roll-back gets the rest. Everything else - the rebuild's output, the
+    detail of a failure - goes to the journal, never to standard output, so
+    the post-install step's 600-character outcome is this line (review 3).
+    A failure never fails the install or the update: the line says it, and
+    the card still offers the choice.
+    """
+    details = io.StringIO()
+    deadline = clock() + (within - RECOMMEND_MARGIN_SECONDS if within != float("inf")
+                          else 2 * REBUILD_TIMEOUT_SECONDS)
+    host = replace(host, run=_deadline_runner(deadline, clock, details.write))
+    code = 0
+    with contextlib.redirect_stderr(details):
+        try:
+            line = save_recommended(host)
+        except Exception as error:  # noqa: BLE001 - one honest line, the detail to the journal
+            if not isinstance(error, (RuntimeError, ValueError)):
+                print("{}: {}: {}".format(MODULE, type(error).__name__, error), file=sys.stderr)
+                error = RuntimeError(_RECOMMEND_REFUSAL)
+            line, code = "Not saved: {} Choose a size in {}.".format(error, pool.SETTING_PLACE), 3
+    journal(details.getvalue())
+    print(line)
+    return code
+
+
 def _whole_number(text: str) -> int:
     """One to twelve ASCII digits, and nothing else, as an int (review S5)."""
     if re.fullmatch(r"[0-9]{1,12}", text) is None:
@@ -294,6 +492,18 @@ def main(argv: Optional[List[str]] = None, host: Host = HOST) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if argv is None:
         signal.signal(signal.SIGTERM, _on_stop)
+    if arguments[:1] == [ACTION_RECOMMEND]:
+        from .post_install_steps import within_seconds
+
+        within = within_seconds([MODULE, *arguments], (ACTION_RECOMMEND,))
+        if within is None:
+            print("Use: recommend [--within <seconds>].")
+            return 2
+        try:
+            return _recommend(within, host)
+        except _Stopped:
+            print("Not saved: stopped before the size was saved.")
+            return 3
     try:
         if arguments[:1] == [ACTION_SET] and len(arguments) == 2:
             result = apply_size(_whole_number(arguments[1]), host)

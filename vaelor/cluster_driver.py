@@ -14,10 +14,12 @@ from .cluster_service_state import (
     normalize_node_runtime,
     normalize_service_details,
     stored_update_flags,
+    swarm_unreadable,
 )
 from .model_service_compose import CPU_IMAGE, prompt_cache_mib
 from .platform_drivers import AptPackageManager
 from .ssh_transport import SshTransport
+from .vaelor_containers import VAELOR_OWNER_LABEL
 from .workload_broker import (
     SERVICE_TASKS_FORMAT,
     SWARM_INFO_COMMAND,
@@ -92,64 +94,13 @@ class DockerSwarmDriver:
         return value
 
     def _swarm_unreadable(self, error: Exception) -> Dict[str, Any]:
-        """Task #75. Why one failed Swarm query is not a verdict about Docker.
-
-        ``status()`` had a single failure branch: any way ``docker info`` could
-        fail — binary missing, daemon socket refused to an unprivileged control
-        plane, timeout, template error, unparseable answer — became
-        ``available: False``, which the console renders as *"Check that Docker
-        is installed and running."*
-
-        Measured on an HP Z2 Mini G1a and independently on a Pironman
-        appliance: Apps and AI reported ``DOCKER READY`` and a container had
-        been deployed through Vaelor minutes earlier, while Cluster told the
-        owner Docker was missing. The two paths do not measure the same thing.
-        The workload path asks the *broker* (:mod:`vaelor.workload_broker`,
-        which exists precisely because this control plane is unprivileged);
-        this driver shells out to ``docker`` itself, and a socket the service
-        user may not open is not an absent engine.
-
-        So the engine fact is reported separately from the Swarm fact, and it
-        is reported from evidence: ``absent`` only when the binary genuinely is
-        not on this machine, ``unreadable`` — with the real failure text —
-        otherwise. Nothing here guesses a remedy.
-
-        #141 adds the one failure whose subject is not the engine at all:
-        ``permission denied`` on the socket means *this process* may not ask,
-        and says nothing about Docker, which on the appliance that reported it
-        was running five Vaelor containers at that moment. The reason names
-        the caller, because "the runtime is not reachable on this appliance"
-        was the defect.
-        """
-        present = shutil.which("docker") is not None
-        detail = str(error).strip()[:300]
-        # Which process actually asked Docker: through a runner the query ran inside
-        # the broker's daemon, so "this Vaelor process" would name the wrong caller.
-        asker = (
-            "Vaelor's workload broker" if self.runner is not None
-            else "this Vaelor service"
+        """Task #75 / #141: see `cluster_service_state.swarm_unreadable`."""
+        # Through a runner the query ran inside the broker's daemon, so "this
+        # Vaelor process" would name the wrong caller.
+        return swarm_unreadable(
+            error, docker_present=shutil.which("docker") is not None,
+            via_broker=self.runner is not None, driver=self.name,
         )
-        if not present:
-            reason = "Docker is not installed on this machine."
-        elif "permission denied" in detail.lower():
-            reason = (
-                "Docker refused {}'s query for lack of permission; that is a "
-                "fact about the asking process, not the engine, which may be "
-                "running normally: {}".format(asker, detail)
-            )
-        else:
-            reason = (
-                "Docker is installed here, but Vaelor could not read its "
-                "cluster state: {}".format(detail or "the query failed.")
-            )
-        return {
-            "available": False,
-            "initialized": False,
-            "driver": self.name,
-            "control_available": False,
-            "engine": "absent" if not present else "unreadable",
-            "engine_reason": reason,
-        }
 
     def status(self) -> Dict[str, Any]:
         # The three reads are issued verbatim from the shared constants, so the broker
@@ -349,6 +300,12 @@ class DockerSwarmDriver:
         return "not part of a swarm" in message.lower()
 
     @staticmethod
+    def _docker_absent(message: str) -> bool:
+        # The shell or sudo saying there is no `docker` to run: a purged worker.
+        text = message.lower()
+        return "docker: command not found" in text or "docker: not found" in text
+
+    @staticmethod
     def _node_already_removed(message: str) -> bool:
         text = message.lower()
         return "not found" in text or "no such node" in text
@@ -390,6 +347,7 @@ class DockerSwarmDriver:
             if not force:
                 raise
         leave_error = ""
+        docker_absent = False
         try:
             arguments = ["docker", "swarm", "leave"]
             if force:
@@ -397,9 +355,14 @@ class DockerSwarmDriver:
             transport.run(arguments, sudo=True, timeout=180)
         except Exception as error:
             leave_error = str(error)
+            # VD-133 1.5.5 #16 round 1 M3: a purge took Docker off the machine,
+            # so it has no cluster membership of its own left to give up.
+            docker_absent = self._docker_absent(leave_error)
+            if docker_absent:
+                leave_error = ""
             # A worker already out of the swarm is success, not a failure to
             # leave; only a genuinely stuck or unreachable worker aborts.
-            if not force and not self._already_left_swarm(leave_error):
+            if not force and not docker_absent and not self._already_left_swarm(leave_error):
                 raise ClusterDriverError(
                     "The worker could not leave cleanly. Reconnect it or review a forced removal."
                 ) from error
@@ -424,6 +387,7 @@ class DockerSwarmDriver:
             "swarm_node_id": str(swarm_node_id),
             "forced": bool(force),
             "worker_leave_warning": leave_error[:300],
+            "docker_absent": docker_absent,
         }
 
     def deploy_llm(
@@ -465,6 +429,7 @@ class DockerSwarmDriver:
             "--restart-max-attempts", "5",
             "--label", "vaelor.managed=true",
             "--label", "vaelor.workload=llm",
+            "--container-label", f"{VAELOR_OWNER_LABEL}=cluster-serving",  # #12: on its task containers
             "--label", (
                 "vaelor.inference.mode=replicated"
                 if replica_count > 1 else

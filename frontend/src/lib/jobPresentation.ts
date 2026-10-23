@@ -249,8 +249,10 @@ export function jobStateLabel(job: JobProjectionInput) {
     waiting: "waiting",
     paused: "paused",
     needs_approval: "needs approval",
-    completed: "completed",
-    healthy: "completed",
+    // One word for a successful operation on every screen: Activity's
+    // "Finished" (VD-133 1.5.5 cosmetic sweep). Apps said "Completed".
+    completed: "finished",
+    healthy: "finished",
     failed: "failed",
     rejected: "rejected",
     cancelled: "cancelled",

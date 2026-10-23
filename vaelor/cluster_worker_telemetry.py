@@ -32,6 +32,7 @@ from typing import Any, Callable, Dict, Optional
 from .cluster_store import NODE_NOT_FOUND
 from .gpu_vendor_status import NOT_APPLICABLE, STATUS_FIELD, known_code
 from .platforms.graphics_software import integrated_amd_gpu
+from .worker_profile_state import uninstalled_node_ids
 
 LOGGER = logging.getLogger(__name__)
 
@@ -87,6 +88,9 @@ DRIFT_RECORD_FIELDS = ("fingerprint", "attempts", "last_attempt_at", "reported",
 #: so the reconcile queues that job instead of re-keying the agent itself -
 #: one owner of the file (LESSONS 6).
 PROFILE_QUEUED = "profile-update-queued"
+#: The reconcile's answer for a joined worker Vaelor was uninstalled on (owner
+#: 2026-10-21): nothing was done there.
+VAELOR_UNINSTALLED = "vaelor-uninstalled"
 _REINSTALLS = ("reprovisioned-drift", "reprovisioned-stale", "reinstalled-absent")
 
 #: What the worker telemetry routes answer for a joined worker (owner,
@@ -106,6 +110,10 @@ RECONCILE_NOTES: Dict[str, str] = {
     PROFILE_QUEUED: (
         "The telemetry agent needs reinstalling, so Vaelor queued an update of this "
         "machine's worker software, which reinstalls it."
+    ),
+    VAELOR_UNINSTALLED: (
+        "Vaelor was uninstalled on this machine, so its telemetry agent is not repaired. "
+        "Nothing is put back until you Re-add it to the cluster or Remove it."
     ),
     "clock-skew": (
         "The telemetry agent is running, but the machine's clock is too far "
@@ -560,7 +568,8 @@ class WorkerTelemetryMixin:
         except Exception as error:  # noqa: BLE001 - reported, the repair goes on
             LOGGER.warning("could not re-read the hardware of node %s: %s", node_id, error)
 
-    def reconcile_worker_telemetry(self, node_id: str, recheck: bool = False) -> Dict[str, str]:
+    def reconcile_worker_telemetry(self, node_id: str, recheck: bool = False,
+                                   requested_by: Any = None) -> Dict[str, str]:
         """Bring back a down, missing, stale-CA or reporting-stale agent.
 
         Called by the operator reconcile route, by Recheck, and by the 15-minute
@@ -571,6 +580,8 @@ class WorkerTelemetryMixin:
 
         ``recheck`` is the owner pressing Recheck: it retries a reinstall for
         drift that the loop guard would otherwise leave until its window passes.
+        ``requested_by`` is the administrator's ``(username, address)`` when a
+        route asked, so a profile update this queues is audited as theirs.
 
         A MISSING agent is reinstalled only when Vaelor holds a key for it,
         i.e. the owner installed telemetry and something removed it since; a
@@ -588,6 +599,12 @@ class WorkerTelemetryMixin:
         if node is None:
             raise ValueError(NODE_NOT_FOUND)
         joined = self.telemetry_owned_by_profile(node)
+        if joined and uninstalled_node_ids(self.store, [node_id]):
+            # Owner 2026-10-21 (VD-133 1.5.5 #16): Vaelor was uninstalled on
+            # this worker; nothing is restarted, re-keyed or reinstalled there
+            # until the owner chooses Re-add or Remove. On rc2 this pass and
+            # the 15-minute check put the agent back twice within minutes.
+            return {"action": VAELOR_UNINSTALLED}
         # Review S10: on a joined worker the profile job owns the agent, its CA
         # and telegraf.conf; this pass may restart a stopped agent but never
         # re-keys or reinstalls it - it queues that job instead.
@@ -599,8 +616,12 @@ class WorkerTelemetryMixin:
                 return self.install_worker_telemetry(node_id)
             from .worker_profile_job import RECHECK_REASON, SWEEP_REASON, queue_profile_job
 
-            queued["yes"] = bool(queue_profile_job(self.job_store, node_id,
-                                                   RECHECK_REASON if recheck else SWEEP_REASON))
+            # Audited (owner 2026-10-21 follow-up list, ACC-121): as the administrator
+            # who asked, or as the automatic repair when the 15-minute pass did.
+            queued["yes"] = bool(queue_profile_job(
+                self.job_store, node_id, RECHECK_REASON if recheck or requested_by else SWEEP_REASON,
+                audit=self.audit_trail(requested_by) if hasattr(self, "audit_trail") else None,
+                summary=RECONCILE_NOTES[PROFILE_QUEUED]))
             return {}
 
         transport = self._worker_transport(node)

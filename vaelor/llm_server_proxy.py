@@ -93,6 +93,7 @@ from .llm_gate_usage import GATE_LOG_CONTAINER_DIR, GATE_LOG_DIRNAME
 from .llm_server_state import applied_marker, key_fingerprint, serve_binding
 from .llm_server_wake import WAKE_SOCKET_DIR, WAKE_SOCKET_MOUNT, wake_socket_refusal
 from .runtime_paths import run_path
+from .vaelor_containers import owner_label_args
 
 LOGGER = logging.getLogger(__name__)
 
@@ -196,6 +197,7 @@ def proxy_container_command(
     foreground: bool = False,
     log_dir: str = "",
     wake_door: bool = False,
+    owner: str = "",
 ) -> List[str]:
     """The ``docker run -d`` argv for the auth proxy container.
 
@@ -222,6 +224,10 @@ def proxy_container_command(
     ``wake_door`` adds the control plane's wake folder, read-only - the one
     extra mount, fixed, and only for the LLM Server's idle-unloaded door.
     Neither set, the argv is exactly what it was before either existed.
+
+    ``owner`` labels the container as that part of Vaelor (VD-133 1.5.5 #12,
+    `vaelor_containers`), so Apps does not list it as the owner's app. Empty -
+    the gate units, whose argv the root bridge pins - adds nothing.
     """
     _require_keys(api_keys)
     _validate_port(listen_port)
@@ -232,6 +238,7 @@ def proxy_container_command(
         mounts += ["-v", "{}:{}:ro".format(WAKE_SOCKET_DIR, WAKE_SOCKET_MOUNT)]
     return [
         docker, "run", "--rm" if foreground else "-d", "--name", container_name,
+        *(owner_label_args(owner) if owner else []),
         "--network", "host", *mounts, image,
     ]
 
@@ -307,6 +314,9 @@ class LlmServerProxyProcess:
     ``start``/``stop``/``alive``/``status`` shape, and the docker calls go through
     an injected ``run`` seam so the launch is verifiable without docker or a GPU.
     """
+
+    #: The part of Vaelor this container is labelled as (#12, `vaelor_containers`).
+    OWNER_COMPONENT = "llm-server"
 
     def __init__(
         self,
@@ -463,7 +473,7 @@ class LlmServerProxyProcess:
             docker=self._docker_binary(), image=self._image,
             container_name=self._name, config_host_file=self._config_host_file,
             config_container_file=self._config_container_file, log_dir=log_dir,
-            wake_door=wake_door,
+            wake_door=wake_door, owner=self.OWNER_COMPONENT,
         )
         docker = self._docker_binary()
         self.ensure_image(docker)

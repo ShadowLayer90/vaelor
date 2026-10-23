@@ -332,6 +332,14 @@ function ResearchComplete({
         label="Research facts"
       />
       <h4 className="apps-wizard__subhead">Verified container images{multiService ? ` (${research.images.length} services)` : ""}</h4>
+      {research.imageProvenance && (
+        <div aria-label="Where the image came from" className={`apps-wizard__inset${research.imageProvenance.warnings.length ? " apps-wizard__inset--warning" : ""}`} role="group">
+          <p><strong>Where the image came from:</strong> {research.imageProvenance.source}</p>
+          {research.imageProvenance.warnings.length > 0 && (
+            <ul className="apps-wizard__dot-list">{research.imageProvenance.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+          )}
+        </div>
+      )}
       {research.images.length === 0 ? <p className="apps-wizard__muted">No container image was verified.</p> : (
       <div className="apps-wizard__table-wrap">
         <table className="apps-wizard__table">

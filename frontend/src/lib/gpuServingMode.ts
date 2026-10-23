@@ -47,6 +47,8 @@ import { CONTROLLER_PLACEMENT_ID, type FleetSummary } from "../components/fleetT
  * 127.0.0.1 is loopback and is not this appliance's managed model.
  */
 export const LOCAL_BY_MANAGED_PREFIX = "vaelor-managed";
+/** The GPU cluster Vaelor deployed (`chat_connections.LOCAL_BY_CLUSTER`): its prompts stay on the owner's network, not this machine alone. */
+export const LOCAL_BY_CLUSTER = "vaelor-cluster";
 
 export const SERVING_KIND_NONE = "none";
 export const SERVING_KIND_MANAGED_LOCAL = "managed-local";

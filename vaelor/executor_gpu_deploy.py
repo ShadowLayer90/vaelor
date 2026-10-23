@@ -36,7 +36,6 @@ llama.cpp under one.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import subprocess
 import time
@@ -49,6 +48,8 @@ from .accelerator_runtime import (
 )
 from .app_port_claims import pick_model_port
 from .credential_broker import CredentialBrokerClient
+from .credential_provider_probe import served_profile
+from .gpu_rocmfpx_service import launch_context_window
 from .job_control import JobCancelled
 from .gpu_model_choice import (
     discover_gpu_rocm_serving,
@@ -70,6 +71,8 @@ from .managed_local_credentials import (
     MANAGED_LOCAL_CREDENTIAL_LABEL,
     activate_managed_chat,
     managed_model_by_label,
+    note_served_window,
+    served_window,
 )
 from .model_catalog import (
     catalog_engine,
@@ -551,10 +554,10 @@ class ExecutorGpuDeployMixin:
         # model is unauthenticated on loopback, so internal AI Chat needs no key.
         # The LAN key lives only in the auth proxy's config, never in this
         # credential - a rotate re-keys the proxy without touching AI Chat.
-        profile = json.dumps(
-            {"base_url": endpoint, "model": "", "api_key": ""},
-            separators=(",", ":"),
-        )
+        # The window this launch passed the engine; the fork applies its own,
+        # so its server's readback is asked instead (owner 2026-10-21).
+        profile = served_profile(endpoint, context_window=launch_context_window(
+            runtime) or served_window({"base_url": endpoint}))
         # Rollback discipline, and it must cover EVERY step after the server is up
         # - the residency read (a hardware probe that can raise) and all three
         # broker calls (which cross `CredentialBrokerClient._request` and can raise
@@ -796,7 +799,8 @@ class ExecutorGpuDeployMixin:
         if relaunch != RELAUNCH_FP4:
             # A user-chosen GENERIC lease (resolved or not) re-serves from its
             # durable credential label, never as the recommended 27B.
-            return self._reconcile_generic_gpu_chat(target.label, port, supervisor)
+            return self._reconcile_generic_gpu_chat(
+                target.label, port, supervisor, credential_id=target.credential_id)
         model_path = self._gpu_chat_model_path()
         # The model is served loopback-only with the pristine catalog recipe: a
         # reboot relaunch comes back exactly as deployed, and the LLM Server's
@@ -810,10 +814,23 @@ class ExecutorGpuDeployMixin:
         result = supervisor.restart_if_unhealthy(
             str(model_path), port=port, runtime=runtime,
         )
+        self._note_relaunch_window(target.credential_id, runtime, port, result)
         # A reboot killed the proxy too; (re)start it in front of the relaunched
         # loopback model to match the persisted LLM Server state.
         self._converge_llm_proxy(port)
         return {"served": True, **result}
+
+    def _note_relaunch_window(self, credential_id: str, runtime: Any, port: int, result: Any) -> None:
+        """A relaunch records the window it started the server with, when that changed.
+
+        Owner 2026-10-21: an update relaunches with the current window and must
+        not leave the credential stating the old one. The same reading the
+        deploy makes - the ``-c`` this launch passed, or the fork's readback.
+        """
+        if credential_id and isinstance(result, dict) and result.get("restarted"):
+            window = launch_context_window(runtime) or served_window(
+                {"base_url": "http://127.0.0.1:{}/v1".format(port)})
+            note_served_window(self.credential_broker, {"credential_id": credential_id}, window, launched=True)
 
     def gpu_chat_relaunch(self, target: Any = None) -> str:
         """Which arm this watch's pass relaunches AI Chat's model through - the one answer.
@@ -844,7 +861,7 @@ class ExecutorGpuDeployMixin:
         return RELAUNCH_UNRESOLVED
 
     def _reconcile_generic_gpu_chat(
-        self, label: str, port: int, supervisor: GpuRocmSupervisor
+        self, label: str, port: int, supervisor: GpuRocmSupervisor, credential_id: str = "",
     ) -> Dict[str, Any]:
         """Relaunch a user-chosen GENERIC GPU chat model after a reboot.
 
@@ -884,6 +901,7 @@ class ExecutorGpuDeployMixin:
         result = supervisor.restart_if_unhealthy(
             str(model_path), port=port, runtime=runtime,
         )
+        self._note_relaunch_window(credential_id, runtime, port, result)
         # A reboot killed the proxy too; (re)start it in front of the relaunched
         # loopback model to match the persisted LLM Server state.
         self._converge_llm_proxy(port)

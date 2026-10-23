@@ -156,6 +156,11 @@ class CredentialBrokerClient:
             "select_model", credential_id=credential_id, model=model
         )
 
+    def record_window(self, credential_id, version, window):
+        return self._request(
+            "record_window", credential_id=credential_id, version=version, window=window
+        )
+
     def resolve_active(self, purpose):
         return self._request("resolve_active", purpose=purpose)
 

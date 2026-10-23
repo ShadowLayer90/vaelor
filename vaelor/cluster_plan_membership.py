@@ -17,6 +17,15 @@ from .cluster_node_removal import (
 from .cluster_plan_contract import ClusterPlanContext, ClusterPlanError
 from .gpu_memory_pool import pool_left_note
 from .cluster_service_state import STATEFUL_DRAIN_ACK
+from .worker_profile_state import uninstalled_node_ids
+
+#: The join plan's line for `worker_left_serving.remove_left_serving`.
+LEFT_SERVING_STEP = (
+    "Stop and remove any model serving left on the machine that this controller has "
+    "no deployment for there, such as an earlier controller's: Vaelor's own model "
+    "servers, their gates and model download jobs. Your apps and the downloaded "
+    "model files stay."
+)
 
 #: The refusal both removal plans give for an id that names no enrolled node.
 _WORKER_NOT_FOUND = "The worker was not found."
@@ -104,7 +113,6 @@ def plan_join_node(
     entries from this controller's node list.
     """
     node = context.enrolled_node(body.get("node_id", ""), "Enroll a node first.")
-    inventory = node.get("inventory") or {}
     steps = [
         "Connect over SSH, refusing the connection if the machine's host key "
         "is not the one pinned at enrolment.",
@@ -112,11 +120,14 @@ def plan_join_node(
         "(processor architecture, memory, free disk); it is not re-read, so "
         "Recheck first if the machine has changed.",
     ]
-    if not inventory.get("docker"):
-        steps.append(
-            "Install Docker from the operating system's packages, because it "
-            "was not found at the last check."
-        )
+    # Round 1 HIGH (VD-133 1.5.5 #16): the join reads Docker on the machine
+    # itself (`worker_profile_probe.docker_on_machine`), so a purge since the
+    # last check cannot leave it missing.
+    steps.append(
+        "Check on the machine whether Docker is installed, and install it from "
+        "the operating system's packages if it is not."
+    )
+    readding = bool(uninstalled_node_ids(context.manager.store, [node["id"]]))
     steps += [
         "If the machine is still a member of any cluster - an earlier join to "
         "this one, or a different cluster - force it to leave that cluster "
@@ -125,7 +136,18 @@ def plan_join_node(
         "If it was forced out of a cluster, remove the old entries this "
         "controller holds under the machine's hostname.",
         "Apply Vaelor node labels for architecture and memory-aware placement.",
+        # Owner 2026-10-22 (VD-133 1.5.5 rc5): `worker_left_serving`. "If
+        # any", because the plan reads nothing on the machine; true either way.
+        LEFT_SERVING_STEP,
     ]
+    if readding:
+        # Owner 2026-10-21: Re-add of a machine Vaelor was uninstalled on.
+        steps.append(
+            "Vaelor was uninstalled on this machine: put its worker software back "
+            "(the telemetry agent and the rest of what this controller keeps there), "
+            "remove the record its uninstall left, and return it to service in the "
+            "cluster, so this controller manages it again."
+        )
     return {
         "title": f"Join {node['name']} as a worker",
         "steps": steps,

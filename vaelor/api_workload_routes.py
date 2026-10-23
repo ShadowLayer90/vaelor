@@ -101,7 +101,13 @@ def _port_preflight(inventory: Any, port: int, broker: Any = None) -> Dict[str, 
     owners: list[str] = []
     occupied_ports: set[int] = set()
     snapshot = inventory.list_all() if inventory is not None else {}
-    for app in snapshot.get("apps", []) if isinstance(snapshot, dict) else []:
+    # VD-133 1.5.5 #12: Vaelor's own containers are listed apart from the
+    # owner's apps, and their ports are just as taken.
+    holders = [
+        *(snapshot.get("apps", []) if isinstance(snapshot, dict) else []),
+        *(snapshot.get("vaelor_containers", []) if isinstance(snapshot, dict) else []),
+    ]
+    for app in holders:
         if not isinstance(app, dict):
             continue
         identity = str(app.get("display_identity") or app.get("name") or "managed app")

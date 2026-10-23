@@ -29,6 +29,7 @@ import { CLUSTER_SECTION_EVENT, CLUSTER_SECTION_LABELS, clusterSectionFrom } fro
 import { TOPBAR_PAGE_SLOT_ID, useReportedPagePlace } from "../lib/topbarSlot";
 import { AmbientBackground } from "./AmbientBackground";
 import { BuildReloadNotice } from "./BuildReloadNotice";
+import { CertificateRenewalNotice } from "./CertificateRenewalNotice";
 import { Icon, ICON_SIZE } from "./Icon";
 import { Sidebar, type StorageSummary } from "./Sidebar";
 import { CommandSearch } from "./CommandSearch";
@@ -511,6 +512,7 @@ export function Overview({
 
         <main className="main" id="main-content" tabIndex={-1}>
           <BuildReloadNotice />
+          <CertificateRenewalNotice />
           {/* The outcome of a power request or an enclosure choice, on the page it was made from. */}
           {notice && (
             <Notice className="shell-notice" severity={noticeRefused ? "danger" : "info"}>

@@ -2,10 +2,16 @@ import { useEffect, useState } from "react";
 import type { Session } from "./types";
 import { ApiError, apiRequest, SESSION_CHANGED_EVENT, SESSION_EXPIRED_EVENT } from "./lib/api";
 import { AuthScreen } from "./components/AuthScreen";
+import { FirstRunTrust } from "./components/FirstRunTrust";
 import { Overview } from "./components/Overview";
 import { WorkspaceErrorBoundary } from "./components/WorkspaceErrorBoundary";
 
-type AppState = "loading" | "bootstrap" | "login" | "authenticated";
+/**
+ * "trust" is first-run setup's last step (VD-133 1.5.5 #2, owner 2026-10-20):
+ * reached only from "bootstrap", right after the administrator account is
+ * created, never from an ordinary sign-in.
+ */
+type AppState = "loading" | "bootstrap" | "login" | "trust" | "authenticated";
 
 export default function App() {
   const [state, setState] = useState<AppState>("loading");
@@ -91,7 +97,7 @@ export default function App() {
         body: JSON.stringify({ username, password, totp_code: totpCode }),
       });
       setSession(active);
-      setState("authenticated");
+      setState(state === "bootstrap" ? "trust" : "authenticated");
     } catch (authError) {
       if (authError instanceof ApiError) {
         if (authError.code === "totp_required") setTotpRequired(true);
@@ -139,6 +145,10 @@ export default function App() {
         <span>Starting secure control plane</span>
       </main>
     );
+  }
+
+  if (state === "trust" && session) {
+    return <FirstRunTrust onContinue={() => setState("authenticated")} />;
   }
 
   if (state === "authenticated" && session) {

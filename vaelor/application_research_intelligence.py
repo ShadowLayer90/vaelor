@@ -27,6 +27,7 @@ from .application_research_service import (
     ambiguous_image_clarification,
     unresolved_source_clarification,
 )
+from .app_source_discovery import direct_source_discovery
 from .application_search import SearxSearchClient
 from .container_registry import (
     canonical_reference,
@@ -326,7 +327,7 @@ class ApplicationResearchIntelligence:
         "Guarded web research is turned off. Re-enable it, then run this again."
     )
 
-    def guarded_search(self, queries: Iterable[str]) -> list[Dict[str, Any]]:
+    def guarded_search(self, queries: Iterable[str], categories: str = "general") -> list[Dict[str, Any]]:
         """Auto-provision guarded web research if needed, then search (#247r).
 
         The custom-agent web-research tool searches through this method (wired as
@@ -367,7 +368,7 @@ class ApplicationResearchIntelligence:
                     last_error
                 )
             )
-        return self.search_client.search(list(queries))
+        return self.search_client.search(list(queries), **({} if categories == "general" else {"categories": categories}))
 
     def _web_research_readiness(self) -> str:
         """Classify the owned search backend for point-of-use provisioning.
@@ -471,7 +472,11 @@ class ApplicationResearchIntelligence:
             ) from error
         connection = self.connection_resolver()
         discovery: Dict[str, Any] | None = None
-        if not requested:
+        direct: Dict[str, Any] = {"notes": [], "sources": []}
+        if not requested:  # VD-222 item 1: the app's own GitHub/Docker Hub first.
+            discovery, direct = direct_source_discovery(self.broker_client, draft, progress)
+            requested = list((discovery or {}).get("source_urls", []))
+        if not requested and not (discovery or {}).get("reviewed_sources"):
             if not connection or not allowed_inference_endpoint(connection):
                 raise ResearchWorkflowError(
                     "Automatic research needs a selected AI model. Select a local or "
@@ -504,7 +509,8 @@ class ApplicationResearchIntelligence:
                         .format(capability["label"].lower(), str(error)[:240]),
                         "interpretation",
                     ) from error
-            requested = list(discovery["source_urls"])
+            requested = list(dict.fromkeys([*direct["sources"], *discovery["source_urls"]]))
+            discovery["limitations"] = [*direct["notes"], *discovery.get("limitations", [])][:6]
             # #247r: bring the owned SearXNG backend up on demand before the
             # search, waiting inline on its bounded first-boot poll (this job may
             # wait on its own dependency). A deliberate disable is surfaced, not
@@ -673,15 +679,9 @@ class ApplicationResearchIntelligence:
         if ambiguous:
             raise ResearchWorkflowError(ambiguous, "discovery")
 
-        # #247t: a directed container-image registry lookup. The sandboxed
-        # research broker verifies a digest only from a fetched registry
-        # document, but nothing constructs the registry URL - the model and
-        # SearXNG supply homepage/GitHub pages. So here, from the model's
-        # declared image reference(s) and any GitHub homepage among the sources,
-        # construct the public registry API URLs (Docker Hub tag-API, GHCR
-        # manifest) generically and hand them to the broker as sources to prove.
-        # No per-app data: an unresolvable candidate simply fails to fetch and
-        # degrades to an honest unverified verdict, never to a fabricated digest.
+        # #247t: build the registry API URLs (Docker Hub tag-API, GHCR manifest)
+        # the broker proves a digest from, generically from the declared image
+        # references and any GitHub homepage; no per-app data, never a made-up digest.
         requested = self._with_registry_candidates(
             requested, discovery,
             str((draft.get("intent") or {}).get("application_query", "")),
@@ -750,7 +750,7 @@ class ApplicationResearchIntelligence:
         identity guard in the service is untouched and still hard-rejects
         caller-supplied lookalikes.
         """
-        if ApplicationResearchService._reviewed(query):
+        if ApplicationResearchService._reviewed(query) or (discovery or {}).get("direct_sources"):
             return requested
         references = []
         if discovery:

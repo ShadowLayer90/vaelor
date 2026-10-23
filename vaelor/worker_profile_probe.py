@@ -7,7 +7,8 @@ manifest path, its digest, owner, group and mode, and for every unit its
 ``systemctl show`` state; and, for each of the full appliance's units (named
 from `vaelor/appliance_units/` in the wheel this controller runs, not from
 ``deploy/``, which a controller does not have), whether its file is present
-and how systemd holds it.
+and how systemd holds it; and whether the record the worker's own uninstall
+leaves (`worker_profile.UNINSTALLED_PATH`) is there.
 
 **Nothing secret leaves the worker.** The program returns digests, modes and
 names only. The Telegraf config carries the ingest key, so the program
@@ -75,6 +76,7 @@ def probe_spec(node_id: str, unit_names: Iterable[str]) -> Dict[str, Any]:
         "amd_keyring": wp.AMD_KEYRING_PATH, "rocm_amd_smi": ROCM_AMD_SMI,
         "core_amd_smi": ROCM_CORE_AMD_SMI, "smi_prefix": AMD_SMI_PACKAGE_PREFIX,
         "wmi_guid": wp.WMI_SENSOR_GUID, "sys_root": "/sys", "os_release": "/etc/os-release",
+        "uninstalled": wp.UNINSTALLED_PATH,
         "systemctl": "systemctl", "dpkg_query": "dpkg-query",
     }
 
@@ -305,7 +307,8 @@ missing = [name for name in spec["units"] if name not in appliance]
 if not appliance_error and missing:
     appliance_error = "not reported: %d units" % len(missing)
 print(json.dumps({"version": 1, "facts": facts(), "items": items,
-                  "appliance": {"units": appliance, "error": appliance_error}}))
+                  "appliance": {"units": appliance, "error": appliance_error},
+                  "uninstalled": stat_of(spec["uninstalled"])}))
 '''.replace("__PROPS__", repr(UNIT_PROPERTIES))
 
 
@@ -386,7 +389,7 @@ def _item(raw: Dict[str, Any]) -> Dict[str, Any]:
 def unread_reading(reason: str) -> Dict[str, Any]:
     """A reading that holds nothing but why it holds nothing."""
     return {"ok": False, "error": reason, "facts": {}, "items": {},
-            "appliance": {"units": {}, "error": reason}}
+            "appliance": {"units": {}, "error": reason}, "uninstalled": {"error": reason}}
 
 
 def parse_probe_output(raw: Any) -> Dict[str, Any]:
@@ -406,6 +409,83 @@ def parse_probe_output(raw: Any) -> Dict[str, Any]:
                  "error": _text(appliance_raw.get("error", ""), 120)}
     if not isinstance(document.get("appliance"), dict):
         appliance["error"] = "the machine did not report its appliance services"
+    # The uninstall record (VD-133 1.5.5 #16): absent from the answer is
+    # unread, never "not uninstalled" (LESSONS 8).
+    uninstalled = (_item(document["uninstalled"]) if isinstance(document.get("uninstalled"), dict)
+                   else {"error": "missing from the answer"})
     return {"ok": True, "error": "", "facts": facts,
             "items": {_text(key, 40): _item(value) for key, value in items.items()},
-            "appliance": appliance}
+            "appliance": appliance, "uninstalled": uninstalled}
+
+
+# -- whether Docker is on the machine, read at join time ----------------------
+
+#: Reads with commands already on the SSH allowlist and no python3 (owner
+#: 2026-10-21 follow-up list). First, whether systemd knows Docker's engine
+#: unit, which the join enables and the purge takes away with the package:
+#: systemd says ``LoadState=not-found`` for a unit nothing installed.
+DOCKER_UNIT_READ = ("systemctl", "show", "--property=LoadState", "docker.service")
+#: The load states of an installed engine unit; ``not-found`` is the one absence.
+DOCKER_UNIT_PRESENT = frozenset({"loaded", "masked"})
+#: Then where a ``docker`` program lives when no ``docker.service`` does: the
+#: distribution's (the enrolment inventory's own read) and the snap's, whose
+#: engine unit is ``snap.docker.dockerd`` - a snap Docker is not absent.
+DOCKER_PROGRAM_PATHS = ("/usr/bin/docker", "/snap/bin/docker")
+
+
+def _docker_unit(transport) -> Optional[bool]:
+    from .ssh_transport import SshTransportError
+
+    try:
+        raw = transport.run(list(DOCKER_UNIT_READ), timeout=60)
+    except SshTransportError:
+        return None
+    states = [line.strip()[len("LoadState="):] for line in str(raw or "").splitlines()
+              if line.strip().startswith("LoadState=")]
+    if len(states) != 1:
+        return None
+    if states[0] == "not-found":
+        return False
+    return True if states[0] in DOCKER_UNIT_PRESENT else None
+
+
+def _program_at(transport, path: str) -> Optional[bool]:
+    """Whether ``path`` exists: the mode ``stat`` prints, stat's own "No such file", or unread.
+
+    The rule `cluster_node_removal.profile_on_machine` reads a stat by.
+    """
+    from .ssh_transport import SshTransportError
+    from .worker_telemetry_runtime import _absent
+
+    try:
+        answer = str(transport.run(["stat", "-c", "%f", path], timeout=60)).strip()
+    except SshTransportError as error:
+        return False if _absent(error) else None
+    try:
+        int(answer, 16)
+    except ValueError:
+        return None
+    return True
+
+
+def docker_on_machine(transport) -> Optional[bool]:
+    """Whether Docker is installed on the worker now, or ``None`` when the answer could not be read.
+
+    Re-add after a purge (VD-133 1.5.5 #16, round 1 HIGH): the purge took
+    Docker away while the stored enrolment inventory still says it is there,
+    and a join that believed the inventory failed at ``docker swarm join``
+    (LESSONS 14: the fixture built what the product forgot). The join asks the
+    machine instead. Present on any positive sign of Docker; absent only when
+    every read positively says there is none - no engine unit and no program
+    at either path. Anything unread is ``None`` (LESSONS 8), and the join keeps
+    the inventory's answer; a connection that drops raises.
+    """
+    unit = _docker_unit(transport)
+    if unit:
+        return True
+    programs = [_program_at(transport, path) for path in DOCKER_PROGRAM_PATHS]
+    if any(programs):
+        return True
+    if unit is False and all(found is False for found in programs):
+        return False
+    return None

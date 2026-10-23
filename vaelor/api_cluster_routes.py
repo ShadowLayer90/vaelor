@@ -625,7 +625,8 @@ def register_cluster_routes(context: ApiContext) -> None:
     def cluster_refresh(node_id):
         manager = callbacks.get("cluster_manager")
         try:
-            node = manager.refresh_node(node_id)
+            # Adopted 2026-10-21: what this Recheck queues is audited as this administrator's.
+            node = manager.refresh_node(node_id, requested_by=(g.auth_session.username, request.remote_addr or ""))
         except Exception as error:  # noqa: BLE001 - PH-R6: each kind answered in its own words
             return recheck_refusal(node_id, error)
         # ACC-121: a Recheck can restart, re-key or reinstall the worker's
@@ -748,7 +749,8 @@ def register_cluster_routes(context: ApiContext) -> None:
         # unaudited to avoid noise; the returned action says what it did.
         manager = callbacks.get("cluster_manager")
         try:
-            result = manager.reconcile_worker_telemetry(node_id)
+            result = manager.reconcile_worker_telemetry(
+                node_id, requested_by=(g.auth_session.username, request.remote_addr or ""))
         except (
             AttributeError, CredentialError, OSError, SshTransportError, ValueError
         ) as error:

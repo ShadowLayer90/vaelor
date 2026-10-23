@@ -350,7 +350,7 @@ export function McpCatalogPanel({ session }: { session: Session }) {
               value={form.name}
             />
             <Select
-              hint="url = an external MCP server addressed by URL; builtin = a server Vaelor provides."
+              hint="URL: an external MCP server Vaelor reaches at the endpoint below. Built-in: a server Vaelor provides."
               id="mcp-kind"
               label="Kind"
               onChange={(event) => setForm((current) => ({ ...current, kind: event.target.value }))}

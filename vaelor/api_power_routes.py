@@ -27,6 +27,7 @@ from typing import Any, Callable
 
 from flask import g, request
 
+from . import restart_interruptions
 from .api_common import ApiContext, payload as _payload
 from .host_power import POWER_ACTION_REFUSAL
 
@@ -88,6 +89,41 @@ def register_power_routes(context: ApiContext) -> None:
         with restart_lock:
             restart_pending["until"] = 0.0
 
+    def _upgrade_progress():
+        """The update's progress, as the update panel reads it (`upgrade_progress`)."""
+        injected = callbacks.get("upgrade_progress")
+        if injected is not None:
+            return injected()
+        from . import upgrade_progress
+        from .appliance_upgrade import last_result
+        from .version import __version__
+
+        return upgrade_progress.progress(
+            callbacks.get("job_store"), __version__, last_result(),
+            upgrade_progress.read_record(), detail=False,
+        )
+
+    def _impact(controller: bool) -> dict:
+        role = g.auth_session.role
+        return restart_interruptions.restart_impact(
+            callbacks.get("job_store"), controller=controller,
+            actor=None if role == "administrator" else g.auth_session.username,
+            upgrade=_upgrade_progress,
+            boot_time=callbacks.get("boot_time") or restart_interruptions.read_boot_time,
+        )
+
+    @blueprint.get("/power/restart-impact")
+    @require_auth("operator")
+    def power_restart_impact():
+        """VD-133 1.5.5 #5: what a restart of ``machine`` would interrupt."""
+        machine = str(request.args.get("machine", "controller")).strip()
+        if not machine or len(machine) > 64:
+            return _payload(
+                error={"code": "restart_machine_invalid", "message": "Name the machine to restart."},
+                status=400,
+            )
+        return _payload(_impact(machine == "controller"))
+
     @blueprint.get("/power/capabilities")
     @require_auth("viewer")
     def power_capabilities():
@@ -145,6 +181,23 @@ def register_power_routes(context: ApiContext) -> None:
                 },
                 status=409,
             )
+        if action in ("reboot", "shutdown"):
+            # VD-133 1.5.5 #5: a reboot cut off a running worker update in
+            # 1.5.4. The dialog lists what would be interrupted; this refuses
+            # a confirmation that did not see all of it.
+            impact = _impact(True)
+            if restart_interruptions.unacknowledged(impact, body):
+                return _payload(
+                    error={
+                        "code": "restart_interrupts_running_work",
+                        "message": (
+                            "Work is running that this {} would cut off, and it was not "
+                            "in what you confirmed. Review the list and confirm again."
+                        ).format("restart" if action == "reboot" else "shutdown"),
+                        "impact": impact,
+                    },
+                    status=409,
+                )
         actor = g.auth_session.username
         remote_addr = request.remote_addr or ""
 

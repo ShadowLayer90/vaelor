@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 
+from flask import g, request
+
 from .api_common import ApiContext, payload
 from .cluster_node_removal import failure_words
 from .cluster_store import NODE_NOT_FOUND
@@ -109,7 +111,9 @@ def register_worker_profile_routes(context: ApiContext) -> None:
         if manager is None:
             return _unavailable()
         try:
-            return payload(manager.recheck_worker_profile(node_id))
+            # Adopted 2026-10-21: an update this Recheck queues is audited as its administrator's.
+            return payload(manager.recheck_worker_profile(
+                node_id, requested_by=(g.auth_session.username, request.remote_addr or "")))
         except ValueError as error:
             if str(error) == NODE_NOT_FOUND:
                 return payload(error={"code": "worker_software_failed", "message": NODE_NOT_FOUND},

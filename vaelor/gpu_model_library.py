@@ -39,6 +39,7 @@ from .cluster_placement import (
     CONTROLLER_PLACEMENT_ID,
     CONTROLLER_PLACEMENT_NAME,
 )
+from .cluster_store import controller_recorded
 from .gpu_model_catalog import GPU_MODEL_CATALOG
 from .bridge_transport import default_bridge_transport
 from .gpu_pool_pull import (
@@ -59,6 +60,8 @@ _PULL_PHASES = ("starting", "fetching", "verifying", "done", "error")
 
 #: What a cache row says between its pull unit starting and its first poll.
 _PULL_STARTING = "Pull starting"
+#: What a ready row says, whether the library's pull or a deploy's fetch wrote it.
+_WEIGHTS_CACHED = "Weights cached"
 
 
 class GpuModelLibrary:
@@ -75,8 +78,13 @@ class GpuModelLibrary:
         bridge_transport_factory: Optional[
             Callable[[Dict[str, Any]], Any]
         ] = None,
+        inventory_probe: Optional[Callable[[], Mapping[str, Any]]] = None,
     ):
         self.store = store
+        # The controller's own hardware facts (its model store's free space),
+        # for the listing only (:meth:`_controller_entry`); ``None`` reads them
+        # with `copilot_setup.hardware_inventory`, as `ClusterOperations` does.
+        self._inventory_probe = inventory_probe
         self.broker = broker
         self.runtime = runtime or GpuPoolRuntime()
         self.joined_node = joined_node
@@ -425,7 +433,7 @@ class GpuModelLibrary:
             self.store.put_model_cache(
                 node_id=node_id, repo=repo, revision=revision_key,
                 state="ready", bytes_on_disk=bytes_on_disk,
-                message="Weights cached",
+                message=_WEIGHTS_CACHED,
             )
             return {
                 "node_id": node_id, "state": "ready",
@@ -589,9 +597,13 @@ class GpuModelLibrary:
         weights like any other GPU node, so leaving it out showed an operator a
         library missing the machine they had just pulled onto.
         """
-        rows = self.store.list_model_cache()
+        rows = list(self.store.list_model_cache())
         nodes = self.store.list_nodes()
         deployments = self._read_deployments()
+        # VD-133 1.5.5 #9: weights a deployment serves from are on that machine
+        # whether or not a library pull recorded them (a deploy before 1.5.5
+        # recorded none, and a cold install keeps the weights but not the rows).
+        rows += self._record_held(_held_by_deployments(deployments, rows))
         by_node: Dict[str, Dict[str, Any]] = {}
         controller = self._controller_entry()
         if controller is not None:
@@ -616,6 +628,13 @@ class GpuModelLibrary:
                 by_node[row["node_id"]] = entry
             if row["state"] == "ready":
                 entry["cached_bytes"] += int(row.get("bytes_on_disk") or 0)
+                # Adversarial L3: 0 bytes is no measurement - a fetch that
+                # reported none, or a row recorded from a deployment.
+                if int(row.get("bytes_on_disk") or 0) <= 0:
+                    row.update(size_known=False, message=HELD_NOT_RECORDED)
+            if row.get("size_known") is False:
+                # The node's total leaves these out, and says how many it left.
+                entry["sizes_unrecorded"] = entry.get("sizes_unrecorded", 0) + 1
             # ACC-110: which deployments still need these weights here, so the
             # list can say "In use" and keep Remove from breaking a wake.
             using = _deployments_using(deployments, row["repo"], row["node_id"])
@@ -631,28 +650,46 @@ class GpuModelLibrary:
             entry["models"].append(row)
         return {"models": rows, "nodes": list(by_node.values())}
 
-    def _controller_entry(self) -> Optional[Dict[str, Any]]:
-        """The controller's inventory row, or ``None`` when it cannot be resolved.
+    def _record_held(self, held: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Store each held-but-unrecorded row the first time it is found (adversarial M1).
 
-        Resolved through the same ``joined_node`` every other target goes
-        through, so its name and free space come from the one resolver rather
-        than a second reading of the controller record. An uninitialised
-        controller raises there; that is not an error for a listing, so it is
-        simply absent - and any cache row it left behind still surfaces through
-        the unenrolled-row path below.
+        So they stay listed and removable after that deployment goes. A store
+        that cannot be written lists them from the deployment, this once.
+        """
+        for row in held:
+            try:
+                self.store.put_model_cache(node_id=row["node_id"], repo=row["repo"],
+                                           revision="", state="ready", bytes_on_disk=0,
+                                           message=HELD_NOT_RECORDED)
+            except Exception:  # noqa: BLE001 - listed from the deployment instead
+                pass
+        return held
+
+    def _controller_entry(self) -> Optional[Dict[str, Any]]:
+        """The controller's inventory row, or ``None`` when it is not set up as one.
+
+        VD-133 1.5.5 #9 (LESSONS 6, 14): from the controller RECORD
+        (`controller_recorded`) and the hardware inventory, never the deploy's
+        resolver - it asks Docker, which the control plane serving this listing
+        cannot (task #153), so the controller was never listed. Unreadable free
+        space is 0, as an enrolled node's missing figure is.
         """
         try:
-            node = self.joined_node(CONTROLLER_PLACEMENT_ID)
+            if not controller_recorded(self.store.controller()):
+                return None
         except Exception:  # noqa: BLE001 - a listing never fails on one node
             return None
+        try:
+            if self._inventory_probe is None:
+                from .copilot_setup import hardware_inventory as probe
+            else:
+                probe = self._inventory_probe
+            free = int((probe() or {}).get("storage_free_bytes") or 0)
+        except Exception:  # noqa: BLE001 - the machine is listed without the figure
+            free = 0
         return {
-            "node_id": CONTROLLER_PLACEMENT_ID,
-            "name": str(node.get("name") or CONTROLLER_PLACEMENT_NAME),
-            "root_free_bytes": int(
-                (node.get("inventory") or {}).get("root_free_bytes") or 0
-            ),
-            "cached_bytes": 0,
-            "models": [],
+            "node_id": CONTROLLER_PLACEMENT_ID, "name": CONTROLLER_PLACEMENT_NAME,
+            "root_free_bytes": free, "cached_bytes": 0, "models": [],
         }
 
 
@@ -872,6 +909,65 @@ def _served_drafter_repo(units: Mapping[str, Any]) -> str:
     key = chosen.get("key") if isinstance(chosen, Mapping) else None
     drafter = DRAFTERS.get(key) if isinstance(key, str) else None
     return drafter.repo if drafter is not None else ""
+
+
+#: The deployment states whose machines are known to hold its weights: it
+#: served from them (or is paused, and loads again from them). A FIRST deploy's
+#: ``deploying`` row is not one - its download may still be running (VD-133
+#: 1.5.5 #9) - but a Load's is (adversarial L6): it keeps the served record,
+#: ``units.repo`` included, which a first deploy's row does not carry yet.
+_SERVED_STATES = ("healthy", "unloaded")
+
+#: What a ready row with no measured size says (VD-133 1.5.5 #9, adversarial L4:
+#: it claims no cause it cannot know; "Needed by" says which deployment).
+HELD_NOT_RECORDED = "Vaelor has no record of the size of these weights."
+
+
+def _held_by_deployments(
+    deployments: Optional[List[Mapping[str, Any]]], rows: List[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    """A ``ready`` row for each model (and draft model) a served deployment holds with no row.
+
+    VD-133 1.5.5 #9: a cold install keeps weights but not rows, and a deploy
+    before 1.5.5 recorded none. The deployment is the evidence the weights are
+    there; their size is never guessed (0 bytes, which the listing reads as
+    ``size_known`` false, LESSONS 5).
+    """
+    known = {(str(row["node_id"]), str(row["repo"])) for row in rows}
+    held: Dict[Any, Dict[str, Any]] = {}
+    for record in deployments or ():
+        units = record.get("units") or {}
+        state = str(record.get("state", ""))
+        if units.get("engine") != "vllm" or not (
+                state in _SERVED_STATES or (state == "deploying" and units.get("repo"))):
+            continue
+        repos = (str(units.get("repo") or record.get("model_id") or ""),
+                 _served_drafter_repo(units))
+        for node_id in record.get("node_ids") or ():
+            for repo in filter(None, repos):
+                key = (str(node_id), repo)
+                if key not in known and key not in held:
+                    held[key] = {
+                        "node_id": key[0], "repo": repo, "revision": "",
+                        "state": "ready", "bytes_on_disk": 0,
+                        "message": HELD_NOT_RECORDED, "unit": "",
+                    }
+    return list(held.values())
+
+
+def deploy_cache_recorder(store: Any) -> Callable[[str, str, str, int], None]:
+    """What a deploy's finished weights fetch records, so the library lists it (VD-133 1.5.5 #9).
+
+    `gpu_pool_pull.ModelPullWaiter` calls it once a node's fetch ends ``ok``
+    with the bytes the pull program measured on disk; a fetch that reported
+    none keeps a size recorded before rather than writing 0 over it.
+    """
+    def record(node_id: str, repo: str, revision: str, bytes_on_disk: int) -> None:
+        size = int(bytes_on_disk or 0) or int(
+            (store.get_model_cache(node_id, repo, revision) or {}).get("bytes_on_disk") or 0)
+        store.put_model_cache(node_id=node_id, repo=repo, revision=revision,
+                              state="ready", bytes_on_disk=size, message=_WEIGHTS_CACHED)
+    return record
 
 
 def _drafter_kept_reason(

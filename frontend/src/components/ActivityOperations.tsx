@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiRequest } from "../lib/api";
 import { timeAgo } from "../lib/format";
+import { failureWord, resolutionNote, settledFailure } from "../lib/operationOutcome";
 import { jobLabel } from "../lib/jobPresentation";
 import { routeHref } from "../lib/navigation";
 import {
@@ -11,7 +12,7 @@ import {
 } from "../lib/operationOwner";
 import type { Session } from "../types";
 import { Icon, type IconName } from "./Icon";
-import { OperationOwner } from "./OperationOwner";
+import { OperationOwner, operationResultSentence } from "./OperationOwner";
 import { RecordConfirm, RecordFacts, RecordPager } from "./RecordKit";
 import { StatusPill } from "./StatusPill";
 import { Button, Card, LoadingLines, Notice, type StatusTone } from "./ui";
@@ -50,14 +51,16 @@ const FILTER_LIST_NAMES: Record<OperationFilter, string> = {
   all: "All operations",
   in_progress: "Operations in progress",
   attention: "Operations that need attention",
-  finished: "Finished operations",
+  // The tile is every operation that has ended - failures and cancellations
+  // too - so it is not called "Finished", the word for a success (sweep).
+  finished: "Ended operations",
 };
 
 const FILTERS: Array<{ filter: OperationFilter; label: string; count: (summary: OperationSummary) => number }> = [
   { filter: "all", label: "All operations", count: (summary) => summary.total },
   { filter: "in_progress", label: "In progress", count: (summary) => summary.in_progress },
   { filter: "attention", label: "Need attention", count: (summary) => summary.attention },
-  { filter: "finished", label: "Finished", count: (summary) => summary.finished },
+  { filter: "finished", label: "Ended", count: (summary) => summary.finished },
 ];
 
 function operationsPath(filter: OperationFilter): string {
@@ -98,11 +101,21 @@ function friendlyState(state: string): string {
   return known[state] ?? state.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-/** The row's pill: the server's attention verdict first, then the state in words. */
+/**
+ * The row's pill: the server's attention verdict first, then a failure it
+ * says is resolved or dismissed (VD-133 1.5.5 #4), then the state in words.
+ */
 function rowPill(operation: OperationProjection): { label: string; tone: StatusTone } {
   if (operation.needs_attention === true) return { label: "Needs attention", tone: "warning" };
+  const settled = operation.state === "failed" ? settledFailure(operation) : null;
+  if (settled) return { label: settled.label, tone: settled.tone };
   const tones: Record<string, StatusTone> = { running: "info", queued: "info", failed: "danger", blocked: "warning", interrupted: "warning" };
-  return { label: friendlyState(operation.state), tone: tones[operation.state] ?? "neutral" };
+  return { label: stateWords(operation), tone: tones[operation.state] ?? "neutral" };
+}
+
+/** The state in words; a restart's cut-off is said as such, not as "Failed". */
+function stateWords(operation: OperationProjection): string {
+  return operation.state === "failed" ? failureWord(operation) : friendlyState(operation.state);
 }
 
 function collectOperations(payload: unknown): OperationProjection[] {
@@ -138,6 +151,11 @@ function collectOperations(payload: unknown): OperationProjection[] {
 
 function ownerRoute(operation: OperationProjection): string | null {
   return operation.owner_route ?? operation.owner?.route ?? null;
+}
+
+/** Whether the read-only owner card already shows the message (its status, error notice or Result). */
+export function messageShownByOwner(operation: OperationProjection): boolean {
+  return Boolean(operation.message || operation.recoverable_error?.message || operationResultSentence(operation));
 }
 
 function operationMessage(operation: OperationProjection): string {
@@ -316,9 +334,12 @@ function OperationDetail({ operation, session, onDismissed }: {
       >
         <OperationOwner mode="history" operation={operation} title={null}>
           <RecordFacts facts={[
-            { key: "state", label: "Status", value: friendlyState(operation.state), mono: true, field: "state" },
+            { key: "state", label: "Status", value: stateWords(operation), mono: true, field: "state" },
+            ...(operation.state === "failed" && operation.resolution ? [{ key: "resolution", label: "Resolved", value: resolutionNote(operation.resolution), field: "resolution" }] : []),
             { key: "progress", label: "Progress", value: progress, field: "progress" },
-            { key: "message", label: "Message", value: operationMessage(operation), field: "message" },
+            // The owner card above already says the message (its status line or
+            // its attention notice); a "Message" row repeating it is omitted.
+            ...(messageShownByOwner(operation) ? [] : [{ key: "message", label: "Message", value: operationMessage(operation), field: "message" }]),
             ...(operation.dismissal ? [{ key: "dismissal", label: "Dismissed", value: `By ${operation.dismissal.dismissed_by || "an operator"}, ${new Date(operation.dismissal.dismissed_at * 1000).toLocaleString()}`, field: "dismissal" }] : []),
           ]} />
           <p className="ui-muted ui-small acty-detail__note">Activity is a read-only record. Correct and continue happens where the operation runs: Open takes you there.</p>

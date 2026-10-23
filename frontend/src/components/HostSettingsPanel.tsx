@@ -10,16 +10,20 @@ import {
   parsePoolSize,
   poolBytes,
   poolPill,
+  poolSavedForRestart,
+  poolSize,
   readHostSettings,
   type HostSettings,
   type PoolMachine,
 } from "../lib/hostSettings";
 import { jobIsSuccessful, jobIsTerminal, type PresentableJob } from "../lib/jobPresentation";
+import type { acknowledgement } from "../lib/restartImpact";
 import type { Session } from "../types";
 import { ActionReviewDialog, type ProposedJob } from "./ActionReviewDialog";
 import { ClusterCard, KeyValues } from "./ClusterPrimitives";
 import { ClusterDialog } from "./ClusterDialog";
 import { Icon } from "./Icon";
+import { RestartDialog } from "./RestartDialog";
 import { RecheckOutcome, RecheckTrigger, recheckFailureFrom, recheckResultFrom, useRecheck, type RecheckResponse, type RecheckResult } from "./RecheckButton";
 import { StatusPill } from "./StatusPill";
 import { Button, Input, Notice, Select } from "./ui";
@@ -120,7 +124,11 @@ function PoolCard({
   const worker = !isController(machine);
   const canEdit = administrator && pool.can_change && !stale;
   const canRevert = administrator && Boolean(pool.override && pool.override.state !== "absent") && !stale;
-  const canRestart = administrator && pool.restart_pending === true && !stale;
+  // VD-133 1.5.5 #3: a restart is offered only when it moves the pool to a
+  // size the owner chose. A pool whose saved size was removed some other way
+  // (an uninstall) shrinks at the next restart; the card offers to keep it.
+  const canRestart = administrator && pool.restart_pending === true && pool.next_restart?.chosen === true && !stale;
+  const keepGib = administrator && !stale && typeof pool.keep_gib === "number" ? pool.keep_gib : null;
   const reviewSize = () => {
     if (parsed.size === null) {
       setAsked(true);
@@ -133,12 +141,25 @@ function PoolCard({
       label: `GPU memory pool change on ${machineInSentence(machine.name)}`,
     });
   };
+  const keepButton = keepGib !== null && (
+    <Button
+      onClick={() => onReview({
+        kind: "job",
+        job: poolJob(machine, "set", keepGib),
+        summary: `Save ${formatTypedGib(keepGib)} as the GPU memory pool size on ${machineInSentence(machine.name)}. It already runs at that size, so nothing restarts and the pool stays as it is; its next restart keeps it.`,
+        label: `Saving the GPU memory pool size on ${machineInSentence(machine.name)}`,
+      })}
+      variant="primary"
+    >
+      Keep {formatTypedGib(keepGib)}
+    </Button>
+  );
   const revertButton = canRevert && (
     <Button
       onClick={() => onReview({
         kind: "job",
         job: poolJob(machine, "revert"),
-        summary: `Remove the GPU memory pool setting from ${machineInSentence(machine.name)}. Nothing restarts now: the pool goes back to the kernel's own size, about ${poolBytes(pool.default_bytes)}, after you restart ${machineInSentence(machine.name)}.`,
+        summary: `Remove the GPU memory pool setting from ${machineInSentence(machine.name)}. Nothing restarts now: the pool goes back to the kernel's own size, about ${poolSize(pool.default_bytes)}, after you restart ${machineInSentence(machine.name)}.`,
         label: `Removal of the GPU memory pool setting on ${machineInSentence(machine.name)}`,
       })}
     >
@@ -174,15 +195,21 @@ function PoolCard({
           <KeyValues
             label={`${machine.name} GPU memory pool`}
             items={[
-              { label: "Pool now", value: poolBytes(pool.current_bytes) },
-              { label: "Kernel default", value: `About ${poolBytes(pool.default_bytes)}` },
+              { label: "Pool now", value: poolSize(pool.current_bytes) },
+              { label: "Kernel default", value: `About ${poolSize(pool.default_bytes)}` },
               { label: "System memory", value: poolBytes(pool.ram_bytes) },
               { label: "Left for system", value: poolBytes(pool.system_left_bytes) },
             ]}
           />
           {pool.restart_reason && (
-            <p className="cl-warn-text cl-setup__note" role="status">{pool.restart_reason}</p>
+            <p
+              className={`${poolSavedForRestart(pool) ? "cl-setup__note--info" : "cl-warn-text"} cl-setup__note`}
+              role="status"
+            >
+              {pool.restart_reason}
+            </p>
           )}
+          {keepButton && <div className="cl-actions">{keepButton}</div>}
           {!pool.can_change && <p className="cl-meta">{pool.blocked_reason}</p>}
           {stale && <p className="cl-warn-text cl-setup__note" role="status">{machine.stale_reason}</p>}
           {!administrator && pool.can_change && (
@@ -199,7 +226,8 @@ function PoolCard({
                 value={text}
               />
               <span className="cl-actions cl-setup__pool-buttons">
-                <Button variant="primary" onClick={reviewSize}>Review new size</Button>
+                {/* One primary per card: when Keep is offered it is the way forward. */}
+                <Button variant={keepButton ? "secondary" : "primary"} onClick={reviewSize}>Review new size</Button>
                 {revertButton}
               </span>
             </div>
@@ -339,18 +367,20 @@ export function HostSettingsPanel({
     void run(() => queue(job, label, `${label} started. This page shows the result when it finishes; nothing restarts.`));
   };
 
-  const confirmRestart = () => {
+  // VD-133 1.5.5 #5: the restart dialog lists the work it would cut off and
+  // sends what the owner saw. A refusal stays in the dialog (RestartDialog).
+  const confirmRestart = async (seen: ReturnType<typeof acknowledgement>) => {
     if (pending?.kind !== "restart") return;
     const { machine } = pending;
-    void run(async () => {
-      if (isController(machine)) {
-        await apiRequest("/power/actions", {
-          method: "POST",
-          body: JSON.stringify({ action: "reboot", confirmation: CONFIRM.controllerRestart }),
-        }, session.csrf_token);
-        return "This controller is restarting. The console comes back when it has started again.";
-      }
-      return queue(
+    let message: string;
+    if (isController(machine)) {
+      await apiRequest("/power/actions", {
+        method: "POST",
+        body: JSON.stringify({ action: "reboot", confirmation: CONFIRM.controllerRestart, ...seen }),
+      }, session.csrf_token);
+      message = "This controller is restarting. The console comes back when it has started again.";
+    } else {
+      message = await queue(
         {
           type: "cluster.node.reboot",
           payload: { node_id: machine.node_id, confirm: CONFIRM.workerRestart },
@@ -358,7 +388,10 @@ export function HostSettingsPanel({
         `Restart of ${machineInSentence(machine.name)}`,
         `${machine.name} was asked to restart. This page reads it again when it is back.`,
       );
-    });
+    }
+    setNotice(message);
+    setFailure("");
+    setPending(null);
   };
 
   const confirmLink = () => {
@@ -549,28 +582,17 @@ export function HostSettingsPanel({
         summary={pending?.kind === "job" ? pending.summary : ""}
       />
       {restartMachine && (
-        <ClusterDialog
-          eyebrow="Can't be undone while it restarts"
-          footer={(
-            <>
-              <Button disabled={busy} onClick={cancelPending} ref={cancelRef}>Cancel</Button>
-              <Button disabled={busy} onClick={confirmRestart} variant="danger">
-                {busy ? "Sending…" : restartingController ? "Restart this controller" : `Restart ${restartMachine.name}`}
-              </Button>
-            </>
-          )}
-          initialFocusRef={cancelRef}
-          onClose={cancelPending}
-          role="alertdialog"
+        <RestartDialog
+          confirmLabel={restartingController ? "Restart this controller" : `Restart ${restartMachine.name}`}
+          description={restartingController
+            ? "Every model and app on this controller stops, and this console is unreachable, until it has started again. Models served from other machines through this controller stop answering too."
+            : `Every model and app running on ${restartMachine.name} stops until it has started again. A model split across machines stops answering; a model with a copy on another machine keeps answering from there.`}
+          machine={restartMachine.node_id}
+          onCancel={() => setPending(null)}
+          onConfirm={confirmRestart}
+          onFailed={(message) => { setFailure(message); setNotice(""); setPending(null); }}
           title={restartingController ? "Restart this controller?" : `Restart ${restartMachine.name}?`}
-          tone="warning"
-        >
-          <p>
-            {restartingController
-              ? "Every model and app on this controller stops, and this console is unreachable, until it has started again. Models served from other machines through this controller stop answering too."
-              : `Every model and app running on ${restartMachine.name} stops until it has started again. A model split across machines stops answering; a model with a copy on another machine keeps answering from there.`}
-          </p>
-        </ClusterDialog>
+        />
       )}
       {pending?.kind === "link" && (
         <ClusterDialog

@@ -47,7 +47,6 @@ too, so the two encodings could not drift apart again (LESSONS pattern 6).
 from __future__ import annotations
 
 import ipaddress
-import json
 import logging
 import time
 import urllib.parse
@@ -55,6 +54,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, Tuple
 
 from .credential_broker import NO_ACTIVE_CREDENTIAL, CredentialError
+from .credential_provider_probe import served_profile
 from .gpu_pool_startup import (
     API_POLL_SECONDS,
     STARTUP_CHECKPOINT_PERCENT,
@@ -613,8 +613,13 @@ def register_cluster_credential(
     *,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    context_window: int = 0,
 ) -> str:
     """Mint the cluster's ``openai-compatible`` credential, model included.
+
+    ``context_window`` is the ``--max-model-len`` the deployment's engines were
+    started with, recorded so the budgets that clamp to a stated window reach
+    the cluster's model (owner 2026-10-21).
 
     The one credential this gate will ever call a ``cluster`` target: minted
     by the GPU deploy once its endpoint answers, tested by the broker itself,
@@ -658,10 +663,7 @@ def register_cluster_credential(
     """
     report = report or (lambda _percent, _message: None)
     cap = startup_cap_seconds((payload or {}).get("startup_timeout_seconds"))
-    profile = json.dumps(
-        {"base_url": endpoint, "model": str(model or ""), "api_key": str(api_key or "")},
-        separators=(",", ":"),
-    )
+    profile = served_profile(endpoint, model, api_key, context_window=context_window)
     credential = broker.put("openai-compatible", f"GPU LLM · {name}", profile)
     credential_id = credential["id"]
     try:

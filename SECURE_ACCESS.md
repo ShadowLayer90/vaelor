@@ -17,8 +17,14 @@ Each install creates its own certificate authority, the household root. No
 other Vaelor shares it, and its private key never leaves the appliance: it is
 kept in `/etc/vaelor/authority`, encrypted to that machine, and readable only by
 root. The root signs the console's certificate, which names every address and
-host name the appliance answers on. Vaelor renews that certificate on its own,
-before it expires and when the machine's addresses change. The console and the
+host name the appliance answers on. Addresses on Docker's and libvirt's own
+bridges (`docker0`, `docker_gwbridge`, `br-…`, `virbr…`) are left out: they
+answer only from the appliance's own containers. Vaelor renews that certificate
+on its own, before it expires and when the machine gains an address or name it
+does not cover. Each renewal is announced in every open console page about 15
+minutes beforehand. A browser that trusts the root does not notice the renewal.
+A browser that only accepted the warning page shows the warning again, and an
+open page says that this is why it lost its connection. The console and the
 browser desktop pick up a renewed certificate on the next connection, with no
 restart.
 
@@ -51,6 +57,26 @@ computers and phones are yours to change, so Vaelor does not do it for you:
    is served without signing in. Compare its fingerprint with the one the
    installer or the console shows before you trust it. The fingerprint check is
    what makes the download safe.
+
+**If your browser will not open the console,** you do not need the console to
+get these steps. They are saved, with the fingerprints, in
+`/opt/vaelor/tls/trust-this-vaelor.txt` on the appliance: the installer writes the
+file, and the household authority rewrites it whenever it is missing or the root
+or the console's certificate changes, so it also stays current after a console
+update. Read it over SSH with `sudo cat /opt/vaelor/tls/trust-this-vaelor.txt`. To
+print the steps again, run this on the appliance. It names the address the
+console's certificate covers:
+
+```bash
+sudo /opt/vaelor/venv/bin/python -m vaelor.tls_trust_commands
+```
+
+If you have no terminal on the appliance, most browsers still let you continue
+past the warning once (**Advanced**, then **Continue** or **Proceed**). Open
+**Settings › Connections › Trust this Vaelor** and run a command from there.
+Check the fingerprint against one you read on the appliance itself: the
+installer's last screen or the saved file. A page reached past a warning cannot
+prove its own fingerprint.
 
 Firefox keeps its own list of trusted roots. Either turn on its setting for
 roots the operating system trusts (`security.enterprise_roots.enabled`), or

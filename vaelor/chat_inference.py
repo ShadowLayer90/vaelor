@@ -34,7 +34,7 @@ from .ai_chat_model_lease import (  # noqa: F401 - the AI Chat names stay import
     AI_CHAT_CLUSTER_NOT_SERVING, CHOOSE_AN_AI_CHAT_CONNECTION, CLUSTER_NOT_SERVING,
     OPENAI_BASE_URL, OPENAI_DEFAULT_MODEL, resolve_ai_chat_model,
 )
-from .provider_runtime import assistant_budget, managed_local_connection
+from .provider_runtime import assistant_budget, large_local_model, managed_local_connection
 from .chat_hosted import HostedChatError, answer_hosted, read_thinking
 from .chat_thinking import (
     ThinkingSettingError,
@@ -79,6 +79,9 @@ logger = logging.getLogger(__name__)
 # binds first. A non-loopback ("remote") connection keeps a larger cited ceiling
 # and its own raised plain allowance below it.
 MANAGED_LOCAL_ANSWER_TOKENS = 1024
+#: Owner 2026-10-21 (VD-133 1.5.5): 2,048 tokens, thinking included. Only for a
+#: model over 8B Vaelor runs itself (Adopted scoping); smaller ones keep the above.
+LARGE_LOCAL_ANSWER_TOKENS = 2048
 UNCITED_REMOTE_ANSWER_TOKENS = 1024
 CITED_ANSWER_TOKENS = 1600
 
@@ -121,11 +124,26 @@ def managed_local_answer_tokens(connection) -> int:
 # managed-local floor; what matters is that it never reaches the connected
 # endpoint budget.
 MANAGED_LOCAL_CHAT_SECONDS = 120
+#: Owner 2026-10-21: the same for a local model over 8B, which writes up to 2,048 tokens.
+LARGE_LOCAL_CHAT_SECONDS = 240
+
+#: VD-221, the model's half of the rule (the deterministic half is
+#: `chat_web_search.asks_for_live_fact`, which catches only what its sentence
+#: shapes can tell). Every AI Chat model reads it: this machine's, the
+#: cluster's, a network server's and a hosted service's.
+NO_INVENTED_LIVE_FACTS = (
+    "You cannot see live or current information, such as today's weather, "
+    "prices, scores or news. Unless a retrieved source supplies it, say plainly "
+    "that you cannot see live data, and never state a current figure or "
+    "condition from memory."
+)
 
 
 # The reasoning-tag and memory text helpers live in `chat_answer_text` (split
 # for the line ceiling, VD-206); re-exported because importers spell them here.
 from .chat_answer_text import (  # noqa: E402,F401 - re-exported
+    ANSWER_KEPT_CHARS,
+    answer_cut_off,
     neutralized_memory,
     visible_answer,
 )
@@ -301,7 +319,7 @@ class ChatInference:
             return self._configured_timeout
         return remote_inference_budget()
 
-    def timeout_for(self, connection) -> int:
+    def timeout_for(self, connection, model: str = "") -> int:
         """The budget for one completion against this specific endpoint.
 
         A managed local model runs on this appliance, and the reason to run it
@@ -314,7 +332,8 @@ class ChatInference:
         """
         if self._configured_timeout is not None:
             return self._configured_timeout
-        return inference_timeout(connection, MANAGED_LOCAL_CHAT_SECONDS)
+        return inference_timeout(connection, LARGE_LOCAL_CHAT_SECONDS if large_local_model(
+            connection, model) else MANAGED_LOCAL_CHAT_SECONDS)
 
     def connections(self):
         try:
@@ -588,9 +607,13 @@ class ChatInference:
 
     def answer(
         self, message: str, *, model: str = "", history=None, retrieved=None,
-        memories=None, session_key: str = "", thinking=None,
+        memories=None, session_key: str = "", thinking=None, instructions=(),
     ) -> Dict[str, Any]:
         """Answer one AI Chat turn.
+
+        ``instructions`` are notes on how to answer this turn, read beside the
+        question: the web-search rules when web pages are among the sources
+        (VD-221, `chat_web_search.WEB_SEARCH_INSTRUCTION`).
 
         ``thinking`` (VD-209) is the owner's step, or a function from the
         connection's credential id to it; `chat_thinking.plan` decides what,
@@ -688,12 +711,12 @@ class ChatInference:
             "and do not cite them. If no retrieved sources are supplied, do not "
             "emit any [S#] citation markers. Never attach an [S#] marker to a "
             "claim its source does not support. Never claim to have "
-            "changed the appliance or reveal secrets."
+            "changed the appliance or reveal secrets. " + NO_INVENTED_LIVE_FACTS
         )
         # VD-216 fix 2: stable first. System prompt and history stay the same
         # turn to turn for the prefix cache; what this turn decides (question,
         # memory, notes on how to answer, sources) follows in one user message.
-        notes = []
+        notes = [str(item) for item in instructions or () if str(item).strip()]
         if remembered:
             notes.append(
                 "Use the memory above for context only: it is background this "
@@ -702,15 +725,19 @@ class ChatInference:
             )
         if managed_local_connection(connection):
             system = "/no_think\n" + system
-            notes.append(
+            notes.extend(item for item in [
                 # "completely" is what pairs with the larger cited ceiling below;
                 # "from the retrieved sources" was what made a locally-hosted
                 # model refuse every question its documents did not answer.
-                "Answer the question completely, from the sources where they "
+                # With web pages among the sources the turn's own instruction
+                # says when general knowledge may be used (VD-221 review round 1).
+                "Answer the question completely." if sources and instructions
+                else "Answer the question completely, from the sources where they "
                 "are relevant and from your own general knowledge where they "
                 "are not."
-                if sources else "Keep the answer under 120 words."
-            )
+                if sources else "" if large_local_model(connection, selected_model)  # owner 2026-10-21
+                else "Keep the answer under 120 words."
+            ] if item)
         messages = [{"role": "system", "content": system}]
         for item in history_window(history):
             messages.append({
@@ -751,8 +778,10 @@ class ChatInference:
         # model spends the same allowance thinking first, so the request has to
         # carry that model's measured overhead on top of it or the reply arrives
         # empty with `finish_reason: length`.
-        max_tokens = reasoning_headroom_tokens(
-            connection, min(ceiling, max(96, base_budget * 3))
+        max_tokens = (
+            LARGE_LOCAL_ANSWER_TOKENS
+            if large_local_model(connection, selected_model)
+            else reasoning_headroom_tokens(connection, min(ceiling, max(96, base_budget * 3)))
         )
         if hosted:
             # VD-206 long outputs: a hosted model reasons inside the same
@@ -804,7 +833,7 @@ class ChatInference:
 
         # Read the budget once so the number in a timeout message is always the
         # number the request was actually given.
-        timeout = self.timeout_for(connection)
+        timeout = self.timeout_for(connection, selected_model)
         # #223 / VD-085: a managed local model runs one generation at a time
         # and this urlopen holds a control-plane worker for its whole duration.
         # The slot is held only across the network call, then released before
@@ -937,8 +966,9 @@ class ChatInference:
                 connection, selected_model, body,
                 (time.monotonic() - start) * 1000, len(raw_body),
             )
+        cut_off = answer_cut_off(finish_reason, answer)
         return {
-            "answer": answer[:12000],
+            "answer": answer[:ANSWER_KEPT_CHARS],
             "model": selected_model,
             "provider": connection.get("label", connection.get("provider", "AI")),
             # The caller reports these to the user. Stripping the markers off an
@@ -952,7 +982,10 @@ class ChatInference:
             # was already raised above as a reasoning-budget failure.)
             # So is one longer than the 12,000 characters kept here, which a
             # long hosted answer can reach (VD-206: never cut silently).
-            "truncated": finish_reason == "length" or len(answer) > 12000,
+            # `cut_off` names which of the two, and is what a stored turn and
+            # the console's note carry (found live 2026-10-21, VD-133 1.5.5).
+            "truncated": bool(cut_off),
+            "cut_off": cut_off,
             # Compact per-answer timing (total, TTFT, prefill/decode tok/s) from
             # the model's own usage/timings plus the wall-clock. Empty when a
             # provider reports nothing, and the frontend then shows no line.

@@ -85,6 +85,11 @@ def dispatch(vault: CredentialVault, request: Dict[str, Any]) -> Any:
             payload.get("endpoint_id", ""), payload.get("key", ""),
             payload.get("label", ""),
         ),
+        # Owner 2026-10-21: the window a model Vaelor serves runs with, written
+        # in place (compare-and-set on the row read); never a key or a URL.
+        "record_window": lambda: vault.record_window(
+            payload.get("credential_id", ""), payload.get("version"), payload.get("window"),
+        ),
         # ACC-107 / ACC-043: the one writer of `last_used_at` for a real use. It
         # decrypts nothing and only moves the stamp forward, so an in-group
         # caller can at worst make a key look recently used - never read one.

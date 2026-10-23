@@ -16,6 +16,22 @@ The household root is name-constrained to the private LAN (owner, VD-212 build
 answers), so a reading can hold names the root may not sign. Those are dropped
 and **reported by name** (LESSONS 1: a certificate quietly missing the address
 an owner types is a warning nobody can explain).
+
+**Container and VM plumbing is not an address the console is reached on**
+(VD-133 1.5.5 #1). Docker's bridges (``docker0``, ``docker_gwbridge``,
+``br-<12 hex>``), their ``veth`` pairs and libvirt's ``virbr*`` carry gateway
+addresses (172.17.0.1, ...) that answer only from this machine's own containers.
+Reading them as identity put them in the certificate, and because Docker makes
+and removes them on its own schedule - ``docker swarm init`` at controller
+setup creates ``docker_gwbridge``, an app deploy creates a ``br-*`` - every one
+changed the identity and re-issued the console certificate under every open
+tab (LESSONS 6: the reading answered "which addresses does this machine hold"
+when the question was "which addresses is the console reached on"). An
+address is left out only when :func:`vaelor.network_interfaces.is_host_plumbing`
+says so - a plumbing NAME on a SOFTWARE link, the one rule every reader of
+"which interface is plumbing" shares - so a physical NIC, an owner's own ``br0``
+bridging the LAN, a bond, a VLAN or a WireGuard link always stays. IPv6
+addresses on plumbing are left out too, wherever they are named.
 """
 
 from __future__ import annotations
@@ -29,6 +45,7 @@ from typing import Callable, Iterable, List, Sequence, Tuple
 
 from . import host_desktop_tls, tls_public_names
 from .cluster_link import RFC1918_NETWORKS
+from .network_interfaces import is_host_plumbing
 
 #: The private LAN the root may vouch for (owner, VD-212: "No, private LAN
 #: only" - Tailscale's 100.64.0.0/10 is deliberately absent).
@@ -71,15 +88,20 @@ def bare_hostname(hostname: str | None = None) -> str:
     return label if _LABEL.fullmatch(label) and label != "localhost" else ""
 
 
-def global_ipv4_addresses(run: Runner = subprocess.run) -> Tuple[List[str], str]:
-    """Every global-scope IPv4 address (the installer's former ``ip`` reading).
+#: One global address as ``ip -o addr`` lists it: (interface, family, address, prefix).
+InterfaceAddress = Tuple[str, str, str, int]
 
-    Returns (addresses, failure); ``failure`` is "" when the reading worked.
-    An empty list with no failure is a machine with no global address.
+
+def interface_addresses(run: Runner = subprocess.run) -> Tuple[List[InterfaceAddress], str]:
+    """Every global-scope address with its interface and prefix length.
+
+    Returns (rows, failure); ``failure`` is "" when the reading worked. The one
+    parser of ``ip -o addr`` here: the identity reading and the console
+    address the trust steps name both read it.
     """
     try:
         result = run(
-            ["ip", "-o", "-4", "addr", "show", "scope", "global"],
+            ["ip", "-o", "addr", "show", "scope", "global"],
             capture_output=True, text=True, timeout=_IP_TIMEOUT_SECONDS,
             check=False,
         )
@@ -88,41 +110,77 @@ def global_ipv4_addresses(run: Runner = subprocess.run) -> Tuple[List[str], str]
             type(error).__name__)
     if result.returncode != 0:
         return [], "`ip addr` exited {}".format(result.returncode)
-    found: List[str] = []
+    rows: List[InterfaceAddress] = []
     for line in result.stdout.splitlines():
         fields = line.split()
-        if "inet" in fields:
-            position = fields.index("inet") + 1
-            if position < len(fields):
-                found.append(fields[position].split("/", 1)[0])
-    return found, ""
+        family = "inet" if "inet" in fields else "inet6" if "inet6" in fields else ""
+        position = fields.index(family) + 1 if family else 0
+        if not family or position >= len(fields):
+            continue
+        address, _, prefix = fields[position].partition("/")
+        rows.append((fields[1] if len(fields) > 1 else "", family, address,
+                     int(prefix) if prefix.isdigit() else 128))
+    return rows, ""
+
+
+def global_ipv4_addresses(
+    run: Runner = subprocess.run,
+    host_internal: Callable[[str], bool] = is_host_plumbing,
+) -> Tuple[List[str], List[str], str]:
+    """Every global-scope IPv4 address, split by whether the console is reached on it.
+
+    Returns (addresses, plumbing_addresses, failure). ``failure`` is "" when
+    the reading worked; an empty first list with no failure is a machine with
+    no global address. The second list is every address, IPv4 and IPv6, on
+    container and VM plumbing (:func:`vaelor.network_interfaces.is_host_plumbing`):
+    never identity, and :func:`read_identity` also drops them when another
+    source names them (adversarial review F8). IPv6 addresses are otherwise not
+    taken from here: a temporary SLAAC address rotates, and as identity it
+    would re-issue the certificate on its own schedule.
+    """
+    rows, failure = interface_addresses(run)
+    if failure:
+        return [], [], failure
+    found: List[str] = []
+    internal: List[str] = []
+    for interface, family, address, _prefix in rows:
+        if host_internal(interface):
+            internal.append(address)
+        elif family == "inet":
+            found.append(address)
+    return found, internal, ""
 
 
 def read_identity(
     *,
     certificate_identities: Callable[[], Tuple[List[str], List[str]]] = (
         host_desktop_tls.certificate_identities),
-    global_ipv4: Callable[[], Tuple[List[str], str]] = global_ipv4_addresses,
+    global_ipv4: Callable[[], Tuple[List[str], List[str], str]] = global_ipv4_addresses,
     hostname: Callable[[], str] = socket.gethostname,
 ) -> IdentityReading:
     """Read every name and address an owner could type to reach this machine.
 
     Sorted and de-duplicated, so two readings of an unchanged machine compare
-    equal whatever order the sources answered in.
+    equal whatever order the sources answered in. An address on container or VM
+    plumbing is left out whichever source named it - the resolver can return
+    every local address for the machine's own name (nss-myhostname).
     """
     names, addresses = certificate_identities()
     notes: List[str] = []
     complete = True
-    extra, failure = global_ipv4()
+    extra, internal, failure = global_ipv4()
     if failure:
         complete = False
         notes.append(failure)
     label = bare_hostname(hostname())
     candidate_names = list(names) + ([label, label + ".local"] if label else [])
     candidate_names.append("localhost")
+    plumbing = set(_unique_addresses(internal))
     return IdentityReading(
         names=_unique_names(candidate_names),
-        addresses=_unique_addresses(list(addresses) + list(extra) + ["127.0.0.1"]),
+        addresses=tuple(
+            a for a in _unique_addresses(list(addresses) + list(extra) + ["127.0.0.1"])
+            if a not in plumbing),
         complete=complete,
         notes=tuple(notes),
     )

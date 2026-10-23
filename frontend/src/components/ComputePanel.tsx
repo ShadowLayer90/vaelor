@@ -166,7 +166,7 @@ export function graphicsFacts(
         ? `${formatQuantity(gttUsed, "used")} of ${formatQuantity(gttTotal, "capacity")}`
         : null,
       reason: gttTotal !== null
-        ? `This adapter publishes a shared aperture of ${formatQuantity(gttTotal, "capacity")} but not how much of it is in use`
+        ? `This adapter publishes a GPU memory pool of ${formatQuantity(gttTotal, "capacity")} but not how much of it is in use`
         : "This adapter reports no shared memory aperture",
     },
     {

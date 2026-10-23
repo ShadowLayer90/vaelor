@@ -41,6 +41,7 @@ interface ServerManifest {
   variables: Array<{ service?: string; name: string; description: string; secret: boolean; required: boolean; default?: string }>;
   resources: { memory_bytes: number; storage_bytes: number; cpu_cores: number };
   sources: Array<{ url: string; title: string; kind: string; sha256: string; verified: boolean }>;
+  provenance?: { image_source: string; warnings: string[] };
 }
 
 interface ServerDraft {
@@ -166,6 +167,7 @@ function reportFromDraft(draft: ServerDraft, jobResult?: ServerJob["result"]): R
     status: "complete",
     compatibility: mapApplicationCompatibility(status),
     compatibilitySummary: manifest.compatibility.reason,
+    ...(manifest.provenance ? { imageProvenance: { source: manifest.provenance.image_source, warnings: manifest.provenance.warnings ?? [] } } : {}),
     images: manifest.images.map((image) => ({
       image: image.repository,
       digest: image.digest,
